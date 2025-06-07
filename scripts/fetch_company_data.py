@@ -5,6 +5,10 @@ import pandas as pd
 import sys
 from datetime import datetime
 
+print("Current working directory:", os.getcwd())
+print("Script location:", os.path.abspath(__file__))
+print("Directory contents:", os.listdir('.'))
+
 # Set your API key
 sf.set_api_key('392e2398-fac4-4eba-af9e-dcda63d71d30')
 
@@ -13,7 +17,9 @@ sf.set_data_dir('~/simfin_data/')
 
 # Create directories for data
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+print("Base directory:", base_dir)
 json_output_dir = os.path.join(base_dir, 'public', 'data')
+print("Output directory:", json_output_dir)
 os.makedirs(json_output_dir, exist_ok=True)
 
 # Default tickers to fetch
