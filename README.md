@@ -1,70 +1,54 @@
-# Financial Dashboard
+# FinCast - Financial Dashboard
 
-A modern financial dashboard built with Next.js and Python, using the SimFin API to fetch and display financial data.
+A modern financial dashboard built with Next.js and TypeScript.
 
 ## Features
 
-- Real-time financial data from SimFin API
-- Interactive dashboard with key financial metrics
-- Company performance visualization
-- Responsive design for all devices
+- Real-time financial data visualization
+- Company metrics and performance indicators
+- Interactive charts and graphs
+- Responsive design
 
 ## Tech Stack
 
-- Frontend: Next.js 14, TypeScript, Tailwind CSS
-- Backend: Python, SimFin API
-- Data Processing: Pandas, NumPy
+- Next.js 14
+- TypeScript
+- Tailwind CSS
+- Recharts for data visualization
+- Vercel for deployment
 
 ## Setup
 
-1. Clone the repository:
-```bash
-git clone <your-repo-url>
-cd <your-repo-name>
-```
-
-2. Install Python dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-3. Install Node.js dependencies:
-```bash
-cd fincast
-npm install
-```
-
-4. Set up your SimFin API key:
-- Get your API key from [SimFin](https://simfin.com/)
-- Update the API key in `scripts/fetch_company_data.py`
-
-5. Fetch financial data:
-```bash
-python3 scripts/fetch_company_data.py
-```
-
-6. Start the development server:
-```bash
-cd fincast
-npm run dev
-```
-
-7. Open [http://localhost:3000](http://localhost:3000) in your browser
+1. Clone the repository
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Run the development server:
+   ```bash
+   npm run dev
+   ```
 
 ## Project Structure
 
-```
-.
-├── fincast/                 # Next.js frontend application
-│   ├── app/                # App router pages and components
-│   ├── public/             # Static assets
-│   └── package.json        # Frontend dependencies
-├── scripts/                # Python scripts
-│   └── fetch_company_data.py  # Data fetching script
-├── data/                   # Generated financial data
-└── requirements.txt        # Python dependencies
-```
+- `/app` - Next.js app directory
+- `/public` - Static assets
+- `/scripts` - Build and data generation scripts
+- `/components` - React components
+- `/styles` - Global styles
 
-## License
+## Build Process
 
-MIT 
+The project uses a custom build process that:
+1. Creates necessary directories
+2. Generates sample data if needed
+3. Builds the Next.js application
+
+## Deployment
+
+The application is deployed on Vercel with the following configuration:
+- Custom build command
+- Sample data generation
+- API route handling
+- CORS and caching headers
+Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

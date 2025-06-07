@@ -2,7 +2,7 @@
   "version": 2,
   "builds": [
     {
-      "src": "fincast/package.json",
+      "src": "package.json",
       "use": "@vercel/next"
     }
   ],

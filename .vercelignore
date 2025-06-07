@@ -1,26 +1,34 @@
-# Ignore everything except fincast directory
+# Ignore everything
 *
-!fincast/
 
-# Ignore node_modules and .next
+# Allow specific files
+!package.json
+!package-lock.json
+!next.config.ts
+!tsconfig.json
+!postcss.config.mjs
+!.gitignore
+!README.md
+!vercel.json
+
+# Allow directories
+!app/
+!public/
+!scripts/
+!components/
+!styles/
+
+# Ignore node_modules
 node_modules
+
+# Ignore .next directory
 .next
-fincast/node_modules
-fincast/.next
 
 # Ignore development files
-.env*
-
-# Ignore .env.local
+.env
 .env.local
-
-# Ignore .env.development.local
 .env.development.local
-
-# Ignore .env.test.local
 .env.test.local
-
-# Ignore .env.production.local
 .env.production.local
 
 # Ignore debug logs

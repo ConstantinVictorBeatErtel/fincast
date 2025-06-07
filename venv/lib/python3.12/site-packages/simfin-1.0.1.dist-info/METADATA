@@ -1,0 +1,16 @@
+Metadata-Version: 2.1
+Name: simfin
+Version: 1.0.1
+Summary: Simple financial data for Python
+Home-page: https://github.com/simfin/simfin
+Author: SimFin
+Author-email: info@simfin.com
+License: MIT
+Keywords: financial data,finance
+Description-Content-Type: text/markdown
+License-File: LICENSE.txt
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: requests
+
+SimFin makes it easy to obtain and use financial and stock-market data in Python. It automatically downloads share-prices and fundamental data from the [SimFin](https://www.simfin.com/) server, saves the data to disk for future use, and loads the data into Pandas DataFrames.

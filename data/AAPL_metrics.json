@@ -1,0 +1,18 @@
+{
+  "Symbol": "AAPL",
+  "Revenue": 383285000000.0,
+  "NetIncome": 96995000000.0,
+  "GrossProfit": 169148000000.0,
+  "OperatingIncome": 114301000000.0,
+  "TotalAssets": 352583000000.0,
+  "TotalLiabilities": 290437000000.0,
+  "TotalEquity": 62146000000.0,
+  "Price": 213.07,
+  "Volume": 198134293,
+  "Date": "2025-06-07",
+  "MarketCapitalization": 3354623299170.0,
+  "ProfitMargin": 0.2530623426432028,
+  "GrossMargin": 0.4413112957720756,
+  "OperatingMargin": 0.2982141226502472,
+  "PERatio": 34.585528111449044
+}
