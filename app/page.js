@@ -11,6 +11,7 @@ export default function FinancialDashboard() {
   const [marketData, setMarketData] = useState(null)
   const [selectedCompany, setSelectedCompany] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   useEffect(() => {
     fetchData()
@@ -18,23 +19,19 @@ export default function FinancialDashboard() {
 
   const fetchData = async () => {
     try {
-      const [companiesRes, forecastsRes, marketRes] = await Promise.all([
-        fetch('/api/companies'),
-        fetch('/api/forecasts'),
-        fetch('/api/market')
-      ])
-      
-      const companiesData = await companiesRes.json()
-      const forecastsData = await forecastsRes.json()
-      const marketDataRes = await marketRes.json()
-      
-      setCompanies(companiesData)
-      setForecasts(forecastsData)
-      setMarketData(marketDataRes)
-      setSelectedCompany(companiesData[0] || null)
+      const response = await fetch('/api/financial-data')
+      if (!response.ok) {
+        throw new Error('Failed to fetch data')
+      }
+      const data = await response.json()
+      setCompanies(data.companies || [])
+      setForecasts(data.forecasts || [])
+      setMarketData(data.marketData || null)
+      setSelectedCompany(data.companies[0] || null)
       setLoading(false)
     } catch (error) {
       console.error('Error fetching data:', error)
+      setError(error.message)
       setLoading(false)
     }
   }
@@ -95,6 +92,14 @@ export default function FinancialDashboard() {
     )
   }
 
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-lg text-red-600">Error: {error}</div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
@@ -102,9 +107,9 @@ export default function FinancialDashboard() {
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
             <Building2 className="text-blue-600" />
-            Portfolio Analytics & Forecasting
+            Financial Dashboard
           </h1>
-          <p className="text-gray-600 mt-2">Real-time financial data and predictions for your portfolio</p>
+          <p className="text-gray-600 mt-2">Real-time financial data for your portfolio</p>
           
           {/* Market Overview */}
           {marketData?.["Global Quote"] && (
