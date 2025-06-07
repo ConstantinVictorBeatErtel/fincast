@@ -10,12 +10,15 @@
 !.gitignore
 !README.md
 !vercel.json
+!requirements.txt
+!runtime.txt
 
 # Allow specific directories and their contents
 !app/
 !public/
 !components/
 !styles/
+!scripts/
 
 # Ignore specific directories and files
 node_modules/
