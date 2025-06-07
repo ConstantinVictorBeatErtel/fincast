@@ -2,19 +2,25 @@
 *
 !fincast/
 
-# Ignore node_modules
+# Ignore node_modules and .next
 node_modules
-fincast/node_modules
-
-# Ignore .next directory
 .next
+fincast/node_modules
 fincast/.next
 
 # Ignore development files
-.env
+.env*
+
+# Ignore .env.local
 .env.local
+
+# Ignore .env.development.local
 .env.development.local
+
+# Ignore .env.test.local
 .env.test.local
+
+# Ignore .env.production.local
 .env.production.local
 
 # Ignore debug logs

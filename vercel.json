@@ -1,9 +1,11 @@
 {
   "version": 2,
-  "buildCommand": "cd fincast && npm install && npm run build",
-  "outputDirectory": "fincast/.next",
-  "framework": "nextjs",
-  "installCommand": "cd fincast && npm install",
+  "builds": [
+    {
+      "src": "fincast/package.json",
+      "use": "@vercel/next"
+    }
+  ],
   "routes": [
     {
       "src": "/api/(.*)",
@@ -12,26 +14,6 @@
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "X-Requested-With, Content-Type, Accept"
       }
-    }
-  ],
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=3600, s-maxage=3600"
-        }
-      ]
-    },
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-store, max-age=0"
-        }
-      ]
     }
   ]
 } 
