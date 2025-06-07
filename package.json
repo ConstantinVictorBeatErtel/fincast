@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "echo 'Starting prebuild...' && mkdir -p public/data && echo 'Created public/data directory'",
-    "build": "echo 'Starting build...' && node scripts/create-sample-data.js && echo 'Sample data created' && next build",
+    "prebuild": "echo 'Starting prebuild...' && pwd && ls -la && mkdir -p public/data && echo 'Created public/data directory'",
+    "build": "echo 'Starting build...' && pwd && ls -la scripts/ && node ./scripts/create-sample-data.js && echo 'Sample data created' && next build",
     "start": "next start",
     "lint": "next lint",
     "vercel-build": "npm run build"
