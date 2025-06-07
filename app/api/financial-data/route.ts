@@ -1,67 +1,53 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
 import path from 'path';
+import fs from 'fs';
 
 export const dynamic = 'force-dynamic'; // Disable caching for this route
 
 export async function GET() {
   try {
+    console.log('API route called');
     const dataDir = path.join(process.cwd(), 'public', 'data');
-    console.log('Current working directory:', process.cwd());
-    console.log('Looking for data in:', dataDir);
+    console.log('Data directory:', dataDir);
 
-    // Check if directory exists
     if (!fs.existsSync(dataDir)) {
-      console.error(`Data directory not found: ${dataDir}`);
+      console.error('Data directory not found:', dataDir);
       return NextResponse.json(
-        { error: 'Data directory not found', path: dataDir },
-        { status: 404 }
+        { error: 'Data directory not found' },
+        { status: 500 }
       );
     }
 
     const files = fs.readdirSync(dataDir);
-    console.log('Files found in data directory:', files);
-    
+    console.log('Files found:', files);
+
     if (files.length === 0) {
-      console.error('No data files found in directory');
+      console.error('No data files found in directory:', dataDir);
       return NextResponse.json(
-        { error: 'No data files found', path: dataDir },
+        { error: 'No data files found' },
         { status: 404 }
       );
     }
 
     const companies = files
-      .filter(file => file.endsWith('_metrics.json'))
+      .filter(file => file.endsWith('.json'))
       .map(file => {
-        try {
-          const filePath = path.join(dataDir, file);
-          console.log('Reading file:', filePath);
-          const content = fs.readFileSync(filePath, 'utf-8');
-          return JSON.parse(content);
-        } catch (error) {
-          console.error(`Error reading file ${file}:`, error);
-          return null;
-        }
-      })
-      .filter(Boolean); // Remove any null entries from failed reads
+        const filePath = path.join(dataDir, file);
+        const content = fs.readFileSync(filePath, 'utf-8');
+        return JSON.parse(content);
+      });
 
-    if (companies.length === 0) {
-      return NextResponse.json(
-        { error: 'No valid company data found', path: dataDir },
-        { status: 404 }
-      );
-    }
+    console.log('Processed companies:', companies.length);
 
-    console.log('Successfully processed companies:', companies.map(c => c.Symbol));
-    return NextResponse.json({ 
+    return NextResponse.json({
       companies,
-      environment: process.env.NODE_ENV,
-      dataDirectory: dataDir
+      forecasts: [],
+      marketData: null
     });
   } catch (error) {
-    console.error('Error reading financial data:', error);
+    console.error('Error in API route:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch financial data' },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }
