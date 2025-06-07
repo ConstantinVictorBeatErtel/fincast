@@ -7,28 +7,44 @@ export const dynamic = 'force-dynamic'; // Disable caching for this route
 // GET handler for retrieving financial data
 export async function GET(request) {
   try {
-    // In development, use the local data directory
-    // In production (Vercel), use the public directory
-    const isDevelopment = process.env.NODE_ENV === 'development';
-    const dataDir = isDevelopment 
-      ? path.join(process.cwd(), 'fincast', 'data')
-      : path.join(process.cwd(), 'public', 'data');
+    // Try multiple possible data directory locations
+    const possiblePaths = [
+      path.join(process.cwd(), 'public', 'data'),
+      path.join(process.cwd(), 'fincast', 'data'),
+      path.join(process.cwd(), 'data')
+    ];
 
-    // Check if directory exists
-    if (!fs.existsSync(dataDir)) {
-      console.error(`Data directory not found: ${dataDir}`);
+    let dataDir = null;
+    for (const dirPath of possiblePaths) {
+      if (fs.existsSync(dirPath)) {
+        dataDir = dirPath;
+        break;
+      }
+    }
+
+    if (!dataDir) {
+      console.error('Data directory not found in any of the expected locations');
       return NextResponse.json(
-        { error: 'Data directory not found' },
+        { 
+          error: 'Data directory not found',
+          searchedPaths: possiblePaths,
+          environment: process.env.NODE_ENV
+        },
         { status: 404 }
       );
     }
 
+    console.log(`Using data directory: ${dataDir}`);
     const files = fs.readdirSync(dataDir);
     
     if (files.length === 0) {
       console.error('No data files found in directory');
       return NextResponse.json(
-        { error: 'No data files found' },
+        { 
+          error: 'No data files found',
+          dataDirectory: dataDir,
+          environment: process.env.NODE_ENV
+        },
         { status: 404 }
       );
     }
@@ -47,7 +63,11 @@ export async function GET(request) {
 
     if (companies.length === 0) {
       return NextResponse.json(
-        { error: 'No valid company data found' },
+        { 
+          error: 'No valid company data found',
+          dataDirectory: dataDir,
+          environment: process.env.NODE_ENV
+        },
         { status: 404 }
       );
     }
@@ -62,7 +82,11 @@ export async function GET(request) {
   } catch (error) {
     console.error('Error fetching financial data:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch financial data' },
+      { 
+        error: 'Failed to fetch financial data',
+        details: error.message,
+        environment: process.env.NODE_ENV
+      },
       { status: 500 }
     );
   }
