@@ -1,4 +1,4 @@
-# Ignore everything
+# Ignore everything by default
 *
 
 # Allow specific files
@@ -11,18 +11,22 @@
 !README.md
 !vercel.json
 
-# Allow directories
+# Allow specific directories and their contents
 !app/
 !public/
 !scripts/
 !components/
 !styles/
 
-# Ignore node_modules
-node_modules
-
-# Ignore .next directory
-.next
+# Ignore specific directories and files
+node_modules/
+.next/
+.env*
+.DS_Store
+*.pem
+venv/
+__pycache__/
+*.pyc
 
 # Ignore development files
 .env
@@ -34,8 +38,4 @@ node_modules
 # Ignore debug logs
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*
-
-# Ignore system files
-.DS_Store
-*.pem 
+yarn-error.log* 
