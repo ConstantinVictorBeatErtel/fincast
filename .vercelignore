@@ -4,7 +4,7 @@
 # Allow specific files
 !package.json
 !package-lock.json
-!next.config.ts
+!next.config.mjs
 !tsconfig.json
 !postcss.config.mjs
 !.gitignore
@@ -14,7 +14,6 @@
 # Allow specific directories and their contents
 !app/
 !public/
-!scripts/
 !components/
 !styles/
 
