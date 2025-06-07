@@ -13,7 +13,7 @@ sf.set_data_dir('~/simfin_data/')
 
 # Create directories for data
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-json_output_dir = os.path.join(base_dir, 'fincast', 'public', 'data')
+json_output_dir = os.path.join(base_dir, 'public', 'data')
 os.makedirs(json_output_dir, exist_ok=True)
 
 # Default tickers to fetch
