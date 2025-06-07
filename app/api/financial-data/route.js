@@ -10,31 +10,16 @@ export async function GET(request) {
     console.log('API Route: Starting request');
     console.log('Current working directory:', process.cwd());
     
-    // Try multiple possible data directory locations
-    const possiblePaths = [
-      path.join(process.cwd(), 'public', 'data'),
-      path.join(process.cwd(), 'fincast', 'data'),
-      path.join(process.cwd(), 'data')
-    ];
+    // Look specifically in the public/data directory
+    const dataDir = path.join(process.cwd(), 'public', 'data');
+    console.log('Looking for data in:', dataDir);
 
-    console.log('Searching for data in paths:', possiblePaths);
-
-    let dataDir = null;
-    for (const dirPath of possiblePaths) {
-      console.log(`Checking path: ${dirPath}`);
-      if (fs.existsSync(dirPath)) {
-        dataDir = dirPath;
-        console.log(`Found data directory: ${dirPath}`);
-        break;
-      }
-    }
-
-    if (!dataDir) {
-      console.error('Data directory not found in any of the expected locations');
+    if (!fs.existsSync(dataDir)) {
+      console.error('Data directory not found:', dataDir);
       return NextResponse.json(
         { 
           error: 'Data directory not found',
-          searchedPaths: possiblePaths,
+          dataDirectory: dataDir,
           environment: process.env.NODE_ENV,
           cwd: process.cwd()
         },
