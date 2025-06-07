@@ -1,7 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 
-// Create sample data
+const dataDir = path.join(process.cwd(), 'public', 'data');
+
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
 const sampleData = {
   AAPL_metrics: {
     Symbol: 'AAPL',
@@ -25,17 +30,10 @@ const sampleData = {
   }
 };
 
-// Create public/data directory
-const dataDir = path.join(process.cwd(), 'public', 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-
-// Write sample data files
 Object.entries(sampleData).forEach(([filename, data]) => {
-  const filePath = path.join(dataDir, `${filename}.json`);
+  const filePath = path.join(dataDir, filename + '.json');
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-  console.log(`Created sample file: ${filePath}`);
+  console.log('Created sample file:', filePath);
 });
 
 console.log('Sample data created successfully!'); 
