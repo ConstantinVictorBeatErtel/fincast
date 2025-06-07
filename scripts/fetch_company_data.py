@@ -2,6 +2,7 @@ import os
 import json
 import simfin as sf
 import pandas as pd
+import numpy as np
 import sys
 from datetime import datetime
 
@@ -26,8 +27,12 @@ os.makedirs(json_output_dir, exist_ok=True)
 default_tickers = ['AAPL', 'MSFT', 'AMZN', 'META', 'TSLA', 'NVDA', 'JNJ', 'WMT', 'SPY']
 
 def ensure_numeric(value):
-    """Convert string numbers to float or int."""
-    if isinstance(value, str):
+    """Convert numpy/pandas types to Python native types."""
+    if isinstance(value, (np.integer, np.int64)):
+        return int(value)
+    elif isinstance(value, (np.floating, np.float64)):
+        return float(value)
+    elif isinstance(value, str):
         try:
             if '.' in value:
                 return float(value)
@@ -35,6 +40,13 @@ def ensure_numeric(value):
         except ValueError:
             return value
     return value
+
+def safe_get(data, key, default=0):
+    """Safely get a value from a pandas Series."""
+    try:
+        return data.get(key, default)
+    except:
+        return default
 
 def process_company_data(ticker):
     try:
@@ -51,22 +63,27 @@ def process_company_data(ticker):
         latest_price = prices.loc[ticker].iloc[-1]
         
         # Calculate metrics
-        market_cap = latest_price['Close'] * latest_balance['Shares (Basic)']
-        profit_margin = latest_income['Net Income'] / latest_income['Revenue']
-        gross_margin = latest_income['Gross Profit'] / latest_income['Revenue']
-        operating_margin = latest_income['Operating Income'] / latest_income['Revenue']
-        pe_ratio = latest_price['Close'] / (latest_income['Net Income'] / latest_balance['Shares (Basic)'])
+        market_cap = latest_price['Close'] * safe_get(latest_balance, 'Shares (Basic)', 0)
+        revenue = safe_get(latest_income, 'Revenue', 0)
+        net_income = safe_get(latest_income, 'Net Income', 0)
+        gross_profit = safe_get(latest_income, 'Gross Profit', 0)
+        operating_income = safe_get(latest_income, 'Operating Income', 0)
+        
+        profit_margin = net_income / revenue if revenue else 0
+        gross_margin = gross_profit / revenue if revenue else 0
+        operating_margin = operating_income / revenue if revenue else 0
+        pe_ratio = latest_price['Close'] / (net_income / safe_get(latest_balance, 'Shares (Basic)', 1)) if net_income else 0
         
         # Create company metrics
         company_metrics = {
             'Symbol': ticker,
-            'Revenue': ensure_numeric(latest_income['Revenue']),
-            'NetIncome': ensure_numeric(latest_income['Net Income']),
-            'GrossProfit': ensure_numeric(latest_income['Gross Profit']),
-            'OperatingIncome': ensure_numeric(latest_income['Operating Income']),
-            'TotalAssets': ensure_numeric(latest_balance['Total Assets']),
-            'TotalLiabilities': ensure_numeric(latest_balance['Total Liabilities']),
-            'TotalEquity': ensure_numeric(latest_balance['Total Equity']),
+            'Revenue': ensure_numeric(revenue),
+            'NetIncome': ensure_numeric(net_income),
+            'GrossProfit': ensure_numeric(gross_profit),
+            'OperatingIncome': ensure_numeric(operating_income),
+            'TotalAssets': ensure_numeric(safe_get(latest_balance, 'Total Assets', 0)),
+            'TotalLiabilities': ensure_numeric(safe_get(latest_balance, 'Total Liabilities', 0)),
+            'TotalEquity': ensure_numeric(safe_get(latest_balance, 'Total Equity', 0)),
             'Price': ensure_numeric(latest_price['Close']),
             'Volume': ensure_numeric(latest_price['Volume']),
             'MarketCapitalization': ensure_numeric(market_cap),
@@ -86,6 +103,7 @@ def process_company_data(ticker):
         # Save historical prices
         historical_prices = prices.loc[ticker].reset_index()
         historical_prices['Date'] = historical_prices['Date'].dt.strftime('%Y-%m-%d')
+        historical_prices = historical_prices.applymap(ensure_numeric)
         prices_file = os.path.join(json_output_dir, f'{ticker}_prices.json')
         with open(prices_file, 'w') as f:
             json.dump(historical_prices.to_dict(orient='records'), f, indent=2)
