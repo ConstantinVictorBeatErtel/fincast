@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "ls -la && pwd && find . -name 'fetch_company_data.py' && python3.9 ./scripts/fetch_company_data.py && next build",
+  "buildCommand": "next build",
   "installCommand": "pip3 install -r requirements.txt && npm install",
   "outputDirectory": ".next",
   "framework": "nextjs",
