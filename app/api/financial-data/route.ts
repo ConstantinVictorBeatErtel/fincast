@@ -29,20 +29,24 @@ export async function GET() {
       );
     }
 
-    const companies = files
-      .filter(file => file.endsWith('.json'))
-      .map(file => {
-        const filePath = path.join(dataDir, file);
-        const content = fs.readFileSync(filePath, 'utf-8');
-        return JSON.parse(content);
-      });
+    // Get all metrics files
+    const metricsFiles = files.filter(file => file.endsWith('_metrics.json'));
+    const companies = metricsFiles.map(file => {
+      const filePath = path.join(dataDir, file);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      return JSON.parse(content);
+    });
+
+    // Get market data from SPY metrics
+    const spyMetricsFile = files.find(file => file === 'SPY_metrics.json');
+    const marketData = spyMetricsFile ? JSON.parse(fs.readFileSync(path.join(dataDir, spyMetricsFile), 'utf-8')) : null;
 
     console.log('Processed companies:', companies.length);
 
     return NextResponse.json({
       companies,
-      forecasts: [],
-      marketData: null
+      forecasts: [], // We can add forecasts later if needed
+      marketData
     });
   } catch (error) {
     console.error('Error in API route:', error);

@@ -1,6 +1,7 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
+  "buildCommand": "python3 scripts/fetch_company_data.py && next build",
+  "installCommand": "pip install simfin pandas && npm install",
   "outputDirectory": ".next",
   "framework": "nextjs",
   "routes": [
