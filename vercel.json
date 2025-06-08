@@ -7,11 +7,12 @@
     "app/api/company-data/route.js": {
       "memory": 1024,
       "maxDuration": 60
-    },
-    "api/fetch_company_data.py": {
-      "runtime": "python3.12",
-      "memory": 1024,
-      "maxDuration": 60
     }
-  }
+  },
+  "builds": [
+    {
+      "src": "api/fetch_company_data.py",
+      "use": "@vercel/python@3.0.0"
+    }
+  ]
 }
