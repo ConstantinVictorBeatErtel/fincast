@@ -8,5 +8,12 @@
       "src": "package.json",
       "use": "@vercel/next"
     }
-  ]
+  ],
+  "functions": {
+    "app/api/company-data/route.js": {
+      "runtime": "edge",
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  }
 }

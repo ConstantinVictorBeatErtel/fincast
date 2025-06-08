@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { PythonShell } from 'python-shell';
 import path from 'path';
 
+export const runtime = 'edge';
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const ticker = searchParams.get('ticker');
@@ -13,7 +15,7 @@ export async function GET(request) {
   return new Promise((resolve) => {
     const options = {
       mode: 'text',
-      pythonPath: 'python3',
+      pythonPath: '/usr/bin/python3',
       pythonOptions: ['-u'], // unbuffered output
       scriptPath: path.join(process.cwd(), 'scripts'),
       args: [ticker]
