@@ -1,7 +1,6 @@
 import os
 import json
-import yfinance as yf
-import pandas as pd
+import requests
 import sys
 from datetime import datetime
 
@@ -23,39 +22,38 @@ else:
 os.makedirs(data_dir, exist_ok=True)
 os.makedirs(json_output_dir, exist_ok=True)
 
+# Alpha Vantage API key - you should replace this with your own key
+API_KEY = 'demo'  # Using demo key for testing
+
 def fetch_company_data(ticker):
     try:
         print(f"Fetching data for {ticker}...")
         
-        # Create a Ticker object
-        stock = yf.Ticker(ticker)
+        # Fetch income statement
+        url = f'https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol={ticker}&apikey={API_KEY}'
+        response = requests.get(url)
+        data = response.json()
         
-        # Get financial data
-        financials = stock.financials
-        if financials.empty:
+        if 'Error Message' in data:
             return {
-                'error': f'No financial data found for ticker {ticker}'
+                'error': f'Error fetching data: {data["Error Message"]}'
+            }
+            
+        if 'quarterlyReports' not in data or not data['quarterlyReports']:
+            return {
+                'error': f'No quarterly reports found for ticker {ticker}'
             }
             
         # Get the most recent quarter's data
-        latest_quarter = financials.iloc[:, 0]  # First column is the most recent quarter
-        
-        # Get income statement
-        income_stmt = stock.income_stmt
-        if income_stmt.empty:
-            return {
-                'error': f'No income statement data found for ticker {ticker}'
-            }
-            
-        latest_income = income_stmt.iloc[:, 0]  # First column is the most recent quarter
+        latest_quarter = data['quarterlyReports'][0]
         
         # Format the response
         response = {
             'ticker': ticker.upper(),
-            'revenue': float(latest_income.get('Total Revenue', 0)),
-            'net_income': float(latest_income.get('Net Income', 0)),
-            'quarter': latest_income.name.strftime('%Q'),  # Quarter number
-            'year': latest_income.name.strftime('%Y')      # Year
+            'revenue': float(latest_quarter.get('totalRevenue', 0)),
+            'net_income': float(latest_quarter.get('netIncome', 0)),
+            'quarter': latest_quarter.get('fiscalDateEnding', '').split('-')[1],  # Extract quarter from date
+            'year': latest_quarter.get('fiscalDateEnding', '').split('-')[0]      # Extract year from date
         }
         
         print(f"Returning response: {response}")
