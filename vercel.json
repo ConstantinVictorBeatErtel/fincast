@@ -1,8 +1,24 @@
 {
   "version": 2,
-  "buildCommand": "pip install -r requirements.txt && next build",
-  "installCommand": "npm install",
-  "framework": "nextjs",
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/next"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/company-data",
+      "dest": "/api/company-data"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/"
+    }
+  ],
   "env": {
     "SIMFIN_API_KEY": "@simfin_api_key"
   }

@@ -10,14 +10,24 @@ export async function GET(request) {
     return NextResponse.json({ error: 'Ticker is required' }, { status: 400 });
   }
 
-  const pythonPath = '/usr/local/bin/python3';
+  // In Vercel, Python is available at /usr/local/bin/python3
+  const pythonPath = process.env.VERCEL ? '/usr/local/bin/python3' : 'python3';
   const scriptPath = path.join(process.cwd(), 'scripts', 'fetch_company_data.py');
 
   return new Promise((resolve) => {
+    console.log('Starting Python process with:', {
+      pythonPath,
+      scriptPath,
+      ticker,
+      cwd: process.cwd()
+    });
+
     const pythonProcess = spawn(pythonPath, [scriptPath, ticker], {
       env: {
         ...process.env,
-        PYTHONPATH: '/usr/local/lib/python3.12/site-packages',
+        PYTHONPATH: process.env.VERCEL 
+          ? '/usr/local/lib/python3.12/site-packages'
+          : path.join(process.cwd(), 'venv', 'lib', 'python3.12', 'site-packages'),
         PYTHONNOUSERSITE: '1'
       }
     });
@@ -26,19 +36,25 @@ export async function GET(request) {
     let stderr = '';
 
     pythonProcess.stdout.on('data', (data) => {
-      stdout += data.toString();
+      const chunk = data.toString();
+      console.log('Python stdout:', chunk);
+      stdout += chunk;
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      stderr += data.toString();
+      const chunk = data.toString();
+      console.error('Python stderr:', chunk);
+      stderr += chunk;
     });
 
     pythonProcess.on('close', (code) => {
+      console.log('Python process exited with code:', code);
+      
       if (code !== 0) {
         console.error('Script stderr:', stderr);
         resolve(NextResponse.json({ 
           error: 'Failed to execute Python script', 
-          details: stderr 
+          details: stderr || 'No error details available'
         }, { status: 500 }));
         return;
       }
@@ -48,9 +64,11 @@ export async function GET(request) {
         resolve(NextResponse.json(data));
       } catch (error) {
         console.error('Failed to parse script output:', error);
+        console.error('Raw stdout:', stdout);
         resolve(NextResponse.json({ 
           error: 'Failed to parse script output', 
-          details: error.message 
+          details: error.message,
+          rawOutput: stdout
         }, { status: 500 }));
       }
     });
