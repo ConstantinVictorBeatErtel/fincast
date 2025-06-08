@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
 
-const TIINGO_API_KEY = 'd11699709a38e4ed2e7ea88cc5fd4268e34a1f28';
-
 export const runtime = 'edge';
 
 export async function GET(request) {
@@ -10,6 +8,14 @@ export async function GET(request) {
 
   if (!ticker) {
     return NextResponse.json({ error: 'Ticker is required' }, { status: 400 });
+  }
+
+  if (!process.env.TIINGO_API_KEY) {
+    console.error('TIINGO_API_KEY is not set');
+    return NextResponse.json(
+      { error: 'API key not configured' },
+      { status: 500 }
+    );
   }
 
   try {
@@ -28,7 +34,7 @@ export async function GET(request) {
       `https://api.tiingo.com/tiingo/fundamentals/${ticker}/statements?startDate=${startDateStr}&endDate=${endDateStr}&format=json`,
       {
         headers: {
-          'Authorization': `Token ${TIINGO_API_KEY}`,
+          'Authorization': `Token ${process.env.TIINGO_API_KEY}`,
           'Content-Type': 'application/json'
         }
       }
