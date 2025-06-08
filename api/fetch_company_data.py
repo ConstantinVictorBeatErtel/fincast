@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 import sys
+import requests
 
 # Add the virtual environment's site-packages to the Python path
 venv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'venv')
@@ -25,18 +26,36 @@ sf.set_data_dir(data_dir)
 
 def fetch_company_data(ticker):
     try:
-        # Load the annual Income Statements for all companies in the US.
-        df = sf.load_income(variant='annual', market='us')
-
-        # Get data for the specified ticker
-        data = df.loc[ticker, [REVENUE, NET_INCOME]]
+        # Fetch data directly from SimFin API
+        api_key = '1aab9692-30b6-4b82-be79-27d454de3b25'
+        
+        # First get company ID
+        lookup_url = f'https://backend.simfin.com/api/v3/companies/lookup?ticker={ticker}&api-key={api_key}'
+        lookup_response = requests.get(lookup_url)
+        lookup_response.raise_for_status()
+        company_data = lookup_response.json()
+        
+        if not company_data:
+            return {'error': 'Company not found'}
+            
+        company_id = company_data[0]['simId']
+        
+        # Then get financial statements
+        statements_url = f'https://backend.simfin.com/api/v3/companies/{company_id}/statements/income-statement?period=annual&api-key={api_key}'
+        statements_response = requests.get(statements_url)
+        statements_response.raise_for_status()
+        statements_data = statements_response.json()
+        
+        # Transform the data
         result = {}
-        for idx, row in data.iterrows():
-            result[str(idx)] = {
-                'Revenue': float(row[REVENUE]),
-                'Net Income': float(row[NET_INCOME])
-            }
-
+        for item in statements_data:
+            if item.get('reportDate'):
+                year = item['reportDate'][:4]  # Extract year from date
+                result[year] = {
+                    'Revenue': item.get('revenue', 0),
+                    'Net Income': item.get('netIncome', 0)
+                }
+        
         return result
     except Exception as e:
         return {'error': str(e)}
