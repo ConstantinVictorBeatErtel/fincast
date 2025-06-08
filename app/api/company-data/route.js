@@ -34,7 +34,13 @@ export async function GET(request) {
     );
 
     if (!statementsResponse.ok) {
-      throw new Error('Failed to fetch financial statements');
+      const errorText = await statementsResponse.text();
+      console.error('Tiingo API Error:', {
+        status: statementsResponse.status,
+        statusText: statementsResponse.statusText,
+        body: errorText
+      });
+      throw new Error(`Failed to fetch financial statements: ${statementsResponse.status} ${statementsResponse.statusText}`);
     }
 
     const statements = await statementsResponse.json();
@@ -51,7 +57,13 @@ export async function GET(request) {
     );
 
     if (!infoResponse.ok) {
-      throw new Error('Failed to fetch company info');
+      const errorText = await infoResponse.text();
+      console.error('Tiingo API Error:', {
+        status: infoResponse.status,
+        statusText: infoResponse.statusText,
+        body: errorText
+      });
+      throw new Error(`Failed to fetch company info: ${infoResponse.status} ${infoResponse.statusText}`);
     }
 
     const companyInfo = await infoResponse.json();
@@ -76,7 +88,6 @@ export async function GET(request) {
         netIncome: netIncome,
         freeCashFlow: freeCashFlow,
         roic: roic,
-        // Add other metrics as needed
       };
     });
 
@@ -108,7 +119,10 @@ export async function GET(request) {
   } catch (error) {
     console.error('Error fetching company data:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to fetch company data' },
+      { 
+        error: error.message || 'Failed to fetch company data',
+        details: error.stack
+      },
       { status: 500 }
     );
   }
