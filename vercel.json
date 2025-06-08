@@ -8,11 +8,5 @@
       "memory": 1024,
       "maxDuration": 60
     }
-  },
-  "builds": [
-    {
-      "src": "api/fetch_company_data.py",
-      "use": "now-python@3.0.0"
-    }
-  ]
+  }
 }

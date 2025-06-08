@@ -1,0 +1,3 @@
+simfin==0.4.0
+pandas==2.2.0
+numpy==1.26.4 
