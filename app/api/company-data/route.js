@@ -43,11 +43,17 @@ export async function GET(request) {
     // Transform the data
     const result = {};
     for (const statement of statements) {
-      if (statement.date) {
+      if (statement.date && statement.statementData && statement.statementData.incomeStatement) {
         const year = statement.date.substring(0, 4);
+        const incomeStatement = statement.statementData.incomeStatement;
+        
+        // Find revenue and net income values
+        const revenue = incomeStatement.find(item => item.dataCode === 'revenue')?.value || 0;
+        const netIncome = incomeStatement.find(item => item.dataCode === 'netinc')?.value || 0;
+
         result[year] = {
-          'Revenue': statement.revenue || 0,
-          'Net Income': statement.netIncome || 0
+          'Revenue': revenue,
+          'Net Income': netIncome
         };
       }
     }
