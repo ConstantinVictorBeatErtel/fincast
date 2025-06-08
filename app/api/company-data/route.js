@@ -36,7 +36,7 @@ export async function GET(request) {
   return new Promise((resolve) => {
     const options = {
       mode: 'text',
-      pythonPath: process.env.VERCEL ? '/usr/local/bin/python3' : 'python3',
+      pythonPath: process.env.VERCEL ? 'python3' : 'python3',
       pythonOptions: ['-u'], // unbuffered output
       scriptPath: path.join(process.cwd(), 'scripts'),
       args: [ticker]

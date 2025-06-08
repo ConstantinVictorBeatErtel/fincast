@@ -1,6 +1,12 @@
 {
   "version": 2,
-  "buildCommand": "pip install -r requirements.txt && npm run build",
+  "buildCommand": "python3 -m pip install --upgrade pip && python3 -m pip install -r requirements.txt && npm run build",
   "installCommand": "npm install",
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/next"
+    }
+  ]
 }
