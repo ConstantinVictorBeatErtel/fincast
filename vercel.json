@@ -22,5 +22,8 @@
       "src": "/(.*)",
       "dest": "/"
     }
-  ]
+  ],
+  "env": {
+    "SIMFIN_API_KEY": "@simfin_api_key"
+  }
 }
