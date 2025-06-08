@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import requests
+from datetime import datetime, timedelta
 
 # Add the virtual environment's site-packages to the Python path
 venv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'venv')
@@ -26,36 +27,37 @@ sf.set_data_dir(data_dir)
 
 def fetch_company_data(ticker):
     try:
-        # Fetch data directly from SimFin API
-        api_key = '1aab9692-30b6-4b82-be79-27d454de3b25'
+        # Tiingo API configuration
+        api_key = 'd11699709a38e4ed2e7ea88cc5fd4268e34a1f28'
+        headers = {
+            'Authorization': f'Token {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        # Calculate date range (last 5 years)
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=5*365)  # 5 years ago
         
-        # First get company ID
-        lookup_url = f'https://backend.simfin.com/api/v3/companies/lookup?ticker={ticker}&api-key={api_key}'
-        lookup_response = requests.get(lookup_url)
-        lookup_response.raise_for_status()
-        company_data = lookup_response.json()
-        
-        if not company_data:
-            return {'error': 'Company not found'}
-            
-        company_id = company_data[0]['simId']
-        
-        # Then get financial statements
-        statements_url = f'https://backend.simfin.com/api/v3/companies/{company_id}/statements/income-statement?period=annual&api-key={api_key}'
-        statements_response = requests.get(statements_url)
-        statements_response.raise_for_status()
-        statements_data = statements_response.json()
-        
+        # Format dates for API
+        start_date_str = start_date.strftime('%Y-%m-%d')
+        end_date_str = end_date.strftime('%Y-%m-%d')
+
+        # Fetch financial statements
+        url = f'https://api.tiingo.com/tiingo/fundamentals/{ticker}/statements?startDate={start_date_str}&endDate={end_date_str}&format=json'
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        statements_data = response.json()
+
         # Transform the data
         result = {}
-        for item in statements_data:
-            if item.get('reportDate'):
-                year = item['reportDate'][:4]  # Extract year from date
+        for statement in statements_data:
+            if statement.get('date'):
+                year = statement['date'][:4]  # Extract year from date
                 result[year] = {
-                    'Revenue': item.get('revenue', 0),
-                    'Net Income': item.get('netIncome', 0)
+                    'Revenue': statement.get('revenue', 0),
+                    'Net Income': statement.get('netIncome', 0)
                 }
-        
+
         return result
     except Exception as e:
         return {'error': str(e)}
