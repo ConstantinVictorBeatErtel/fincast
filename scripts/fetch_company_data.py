@@ -4,9 +4,13 @@ import requests
 import sys
 from datetime import datetime
 
-print("Current working directory:", os.getcwd())
-print("Script location:", os.path.abspath(__file__))
-print("Directory contents:", os.listdir('.'))
+# Debug information goes to stderr
+def debug_print(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
+
+debug_print("Current working directory:", os.getcwd())
+debug_print("Script location:", os.path.abspath(__file__))
+debug_print("Directory contents:", os.listdir('.'))
 
 # Set data directory based on environment
 if os.environ.get('VERCEL'):
@@ -23,11 +27,11 @@ os.makedirs(data_dir, exist_ok=True)
 os.makedirs(json_output_dir, exist_ok=True)
 
 # Alpha Vantage API key - you should replace this with your own key
-API_KEY = 'demo'  # Using demo key for testing
+API_KEY = 'P7M6C5PE71GNLCKN'  # Using provided API key
 
 def fetch_company_data(ticker):
     try:
-        print(f"Fetching data for {ticker}...")
+        debug_print(f"Fetching data for {ticker}...")
         
         # Fetch income statement
         url = f'https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol={ticker}&apikey={API_KEY}'
@@ -56,11 +60,11 @@ def fetch_company_data(ticker):
             'year': latest_quarter.get('fiscalDateEnding', '').split('-')[0]      # Extract year from date
         }
         
-        print(f"Returning response: {response}")
+        debug_print(f"Returning response: {response}")
         return response
 
     except Exception as e:
-        print(f"Error in fetch_company_data: {str(e)}")
+        debug_print(f"Error in fetch_company_data: {str(e)}")
         return {
             'error': f'Error fetching data: {str(e)}'
         }
@@ -72,5 +76,6 @@ if __name__ == "__main__":
     
     ticker = sys.argv[1]
     result = fetch_company_data(ticker)
+    # Only print the JSON result to stdout
     print(json.dumps(result)) 
 

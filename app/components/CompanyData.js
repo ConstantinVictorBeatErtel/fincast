@@ -15,16 +15,19 @@ export default function CompanyData() {
     setData(null);
 
     try {
-      const response = await fetch(`/api/company-data?ticker=${ticker}`);
+      console.log(`Fetching data for ticker: ${ticker}`);
+      const response = await fetch(`/api/company-data?ticker=${encodeURIComponent(ticker)}`);
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to fetch data');
+        throw new Error(result.error || `Failed to fetch data: ${response.status} ${response.statusText}`);
       }
 
+      console.log('Received data:', result);
       setData(result);
     } catch (err) {
-      setError(err.message);
+      console.error('Error fetching data:', err);
+      setError(err.message || 'An unexpected error occurred');
     } finally {
       setLoading(false);
     }
@@ -32,21 +35,21 @@ export default function CompanyData() {
 
   return (
     <div className="bg-white p-6 rounded-lg shadow-md">
-      <h2 className="text-xl font-semibold mb-4">Company Data</h2>
+      <h2 className="text-2xl font-bold mb-6 text-gray-900">Company Data</h2>
       
-      <form onSubmit={fetchData} className="mb-4">
+      <form onSubmit={fetchData} className="mb-6">
         <div className="flex gap-2">
           <input
             type="text"
             value={ticker}
             onChange={(e) => setTicker(e.target.value.toUpperCase())}
             placeholder="Enter ticker symbol (e.g., AAPL)"
-            className="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 placeholder-gray-500"
           />
           <button
             type="submit"
             disabled={loading || !ticker}
-            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-6 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {loading ? 'Loading...' : 'Fetch Data'}
           </button>
@@ -54,28 +57,29 @@ export default function CompanyData() {
       </form>
 
       {error && (
-        <div className="p-4 mb-4 text-red-700 bg-red-100 rounded-lg">
-          {error}
+        <div className="p-4 mb-6 text-red-800 bg-red-100 rounded-lg border border-red-200">
+          <p className="font-semibold">Error:</p>
+          <p>{error}</p>
         </div>
       )}
 
       {data && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <h3 className="text-sm font-medium text-gray-500">Revenue</h3>
-              <p className="text-2xl font-semibold">
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 gap-6">
+            <div className="p-6 bg-gray-50 rounded-lg border border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Revenue</h3>
+              <p className="text-3xl font-bold text-gray-900">
                 ${(data.revenue / 1e9).toFixed(2)}B
               </p>
             </div>
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <h3 className="text-sm font-medium text-gray-500">Net Income</h3>
-              <p className="text-2xl font-semibold">
+            <div className="p-6 bg-gray-50 rounded-lg border border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Net Income</h3>
+              <p className="text-3xl font-bold text-gray-900">
                 ${(data.net_income / 1e9).toFixed(2)}B
               </p>
             </div>
           </div>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm font-medium text-gray-700">
             Data for Q{data.quarter} {data.year}
           </p>
         </div>
