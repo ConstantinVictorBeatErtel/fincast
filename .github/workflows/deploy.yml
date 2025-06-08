@@ -1,0 +1,51 @@
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        npm install
+        pip install -r requirements.txt
+
+    - name: Build
+      run: npm run build
+      env:
+        SIMFIN_API_KEY: ${{ secrets.SIMFIN_API_KEY }}
+
+    - name: Debug Python Environment
+      run: |
+        echo "Python version:"
+        python --version
+        echo "\nPython path:"
+        python -c "import sys; print('\n'.join(sys.path))"
+        echo "\nInstalled packages:"
+        pip list
+        echo "\nCurrent directory:"
+        pwd
+        echo "\nDirectory contents:"
+        ls -la
+        echo "\nScripts directory contents:"
+        ls -la scripts/ 
