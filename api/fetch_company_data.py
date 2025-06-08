@@ -1,4 +1,5 @@
 # @vercel/python@3.0.0
+# Vercel Python serverless function for fetching company data
 from http.server import BaseHTTPRequestHandler
 import json
 import os
