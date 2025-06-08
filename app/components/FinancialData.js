@@ -12,7 +12,7 @@ import {
   Legend,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
-import { Card } from '@/components/ui/card';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 
 ChartJS.register(
   CategoryScale,
@@ -62,20 +62,16 @@ export default function FinancialData({ ticker }) {
     }
   };
 
+  const formatPercent = (value) => {
+    return `${value.toFixed(2)}%`;
+  };
+
   const formatCurrency = (value) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
       notation: 'compact',
-      maximumFractionDigits: 1,
-    }).format(value);
-  };
-
-  const formatPercent = (value) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'percent',
-      minimumFractionDigits: 1,
-      maximumFractionDigits: 1,
+      maximumFractionDigits: 1
     }).format(value);
   };
 
@@ -112,47 +108,105 @@ export default function FinancialData({ ticker }) {
   };
 
   const prepareChartData = (data, type) => {
-    const years = Object.keys(data).sort();
-    const revenueData = years.map(year => data[year].Revenue);
-    const netIncomeData = years.map(year => data[year]['Net Income']);
+    const labels = data.map(item => item.date.substring(0, 4));
+    const datasets = [];
 
-    return {
-      labels: years,
-      datasets: [
+    if (type === 'historical') {
+      datasets.push(
         {
           label: 'Revenue',
-          data: revenueData,
+          data: data.map(item => item.revenue),
           borderColor: 'rgb(75, 192, 192)',
-          backgroundColor: 'rgba(75, 192, 192, 0.5)',
-          tension: 0.1,
+          tension: 0.1
         },
         {
           label: 'Net Income',
-          data: netIncomeData,
+          data: data.map(item => item.netIncome),
           borderColor: 'rgb(255, 99, 132)',
-          backgroundColor: 'rgba(255, 99, 132, 0.5)',
-          tension: 0.1,
+          tension: 0.1
         },
-      ],
-    };
+        {
+          label: 'Free Cash Flow',
+          data: data.map(item => item.freeCashFlow),
+          borderColor: 'rgb(54, 162, 235)',
+          tension: 0.1
+        }
+      );
+    } else {
+      datasets.push(
+        {
+          label: 'Revenue',
+          data: data.map(item => item.revenue),
+          borderColor: 'rgb(75, 192, 192)',
+          tension: 0.1
+        },
+        {
+          label: 'Net Income',
+          data: data.map(item => item.netIncome),
+          borderColor: 'rgb(255, 99, 132)',
+          tension: 0.1
+        },
+        {
+          label: 'Free Cash Flow',
+          data: data.map(item => item.freeCashFlow),
+          borderColor: 'rgb(54, 162, 235)',
+          tension: 0.1
+        }
+      );
+    }
+
+    return { labels, datasets };
   };
 
-  const prepareMarginChartData = (data) => {
-    const years = Object.keys(data).sort();
-    const marginData = years.map(year => data[year]['Net Income Margin']);
+  const prepareMarginChartData = (data, type) => {
+    const labels = data.map(item => item.date.substring(0, 4));
+    const datasets = [];
 
-    return {
-      labels: years,
-      datasets: [
+    if (type === 'historical') {
+      datasets.push(
         {
           label: 'Net Income Margin',
-          data: marginData,
-          borderColor: 'rgb(153, 102, 255)',
-          backgroundColor: 'rgba(153, 102, 255, 0.5)',
-          tension: 0.1,
+          data: data.map(item => (item.netIncome / item.revenue) * 100),
+          borderColor: 'rgb(255, 99, 132)',
+          tension: 0.1
         },
-      ],
-    };
+        {
+          label: 'FCF Margin',
+          data: data.map(item => (item.freeCashFlow / item.revenue) * 100),
+          borderColor: 'rgb(54, 162, 235)',
+          tension: 0.1
+        },
+        {
+          label: 'ROIC',
+          data: data.map(item => item.roic),
+          borderColor: 'rgb(153, 102, 255)',
+          tension: 0.1
+        }
+      );
+    } else {
+      datasets.push(
+        {
+          label: 'Net Income Margin',
+          data: data.map(item => (item.netIncome / item.revenue) * 100),
+          borderColor: 'rgb(255, 99, 132)',
+          tension: 0.1
+        },
+        {
+          label: 'FCF Margin',
+          data: data.map(item => (item.freeCashFlow / item.revenue) * 100),
+          borderColor: 'rgb(54, 162, 235)',
+          tension: 0.1
+        },
+        {
+          label: 'ROIC',
+          data: data.map(item => item.roic),
+          borderColor: 'rgb(153, 102, 255)',
+          tension: 0.1
+        }
+      );
+    }
+
+    return { labels, datasets };
   };
 
   const prepareGrowthChartData = (data) => {
@@ -260,63 +314,81 @@ export default function FinancialData({ ticker }) {
 
   return (
     <div className="space-y-6">
-      <Card className="p-6">
-        <h2 className="text-2xl font-bold mb-4">Historical Data</h2>
-        <div className="h-[400px] mb-4">
-          <Line data={prepareChartData(historicalData, 'historical')} options={chartOptions} />
-        </div>
-        <div className="h-[400px] mb-4">
-          <Line data={prepareMarginChartData(historicalMargins)} options={marginChartOptions} />
-        </div>
-        <div className="h-[400px] mb-4">
-          <Line data={prepareGrowthChartData(historicalGrowthRates)} options={growthChartOptions} />
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          {Object.entries(historicalData).map(([year, data]) => (
-            <div key={year} className="border p-4 rounded">
-              <h3 className="font-bold">{year}</h3>
-              <p>Revenue: {formatCurrency(data.Revenue)}</p>
-              <p>Net Income: {formatCurrency(data['Net Income'])}</p>
-              <p>Net Income Margin: {formatPercent(data['Net Income'] / data.Revenue)}</p>
-              {historicalGrowthRates[year] && (
-                <>
-                  <p>Revenue Growth: {formatPercent(historicalGrowthRates[year]['Revenue Growth'])}</p>
-                  <p>Net Income Growth: {formatPercent(historicalGrowthRates[year]['Net Income Growth'])}</p>
-                </>
-              )}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Historical Data */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Historical Data</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="h-[300px]">
+                <Line data={prepareChartData(historicalData, 'historical')} options={chartOptions} />
+              </div>
+              <div className="h-[300px]">
+                <Line data={prepareMarginChartData(historicalData, 'historical')} options={marginChartOptions} />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <h4 className="text-sm font-medium">TTM Revenue</h4>
+                  <p className="text-2xl font-bold">{formatCurrency(historicalData.ttmMetrics?.revenue)}</p>
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium">TTM Net Income</h4>
+                  <p className="text-2xl font-bold">{formatCurrency(historicalData.ttmMetrics?.netIncome)}</p>
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium">TTM Free Cash Flow</h4>
+                  <p className="text-2xl font-bold">{formatCurrency(historicalData.ttmMetrics?.freeCashFlow)}</p>
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium">TTM ROIC</h4>
+                  <p className="text-2xl font-bold">{formatPercent(historicalData.ttmMetrics?.roic)}</p>
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium">Dividend Yield</h4>
+                  <p className="text-2xl font-bold">{formatPercent(historicalData.ttmMetrics?.dividendYield)}</p>
+                </div>
+              </div>
             </div>
-          ))}
-        </div>
-      </Card>
+          </CardContent>
+        </Card>
 
-      <Card className="p-6">
-        <h2 className="text-2xl font-bold mb-4">Forecast Data</h2>
-        <div className="h-[400px] mb-4">
-          <Line data={prepareChartData(forecastData, 'forecast')} options={chartOptions} />
-        </div>
-        <div className="h-[400px] mb-4">
-          <Line data={prepareMarginChartData(forecastMargins)} options={marginChartOptions} />
-        </div>
-        <div className="h-[400px] mb-4">
-          <Line data={prepareGrowthChartData(forecastGrowthRates)} options={growthChartOptions} />
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          {Object.entries(forecastData).map(([year, data]) => (
-            <div key={year} className="border p-4 rounded">
-              <h3 className="font-bold">{year}</h3>
-              <p>Revenue: {formatCurrency(data.Revenue)}</p>
-              <p>Net Income: {formatCurrency(data['Net Income'])}</p>
-              <p>Net Income Margin: {formatPercent(data['Net Income'] / data.Revenue)}</p>
-              {forecastGrowthRates[year] && (
-                <>
-                  <p>Revenue Growth: {formatPercent(forecastGrowthRates[year]['Revenue Growth'])}</p>
-                  <p>Net Income Growth: {formatPercent(forecastGrowthRates[year]['Net Income Growth'])}</p>
-                </>
-              )}
+        {/* Forecast Data */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Forecast Data</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="h-[300px]">
+                <Line data={prepareChartData(forecastData, 'forecast')} options={chartOptions} />
+              </div>
+              <div className="h-[300px]">
+                <Line data={prepareMarginChartData(forecastData, 'forecast')} options={marginChartOptions} />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <h4 className="text-sm font-medium">Projected Revenue (5Y)</h4>
+                  <p className="text-2xl font-bold">{formatCurrency(forecastData[forecastData.length - 1]?.revenue)}</p>
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium">Projected Net Income (5Y)</h4>
+                  <p className="text-2xl font-bold">{formatCurrency(forecastData[forecastData.length - 1]?.netIncome)}</p>
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium">Projected FCF (5Y)</h4>
+                  <p className="text-2xl font-bold">{formatCurrency(forecastData[forecastData.length - 1]?.freeCashFlow)}</p>
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium">Projected ROIC (5Y)</h4>
+                  <p className="text-2xl font-bold">{formatPercent(forecastData[forecastData.length - 1]?.roic)}</p>
+                </div>
+              </div>
             </div>
-          ))}
-        </div>
-      </Card>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 } 
