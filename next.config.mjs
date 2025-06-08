@@ -2,7 +2,10 @@
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
-  distDir: '.next'
+  distDir: '.next',
+  experimental: {
+    serverComponentsExternalPackages: ['python-shell']
+  }
 };
 
 export default nextConfig; 
