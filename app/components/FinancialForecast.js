@@ -1,105 +1,119 @@
 'use client';
 
 import { useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Loader2 } from "lucide-react";
 
 export default function FinancialForecast() {
   const [ticker, setTicker] = useState('');
-  const [forecast, setForecast] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [forecast, setForecast] = useState(null);
   const [error, setError] = useState(null);
 
-  const generateForecast = async (e) => {
+  const formatCurrency = (value) => {
+    if (!value) return '$0';
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      notation: 'compact',
+      maximumFractionDigits: 1
+    }).format(value);
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
     setForecast(null);
 
     try {
-      // First, get historical data
-      const historicalResponse = await fetch(`/api/company-data?ticker=${encodeURIComponent(ticker)}`);
-      const historicalData = await historicalResponse.json();
-
-      if (!historicalResponse.ok) {
-        throw new Error(historicalData.error || 'Failed to fetch historical data');
-      }
-
-      // Call our API endpoint that will handle the Claude API call
-      const response = await fetch('/api/generate-forecast', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ticker,
-          historicalData
-        })
-      });
-
-      const result = await response.json();
-      
+      const response = await fetch(`/api/generate-forecast?ticker=${encodeURIComponent(ticker)}`);
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to generate forecast');
+        throw new Error('Failed to generate forecast');
       }
-
-      setForecast(result.forecast);
+      const data = await response.json();
+      setForecast(data);
     } catch (err) {
-      console.error('Error generating forecast:', err);
-      setError(err.message || 'An unexpected error occurred');
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="bg-white p-6 rounded-lg shadow-md">
-      <h2 className="text-2xl font-bold mb-6 text-gray-900">AI Financial Forecast</h2>
-      
-      <form onSubmit={generateForecast} className="mb-6">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={ticker}
-            onChange={(e) => setTicker(e.target.value.toUpperCase())}
-            placeholder="Enter ticker symbol (e.g., AAPL)"
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 placeholder-gray-500"
-          />
-          <button
-            type="submit"
-            disabled={loading || !ticker}
-            className="px-6 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {loading ? 'Generating Forecast...' : 'Generate Forecast'}
-          </button>
-        </div>
-      </form>
+    <Card className="w-full">
+      <CardHeader>
+        <CardTitle>Financial Forecast</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="ticker">Stock Ticker</Label>
+            <Input
+              id="ticker"
+              value={ticker}
+              onChange={(e) => setTicker(e.target.value.toUpperCase())}
+              placeholder="Enter ticker symbol (e.g., AAPL)"
+              required
+            />
+          </div>
+          <Button type="submit" disabled={loading}>
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Generating Forecast...
+              </>
+            ) : (
+              'Generate Forecast'
+            )}
+          </Button>
+        </form>
 
-      {error && (
-        <div className="p-4 mb-6 text-red-800 bg-red-100 rounded-lg border border-red-200">
-          <p className="font-semibold">Error:</p>
-          <p>{error}</p>
-        </div>
-      )}
+        {error && (
+          <div className="mt-4 p-4 bg-red-50 text-red-700 rounded-md">
+            {error}
+          </div>
+        )}
 
-      {forecast && (
-        <div className="space-y-6">
-          {Object.entries(forecast).map(([year, data]) => (
-            <div key={year} className="p-6 bg-gray-50 rounded-lg border border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Year {year}</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {Object.entries(data).map(([metric, value]) => (
-                  <div key={metric} className="p-4 bg-white rounded-lg border border-gray-200">
-                    <h4 className="text-sm font-medium text-gray-700 mb-2">{metric}</h4>
-                    <p className="text-xl font-bold text-gray-900">
-                      ${(value.forecast / 1e9).toFixed(2)}B
-                    </p>
-                    <p className="text-sm text-gray-600 mt-2">{value.explanation}</p>
+        {forecast && (
+          <div className="mt-6 space-y-6">
+            {Object.entries(forecast).map(([year, data]) => (
+              <div key={year} className="space-y-4">
+                <h3 className="text-lg font-semibold">{year}</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-500">Revenue</p>
+                    <p className="text-lg font-medium">{formatCurrency(data.Revenue)}</p>
                   </div>
-                ))}
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-500">Gross Profit</p>
+                    <p className="text-lg font-medium">{formatCurrency(data.GrossProfit)}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-500">EBIT</p>
+                    <p className="text-lg font-medium">{formatCurrency(data.EBIT)}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-500">Net Income</p>
+                    <p className="text-lg font-medium">{formatCurrency(data.NetIncome)}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-500">Free Cash Flow</p>
+                    <p className="text-lg font-medium">{formatCurrency(data.FreeCashFlow)}</p>
+                  </div>
+                </div>
+                <div className="mt-2">
+                  <p className="text-sm text-gray-500">Analysis</p>
+                  <p className="text-sm">{data.Explanation}</p>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 } 
