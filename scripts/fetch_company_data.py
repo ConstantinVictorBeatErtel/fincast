@@ -1,8 +1,8 @@
 import os
 import json
 import requests
-import sys
-from datetime import datetime
+from http.server import BaseHTTPRequestHandler
+from urllib.parse import parse_qs, urlparse
 
 # Debug information goes to stderr
 def debug_print(*args, **kwargs):
@@ -26,13 +26,11 @@ else:
 os.makedirs(data_dir, exist_ok=True)
 os.makedirs(json_output_dir, exist_ok=True)
 
-# Alpha Vantage API key - you should replace this with your own key
-API_KEY = 'P7M6C5PE71GNLCKN'  # Using provided API key
+# Alpha Vantage API key
+API_KEY = 'P7M6C5PE71GNLCKN'
 
 def fetch_company_data(ticker):
     try:
-        debug_print(f"Fetching data for {ticker}...")
-        
         # Fetch income statement
         url = f'https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol={ticker}&apikey={API_KEY}'
         response = requests.get(url)
@@ -60,22 +58,32 @@ def fetch_company_data(ticker):
             'year': latest_quarter.get('fiscalDateEnding', '').split('-')[0]      # Extract year from date
         }
         
-        debug_print(f"Returning response: {response}")
         return response
 
     except Exception as e:
-        debug_print(f"Error in fetch_company_data: {str(e)}")
         return {
             'error': f'Error fetching data: {str(e)}'
         }
 
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print(json.dumps({'error': 'Please provide a ticker symbol'}))
-        sys.exit(1)
-    
-    ticker = sys.argv[1]
-    result = fetch_company_data(ticker)
-    # Only print the JSON result to stdout
-    print(json.dumps(result)) 
+class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Parse query parameters
+        query = parse_qs(urlparse(self.path).query)
+        ticker = query.get('ticker', [''])[0]
+
+        if not ticker:
+            self.send_response(400)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': 'Ticker symbol is required'}).encode())
+            return
+
+        # Fetch company data
+        result = fetch_company_data(ticker)
+
+        # Send response
+        self.send_response(200 if 'error' not in result else 404)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(result).encode()) 
 

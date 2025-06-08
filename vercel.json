@@ -1,4 +1,23 @@
 {
-  "framework": "nextjs",
-  "installCommand": "pip3 install -r requirements.txt && npm install"
+  "version": 2,
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/next"
+    },
+    {
+      "src": "scripts/fetch_company_data.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/company-data",
+      "dest": "scripts/fetch_company_data.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/"
+    }
+  ]
 }
