@@ -10,9 +10,6 @@ print("Current working directory:", os.getcwd())
 print("Script location:", os.path.abspath(__file__))
 print("Directory contents:", os.listdir('.'))
 
-# Set your API key
-sf.set_api_key('392e2398-fac4-4eba-af9e-dcda63d71d30')
-
 # Set data directory based on environment
 if os.environ.get('VERCEL'):
     # In Vercel environment
@@ -27,6 +24,9 @@ else:
 os.makedirs(data_dir, exist_ok=True)
 os.makedirs(json_output_dir, exist_ok=True)
 
+# Set API key and data directory
+API_KEY = '392e2398-fac4-4eba-af9e-dcda63d71d30'
+sf.set_api_key(API_KEY)
 sf.set_data_dir(data_dir)
 
 # Default tickers to fetch
@@ -132,15 +132,19 @@ def main():
 
 def fetch_company_data(ticker):
     try:
-        # Initialize SimFin API
-        sf.set_api_key('free')
-        sf.set_data_dir(data_dir)
-
-        # Fetch income statement data
+        print(f"Fetching data for {ticker}...")
+        print(f"Using data directory: {data_dir}")
+        
+        # Download fresh data
+        sf.download(dataset='income', variant='quarterly', market='us')
+        
+        # Load income statement data
         income = sf.load_income(variant='quarterly', market='us')
+        print(f"Loaded income data. Shape: {income.shape}")
         
         # Filter for the specific company
         company_data = income[income['Ticker'] == ticker.upper()]
+        print(f"Found {len(company_data)} records for {ticker}")
         
         if company_data.empty:
             return {
@@ -149,6 +153,7 @@ def fetch_company_data(ticker):
 
         # Get the most recent quarter's data
         latest_data = company_data.iloc[0]
+        print(f"Latest data: {latest_data.to_dict()}")
         
         # Format the response
         response = {
@@ -159,11 +164,13 @@ def fetch_company_data(ticker):
             'year': latest_data.name[0]      # The year from the MultiIndex
         }
         
+        print(f"Returning response: {response}")
         return response
 
     except Exception as e:
+        print(f"Error in fetch_company_data: {str(e)}")
         return {
-            'error': str(e)
+            'error': f'Error fetching data: {str(e)}'
         }
 
 if __name__ == "__main__":

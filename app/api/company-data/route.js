@@ -15,6 +15,8 @@ export async function GET(request) {
   }
 
   try {
+    console.log(`Fetching data for ticker: ${ticker}`);
+    
     // Execute the Python script with the ticker as an argument
     const { stdout, stderr } = await execAsync(`python3 scripts/fetch_company_data.py ${ticker}`);
     
@@ -26,8 +28,19 @@ export async function GET(request) {
       });
     }
 
+    console.log('Python script output:', stdout);
+
     // Parse the Python script output
     const data = JSON.parse(stdout);
+    
+    if (data.error) {
+      console.error('Data fetch error:', data.error);
+      return new Response(JSON.stringify({ error: data.error }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     return new Response(JSON.stringify(data), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
