@@ -1,4 +1,4 @@
 requests>=2.31.0
-simfin==0.1.0
-pandas==2.2.0
-numpy==1.26.3 
+simfin==1.0.1
+pandas==2.2.1
+numpy==1.26.4 
