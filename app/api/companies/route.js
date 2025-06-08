@@ -5,6 +5,13 @@ import path from 'path';
 export async function GET() {
   try {
     const dataDir = path.join(process.cwd(), 'public', 'data');
+    
+    // Check if directory exists
+    if (!fs.existsSync(dataDir)) {
+      console.log('Data directory not found, returning empty array');
+      return NextResponse.json([]);
+    }
+    
     const files = fs.readdirSync(dataDir);
     
     // Filter for company metrics files
@@ -20,9 +27,7 @@ export async function GET() {
     return NextResponse.json(companies);
   } catch (error) {
     console.error('Error reading company data:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch company data' },
-      { status: 500 }
-    );
+    // Return empty array instead of error
+    return NextResponse.json([]);
   }
 } 
