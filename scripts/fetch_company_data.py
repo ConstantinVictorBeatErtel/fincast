@@ -124,6 +124,48 @@ def main():
     
     print("Data fetch completed!")
 
+def fetch_company_data(ticker):
+    try:
+        # Initialize SimFin API
+        sf.set_api_key('free')
+        sf.set_data_dir('./data/simfin')
+
+        # Fetch income statement data
+        income = sf.load_income(variant='quarterly', market='us')
+        
+        # Filter for the specific company
+        company_data = income[income['Ticker'] == ticker.upper()]
+        
+        if company_data.empty:
+            return {
+                'error': f'No data found for ticker {ticker}'
+            }
+
+        # Get the most recent quarter's data
+        latest_data = company_data.iloc[0]
+        
+        # Format the response
+        response = {
+            'ticker': ticker.upper(),
+            'revenue': float(latest_data['Revenue']),
+            'net_income': float(latest_data['Net Income']),
+            'quarter': latest_data.name[1],  # The quarter from the MultiIndex
+            'year': latest_data.name[0]      # The year from the MultiIndex
+        }
+        
+        return response
+
+    except Exception as e:
+        return {
+            'error': str(e)
+        }
+
 if __name__ == "__main__":
-    main() 
+    if len(sys.argv) != 2:
+        print(json.dumps({'error': 'Please provide a ticker symbol'}))
+        sys.exit(1)
+    
+    ticker = sys.argv[1]
+    result = fetch_company_data(ticker)
+    print(json.dumps(result)) 
 
