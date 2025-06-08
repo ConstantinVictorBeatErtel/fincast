@@ -1,5 +1,12 @@
 {
   "framework": "nextjs",
   "buildCommand": "next build",
-  "installCommand": "pip3 install -r requirements.txt && npm install"
+  "installCommand": "pip3 install -r requirements.txt && npm install",
+  "outputDirectory": ".next",
+  "builds": [
+    {
+      "src": "next.config.mjs",
+      "use": "@vercel/next"
+    }
+  ]
 }
