@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-const SIMFIN_API_KEY = '1aab9692-30b6-4b82-be79-27d454de3b25';
+const TIINGO_API_KEY = 'd11699709a38e4ed2e7ea88cc5fd4268e34a1f28';
 
 export const runtime = 'edge';
 
@@ -13,22 +13,46 @@ export async function GET(request) {
   }
 
   try {
-    // Call the Python serverless function
+    // Calculate date range (last 5 years)
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(startDate.getFullYear() - 5);
+
+    // Format dates for API
+    const formatDate = (date) => date.toISOString().split('T')[0];
+    const startDateStr = formatDate(startDate);
+    const endDateStr = formatDate(endDate);
+
+    // Fetch financial statements from Tiingo
     const response = await fetch(
-      `${process.env.VERCEL_URL || 'http://localhost:3000'}/api/fetch_company_data?ticker=${ticker}`,
+      `https://api.tiingo.com/tiingo/fundamentals/${ticker}/statements?startDate=${startDateStr}&endDate=${endDateStr}&format=json`,
       {
         headers: {
-          'Accept': 'application/json',
-        },
+          'Authorization': `Token ${TIINGO_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
       }
     );
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      throw new Error(`Tiingo API error: ${response.status}`);
     }
 
-    const data = await response.json();
-    return NextResponse.json(data);
+    const statements = await response.json();
+
+    // Transform the data
+    const result = {};
+    for (const statement of statements) {
+      if (statement.date) {
+        const year = statement.date.substring(0, 4);
+        result[year] = {
+          'Revenue': statement.revenue || 0,
+          'Net Income': statement.netIncome || 0
+        };
+      }
+    }
+
+    return NextResponse.json(result);
   } catch (error) {
     console.error('Error fetching data:', error);
     return NextResponse.json({ 
