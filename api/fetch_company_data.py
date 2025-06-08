@@ -39,28 +39,24 @@ def fetch_company_data(ticker):
     except Exception as e:
         return {'error': str(e)}
 
-class handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        # Get ticker from query string
-        query = self.path.split('?')[1] if '?' in self.path else ''
-        params = dict(param.split('=') for param in query.split('&') if param)
-        ticker = params.get('ticker', '')
+def handler(request):
+    # Get ticker from query string
+    ticker = request.args.get('ticker', '')
 
-        if not ticker:
-            self.send_response(400)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': 'Ticker is required'}).encode())
-            return
+    if not ticker:
+        return {
+            'statusCode': 400,
+            'body': json.dumps({'error': 'Ticker is required'})
+        }
 
-        try:
-            data = fetch_company_data(ticker)
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(data).encode())
-        except Exception as e:
-            self.send_response(500)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode()) 
+    try:
+        data = fetch_company_data(ticker)
+        return {
+            'statusCode': 200,
+            'body': json.dumps(data)
+        }
+    except Exception as e:
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': str(e)})
+        } 

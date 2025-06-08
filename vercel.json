@@ -7,6 +7,10 @@
     "app/api/company-data/route.js": {
       "memory": 1024,
       "maxDuration": 60
+    },
+    "api/fetch_company_data.py": {
+      "memory": 1024,
+      "maxDuration": 60
     }
   },
   "builds": [
