@@ -1,3 +1,4 @@
+# @vercel/python@3.0.0
 from http.server import BaseHTTPRequestHandler
 import json
 import os

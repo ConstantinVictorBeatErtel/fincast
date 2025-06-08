@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+SIMFIN_API_KEY = '1aab9692-30b6-4b82-be79-27d454de3b25';
+
 export const runtime = 'edge';
 
 export async function GET(request) {
