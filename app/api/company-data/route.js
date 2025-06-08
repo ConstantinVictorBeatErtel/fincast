@@ -16,82 +16,25 @@ export async function GET(request) {
   }
 
   try {
-    // Direct call to Alpha Vantage API
-    const API_KEY = 'P7M6C5PE71GNLCKN';
-    const url = `https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol=${ticker}&apikey=${API_KEY}`;
+    // Call the Python serverless function
+    const response = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3001'}/api/company-data?ticker=${encodeURIComponent(ticker)}`);
     
-    console.log('Fetching from URL:', url);
-    const response = await fetch(url);
-    
-    // Check if response is ok before trying to parse JSON
     if (!response.ok) {
-      console.error('API response not ok:', response.status, response.statusText);
-      return new Response(JSON.stringify({ 
-        error: `API request failed with status ${response.status}` 
-      }), {
+      const error = await response.json();
+      return new Response(JSON.stringify({ error: error.error || 'Failed to fetch data' }), {
         status: response.status,
         headers: { 'Content-Type': 'application/json' },
       });
     }
 
-    // Get the response text first to check if it's valid JSON
-    const text = await response.text();
-    console.log('Raw API response:', text.substring(0, 200) + '...'); // Log first 200 chars
-
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      console.error('Failed to parse JSON:', e);
-      return new Response(JSON.stringify({ 
-        error: 'Invalid JSON response from API' 
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (data['Error Message']) {
-      console.error('API error message:', data['Error Message']);
-      return new Response(JSON.stringify({ error: data['Error Message'] }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (!data.quarterlyReports || !data.quarterlyReports.length) {
-      console.error('No quarterly reports found for ticker:', ticker);
-      return new Response(JSON.stringify({ 
-        error: `No quarterly reports found for ticker ${ticker}` 
-      }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Get the most recent quarter's data
-    const latestQuarter = data.quarterlyReports[0];
-    const fiscalDate = latestQuarter.fiscalDateEnding.split('-');
-    
-    const result = {
-      ticker: ticker.toUpperCase(),
-      revenue: parseFloat(latestQuarter.totalRevenue),
-      net_income: parseFloat(latestQuarter.netIncome),
-      quarter: fiscalDate[1],
-      year: fiscalDate[0]
-    };
-
-    console.log('Processed result:', result);
-    return new Response(JSON.stringify(result), {
+    const data = await response.json();
+    return new Response(JSON.stringify(data), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
   } catch (error) {
-    console.error('Error in API route:', error);
-    return new Response(JSON.stringify({ 
-      error: 'Internal server error',
-      details: error.message 
-    }), {
+    console.error('Error:', error);
+    return new Response(JSON.stringify({ error: 'Internal server error' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

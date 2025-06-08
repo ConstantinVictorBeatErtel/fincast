@@ -1,8 +1,8 @@
+import sys
 import os
 import json
 import requests
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
 
 # Debug information goes to stderr
 def debug_print(*args, **kwargs):
@@ -26,64 +26,62 @@ else:
 os.makedirs(data_dir, exist_ok=True)
 os.makedirs(json_output_dir, exist_ok=True)
 
-# Alpha Vantage API key
-API_KEY = 'P7M6C5PE71GNLCKN'
-
 def fetch_company_data(ticker):
     try:
-        # Fetch income statement
+        # Alpha Vantage API call
+        API_KEY = 'P7M6C5PE71GNLCKN'
         url = f'https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol={ticker}&apikey={API_KEY}'
+        
         response = requests.get(url)
         data = response.json()
-        
+
         if 'Error Message' in data:
-            return {
-                'error': f'Error fetching data: {data["Error Message"]}'
-            }
-            
-        if 'quarterlyReports' not in data or not data['quarterlyReports']:
-            return {
-                'error': f'No quarterly reports found for ticker {ticker}'
-            }
-            
+            return {'error': data['Error Message']}
+
+        if not data.get('quarterlyReports'):
+            return {'error': f'No quarterly reports found for ticker {ticker}'}
+
         # Get the most recent quarter's data
         latest_quarter = data['quarterlyReports'][0]
+        fiscal_date = latest_quarter['fiscalDateEnding'].split('-')
         
-        # Format the response
-        response = {
-            'ticker': ticker.upper(),
-            'revenue': float(latest_quarter.get('totalRevenue', 0)),
-            'net_income': float(latest_quarter.get('netIncome', 0)),
-            'quarter': latest_quarter.get('fiscalDateEnding', '').split('-')[1],  # Extract quarter from date
-            'year': latest_quarter.get('fiscalDateEnding', '').split('-')[0]      # Extract year from date
-        }
-        
-        return response
-
-    except Exception as e:
         return {
-            'error': f'Error fetching data: {str(e)}'
+            'ticker': ticker.upper(),
+            'revenue': float(latest_quarter['totalRevenue']),
+            'net_income': float(latest_quarter['netIncome']),
+            'quarter': fiscal_date[1],
+            'year': fiscal_date[0]
         }
+    except Exception as e:
+        return {'error': str(e)}
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # Parse query parameters
-        query = parse_qs(urlparse(self.path).query)
-        ticker = query.get('ticker', [''])[0]
+        try:
+            # Parse query parameters
+            query = self.path.split('?')[1] if '?' in self.path else ''
+            params = dict(param.split('=') for param in query.split('&')) if query else {}
+            
+            ticker = params.get('ticker')
+            if not ticker:
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': 'Ticker symbol is required'}).encode())
+                return
 
-        if not ticker:
-            self.send_response(400)
+            # Fetch data
+            result = fetch_company_data(ticker)
+            
+            # Send response
+            self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({'error': 'Ticker symbol is required'}).encode())
-            return
-
-        # Fetch company data
-        result = fetch_company_data(ticker)
-
-        # Send response
-        self.send_response(200 if 'error' not in result else 404)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps(result).encode()) 
+            self.wfile.write(json.dumps(result).encode())
+            
+        except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': str(e)}).encode()) 
 
