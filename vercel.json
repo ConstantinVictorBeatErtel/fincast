@@ -13,7 +13,10 @@
   "routes": [
     {
       "src": "/api/company-data",
-      "dest": "scripts/fetch_company_data.py"
+      "dest": "/scripts/fetch_company_data.py"
+    },
+    {
+      "handle": "filesystem"
     },
     {
       "src": "/(.*)",

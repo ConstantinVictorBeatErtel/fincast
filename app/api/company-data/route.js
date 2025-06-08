@@ -16,49 +16,24 @@ export async function GET(request) {
   }
 
   try {
-    console.log(`Fetching data for ticker: ${ticker}`);
-    
-    // Get the absolute path to the Python script
-    const scriptPath = path.join(process.cwd(), 'scripts', 'fetch_company_data.py');
-    console.log('Script path:', scriptPath);
-    
-    // Execute the Python script with the ticker as an argument
-    const { stdout, stderr } = await execAsync(`python3 "${scriptPath}" "${ticker}"`);
-    
-    // Log stderr for debugging but don't treat it as an error
-    if (stderr) {
-      console.log('Python script debug output:', stderr);
-    }
+    // Forward the request to the Python serverless function
+    const response = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3001'}/api/company-data?ticker=${encodeURIComponent(ticker)}`);
+    const data = await response.json();
 
-    console.log('Python script output:', stdout);
-
-    try {
-      // Parse the Python script output
-      const data = JSON.parse(stdout);
-      
-      if (data.error) {
-        console.error('Data fetch error:', data.error);
-        return new Response(JSON.stringify({ error: data.error }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-
-      return new Response(JSON.stringify(data), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    } catch (parseError) {
-      console.error('JSON parse error:', parseError);
-      console.error('Raw stdout:', stdout);
-      return new Response(JSON.stringify({ error: 'Error parsing Python script output' }), {
-        status: 500,
+    if (!response.ok) {
+      return new Response(JSON.stringify({ error: data.error || 'Failed to fetch data' }), {
+        status: response.status,
         headers: { 'Content-Type': 'application/json' },
       });
     }
+
+    return new Response(JSON.stringify(data), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
   } catch (error) {
     console.error('Error:', error);
-    return new Response(JSON.stringify({ error: `Internal server error: ${error.message}` }), {
+    return new Response(JSON.stringify({ error: 'Internal server error' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
