@@ -11,10 +11,18 @@ export async function GET(request) {
     );
   }
 
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error('ANTHROPIC_API_KEY is not set');
+    return NextResponse.json(
+      { error: 'API key not configured' },
+      { status: 500 }
+    );
+  }
+
   try {
     // First, get historical data
     const historicalResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/company-data?ticker=${encodeURIComponent(ticker)}`
+      `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001'}/api/company-data?ticker=${encodeURIComponent(ticker)}`
     );
     const historicalData = await historicalResponse.json();
 
@@ -47,6 +55,7 @@ export async function GET(request) {
 
     if (!response.ok) {
       const error = await response.json();
+      console.error('Claude API error:', error);
       throw new Error(error.error?.message || 'Failed to generate forecast');
     }
 

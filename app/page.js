@@ -1,24 +1,41 @@
-import { redirect } from 'next/navigation';
-import CompanyData from './components/CompanyData';
-import FinancialForecast from './components/FinancialForecast';
+'use client';
+
+import { useState } from 'react';
+import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import FinancialData from './components/FinancialData';
 
 export default function Home() {
-  return (
-    <main className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Financial Analysis Dashboard
-          </h1>
-          <p className="text-xl text-gray-600">
-            Get real-time financial data and AI-powered forecasts for any company
-          </p>
-        </div>
+  const [ticker, setTicker] = useState('');
+  const [submittedTicker, setSubmittedTicker] = useState('');
 
-        <div className="grid grid-cols-1 gap-8">
-          <CompanyData />
-          <FinancialForecast />
-        </div>
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    setSubmittedTicker(ticker);
+  };
+
+  return (
+    <main className="min-h-screen p-8">
+      <div className="max-w-7xl mx-auto space-y-8">
+        <h1 className="text-4xl font-bold text-center">Financial Analysis</h1>
+        
+        <Card className="p-6">
+          <form onSubmit={handleSubmit} className="flex gap-4">
+            <Input
+              type="text"
+              placeholder="Enter ticker symbol (e.g., AAPL)"
+              value={ticker}
+              onChange={(e) => setTicker(e.target.value.toUpperCase())}
+              className="flex-1"
+            />
+            <Button type="submit">Analyze</Button>
+          </form>
+        </Card>
+
+        {submittedTicker && (
+          <FinancialData ticker={submittedTicker} />
+        )}
       </div>
     </main>
   );
