@@ -28,31 +28,39 @@ os.makedirs(json_output_dir, exist_ok=True)
 
 def fetch_company_data(ticker):
     try:
-        # Alpha Vantage API call
-        API_KEY = 'P7M6C5PE71GNLCKN'
-        url = f'https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol={ticker}&apikey={API_KEY}'
+        # SimFin API call
+        API_KEY = 'free'  # Using free tier for testing
+        url = f'https://simfin.com/api/v2/companies/find?query={ticker}&api-key={API_KEY}'
         
+        # First, get the company ID
         response = requests.get(url)
         data = response.json()
-
-        if 'Error Message' in data:
-            return {'error': data['Error Message']}
-
-        if not data.get('quarterlyReports'):
-            return {'error': f'No quarterly reports found for ticker {ticker}'}
-
+        
+        if not data or not data.get('data'):
+            return {'error': f'Company not found for ticker {ticker}'}
+            
+        company_id = data['data'][0]['simId']
+        
+        # Then get the income statement
+        url = f'https://simfin.com/api/v2/companies/id/{company_id}/statements/standardised?api-key={API_KEY}'
+        response = requests.get(url)
+        data = response.json()
+        
+        if not data or not data.get('data'):
+            return {'error': f'No financial data found for ticker {ticker}'}
+            
         # Get the most recent quarter's data
-        latest_quarter = data['quarterlyReports'][0]
-        fiscal_date = latest_quarter['fiscalDateEnding'].split('-')
+        latest_quarter = data['data'][0]
         
         return {
             'ticker': ticker.upper(),
-            'revenue': float(latest_quarter['totalRevenue']),
+            'revenue': float(latest_quarter['revenue']),
             'net_income': float(latest_quarter['netIncome']),
-            'quarter': fiscal_date[1],
-            'year': fiscal_date[0]
+            'quarter': latest_quarter['period'].split('-')[1],
+            'year': latest_quarter['period'].split('-')[0]
         }
     except Exception as e:
+        debug_print(f"Error fetching data: {str(e)}")
         return {'error': str(e)}
 
 class handler(BaseHTTPRequestHandler):
@@ -80,6 +88,7 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(result).encode())
             
         except Exception as e:
+            debug_print(f"Handler error: {str(e)}")
             self.send_response(500)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
