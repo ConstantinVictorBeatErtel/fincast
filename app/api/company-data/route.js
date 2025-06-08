@@ -18,13 +18,41 @@ export async function GET(request) {
   try {
     // Direct call to Alpha Vantage API
     const API_KEY = 'P7M6C5PE71GNLCKN';
-    const response = await fetch(
-      `https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol=${ticker}&apikey=${API_KEY}`
-    );
+    const url = `https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol=${ticker}&apikey=${API_KEY}`;
     
-    const data = await response.json();
+    console.log('Fetching from URL:', url);
+    const response = await fetch(url);
+    
+    // Check if response is ok before trying to parse JSON
+    if (!response.ok) {
+      console.error('API response not ok:', response.status, response.statusText);
+      return new Response(JSON.stringify({ 
+        error: `API request failed with status ${response.status}` 
+      }), {
+        status: response.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Get the response text first to check if it's valid JSON
+    const text = await response.text();
+    console.log('Raw API response:', text.substring(0, 200) + '...'); // Log first 200 chars
+
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      console.error('Failed to parse JSON:', e);
+      return new Response(JSON.stringify({ 
+        error: 'Invalid JSON response from API' 
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
 
     if (data['Error Message']) {
+      console.error('API error message:', data['Error Message']);
       return new Response(JSON.stringify({ error: data['Error Message'] }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
@@ -32,7 +60,10 @@ export async function GET(request) {
     }
 
     if (!data.quarterlyReports || !data.quarterlyReports.length) {
-      return new Response(JSON.stringify({ error: `No quarterly reports found for ticker ${ticker}` }), {
+      console.error('No quarterly reports found for ticker:', ticker);
+      return new Response(JSON.stringify({ 
+        error: `No quarterly reports found for ticker ${ticker}` 
+      }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -50,13 +81,17 @@ export async function GET(request) {
       year: fiscalDate[0]
     };
 
+    console.log('Processed result:', result);
     return new Response(JSON.stringify(result), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
   } catch (error) {
-    console.error('Error:', error);
-    return new Response(JSON.stringify({ error: 'Internal server error' }), {
+    console.error('Error in API route:', error);
+    return new Response(JSON.stringify({ 
+      error: 'Internal server error',
+      details: error.message 
+    }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
