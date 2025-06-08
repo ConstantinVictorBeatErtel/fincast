@@ -2,7 +2,10 @@
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
-  distDir: '.next'
+  distDir: '.next',
+  experimental: {
+    appDir: true
+  }
 };
 
 export default nextConfig; 
