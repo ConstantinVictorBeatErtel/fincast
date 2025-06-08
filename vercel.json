@@ -1,17 +1,10 @@
 {
   "version": 2,
-  "buildCommand": "python3 -m pip install --upgrade pip && python3 -m pip install -r requirements.txt && npm run build",
+  "buildCommand": "npm run build",
   "installCommand": "npm install",
   "framework": "nextjs",
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/next"
-    }
-  ],
   "functions": {
     "app/api/company-data/route.js": {
-      "runtime": "edge",
       "memory": 1024,
       "maxDuration": 60
     }

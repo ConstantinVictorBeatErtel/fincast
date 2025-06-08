@@ -2,10 +2,14 @@ import os
 import sys
 import json
 
+# Get the absolute path to the project root
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # Add the virtual environment's site-packages to the Python path
-venv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'venv')
+venv_path = os.path.join(project_root, 'venv')
 site_packages = os.path.join(venv_path, 'lib', 'python3.12', 'site-packages')
-sys.path.insert(0, site_packages)
+if os.path.exists(site_packages):
+    sys.path.insert(0, site_packages)
 
 # Now import simfin
 import simfin as sf
@@ -15,7 +19,9 @@ from simfin.names import *
 sf.set_api_key('1aab9692-30b6-4b82-be79-27d454de3b25')
 
 # Set the local directory where data-files are stored.
-sf.set_data_dir('/tmp/simfin_data/')
+data_dir = os.path.join(project_root, 'data')
+os.makedirs(data_dir, exist_ok=True)
+sf.set_data_dir(data_dir)
 
 def fetch_company_data(ticker):
     try:

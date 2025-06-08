@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
-import { PythonShell } from 'python-shell';
+import { spawn } from 'child_process';
 import path from 'path';
+
+const SIMFIN_API_KEY = '1aab9692-30b6-4b82-be79-27d454de3b25';
 
 export const runtime = 'edge';
 
@@ -13,34 +15,41 @@ export async function GET(request) {
   }
 
   return new Promise((resolve) => {
-    const options = {
-      mode: 'text',
-      pythonPath: '/usr/bin/python3',
-      pythonOptions: ['-u'], // unbuffered output
-      scriptPath: path.join(process.cwd(), 'scripts'),
-      args: [ticker]
-    };
+    const scriptPath = path.join(process.cwd(), 'scripts', 'fetch_company_data.py');
+    const pythonProcess = spawn('python3', [scriptPath, ticker]);
 
-    PythonShell.run('fetch_company_data.py', options)
-      .then(results => {
-        try {
-          const data = JSON.parse(results[0]);
-          resolve(NextResponse.json(data));
-        } catch (error) {
-          console.error('Failed to parse script output:', error);
-          resolve(NextResponse.json({ 
-            error: 'Failed to parse script output', 
-            details: error.message,
-            rawOutput: results[0]
-          }, { status: 500 }));
-        }
-      })
-      .catch(error => {
+    let output = '';
+    let error = '';
+
+    pythonProcess.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      error += data.toString();
+    });
+
+    pythonProcess.on('close', (code) => {
+      if (code !== 0) {
         console.error('Python script error:', error);
         resolve(NextResponse.json({ 
           error: 'Failed to execute Python script', 
-          details: error.message 
+          details: error 
         }, { status: 500 }));
-      });
+        return;
+      }
+
+      try {
+        const data = JSON.parse(output);
+        resolve(NextResponse.json(data));
+      } catch (error) {
+        console.error('Failed to parse script output:', error);
+        resolve(NextResponse.json({ 
+          error: 'Failed to parse script output', 
+          details: error.message,
+          rawOutput: output
+        }, { status: 500 }));
+      }
+    });
   });
 }
