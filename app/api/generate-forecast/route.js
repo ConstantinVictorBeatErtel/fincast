@@ -21,8 +21,12 @@ export async function GET(request) {
 
   try {
     // First, get historical data
+    const baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}`
+      : process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
+
     const historicalResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001'}/api/company-data?ticker=${encodeURIComponent(ticker)}`
+      `${baseUrl}/api/company-data?ticker=${encodeURIComponent(ticker)}`
     );
     const historicalData = await historicalResponse.json();
 
