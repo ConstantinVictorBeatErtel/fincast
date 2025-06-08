@@ -1,4 +1,9 @@
 import { NextResponse } from 'next/server';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import path from 'path';
+
+const execAsync = promisify(exec);
 
 export async function GET(request) {
   try {
@@ -12,41 +17,35 @@ export async function GET(request) {
       );
     }
 
-    // Get the base URL for the API
-    const baseUrl = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3000';
+    // Get the absolute path to the Python script
+    const scriptPath = path.join(process.cwd(), 'scripts', 'fetch_company_data.py');
+    
+    // Execute the Python script
+    const { stdout, stderr } = await execAsync(`python3 "${scriptPath}" "${ticker}"`);
+    
+    if (stderr) {
+      console.error('Python script error:', stderr);
+    }
 
-    // Call the Python serverless function
-    const response = await fetch(
-      `${baseUrl}/scripts/fetch_company_data.py?ticker=${ticker}`,
-      {
-        headers: {
-          'Accept': 'application/json',
-        },
-        // Add timeout
-        signal: AbortSignal.timeout(15000), // 15 second timeout
+    try {
+      const data = JSON.parse(stdout);
+      
+      if (data.error) {
+        return NextResponse.json(
+          { error: data.error },
+          { status: 400 }
+        );
       }
-    );
 
-    if (!response.ok) {
-      console.error('Python function error:', await response.text());
+      return NextResponse.json(data);
+    } catch (parseError) {
+      console.error('Error parsing Python output:', parseError);
+      console.error('Raw output:', stdout);
       return NextResponse.json(
-        { error: 'Failed to fetch company data' },
-        { status: response.status }
+        { error: 'Invalid response from data service' },
+        { status: 500 }
       );
     }
-
-    const data = await response.json();
-
-    if (data.error) {
-      return NextResponse.json(
-        { error: data.error },
-        { status: 400 }
-      );
-    }
-
-    return NextResponse.json(data);
   } catch (error) {
     console.error('API route error:', error);
     return NextResponse.json(

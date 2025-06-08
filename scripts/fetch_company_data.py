@@ -3,30 +3,10 @@ import os
 import json
 import requests
 import time
-from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
 
 # Debug information goes to stderr
 def debug_print(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
-
-debug_print("Current working directory:", os.getcwd())
-debug_print("Script location:", os.path.abspath(__file__))
-debug_print("Directory contents:", os.listdir('.'))
-
-# Set data directory based on environment
-if os.environ.get('VERCEL'):
-    # In Vercel environment
-    data_dir = '/tmp/simfin_data'
-    json_output_dir = '/tmp/data'
-else:
-    # Local development
-    data_dir = os.path.expanduser('~/simfin_data')
-    json_output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'public', 'data')
-
-# Create directories if they don't exist
-os.makedirs(data_dir, exist_ok=True)
-os.makedirs(json_output_dir, exist_ok=True)
 
 # Cache for storing API responses
 cache = {}
@@ -111,35 +91,12 @@ def fetch_company_data(ticker):
         debug_print(error_msg)
         return {'error': error_msg}
 
-class handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        try:
-            # Parse query parameters
-            parsed_url = urlparse(self.path)
-            query_params = parse_qs(parsed_url.query)
-            ticker = query_params.get('ticker', [''])[0]
-            
-            if not ticker:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': 'Ticker symbol is required'}).encode())
-                return
-
-            # Fetch data
-            result = fetch_company_data(ticker)
-            
-            # Send response
-            status = 200 if 'error' not in result else 400
-            self.send_response(status)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(result).encode())
-            
-        except Exception as e:
-            debug_print(f"Handler error: {str(e)}")
-            self.send_response(500)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode()) 
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print(json.dumps({'error': 'Ticker symbol is required'}))
+        sys.exit(1)
+        
+    ticker = sys.argv[1]
+    result = fetch_company_data(ticker)
+    print(json.dumps(result)) 
 
