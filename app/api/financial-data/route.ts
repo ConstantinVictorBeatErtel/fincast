@@ -2,12 +2,13 @@ import { NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
 
-export const dynamic = 'force-dynamic'; // Disable caching for this route
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
     console.log('API route called');
-    const dataDir = path.join(process.cwd(), 'public', 'data');
+    // Changed from 'public/data' to just 'data'
+    const dataDir = path.join(process.cwd(), 'data');
     console.log('Data directory:', dataDir);
 
     if (!fs.existsSync(dataDir)) {
@@ -29,7 +30,6 @@ export async function GET() {
       );
     }
 
-    // Get all metrics files
     const metricsFiles = files.filter(file => file.endsWith('_metrics.json'));
     const companies = metricsFiles.map(file => {
       const filePath = path.join(dataDir, file);
@@ -37,7 +37,6 @@ export async function GET() {
       return JSON.parse(content);
     });
 
-    // Get market data from SPY metrics
     const spyMetricsFile = files.find(file => file === 'SPY_metrics.json');
     const marketData = spyMetricsFile ? JSON.parse(fs.readFileSync(path.join(dataDir, spyMetricsFile), 'utf-8')) : null;
 
@@ -45,7 +44,7 @@ export async function GET() {
 
     return NextResponse.json({
       companies,
-      forecasts: [], // We can add forecasts later if needed
+      forecasts: [],
       marketData
     });
   } catch (error) {
@@ -55,4 +54,4 @@ export async function GET() {
       { status: 500 }
     );
   }
-} 
+}

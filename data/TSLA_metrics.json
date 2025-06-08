@@ -1,18 +1,18 @@
 {
   "Symbol": "TSLA",
   "Revenue": 96773000000.0,
-  "NetIncome": 14997000000.0,
+  "NetIncome": 14997000000,
   "GrossProfit": 17660000000.0,
-  "OperatingIncome": 8891000000.0,
-  "TotalAssets": 106618000000.0,
+  "OperatingIncome": 0,
+  "TotalAssets": 106618000000,
   "TotalLiabilities": 43009000000.0,
-  "TotalEquity": 63609000000.0,
+  "TotalEquity": 63609000000,
   "Price": 177.29,
-  "Volume": 90389446,
-  "Date": "2025-06-07",
+  "Volume": 90389446.0,
   "MarketCapitalization": 562718460000.0,
   "ProfitMargin": 0.15497091130790613,
   "GrossMargin": 0.18248891736331416,
-  "OperatingMargin": 0.0918747997891974,
-  "PERatio": 37.52206841368273
+  "OperatingMargin": 0.0,
+  "PERatio": 37.52206841368273,
+  "Date": "2025-06-07"
 }
