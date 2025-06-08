@@ -66,18 +66,25 @@ export default function CompanyData() {
       {data && (
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-6">
-            <div className="p-6 bg-gray-50 rounded-lg border border-gray-200">
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">Revenue</h3>
-              <p className="text-3xl font-bold text-gray-900">
-                ${(data.revenue / 1e9).toFixed(2)}B
-              </p>
-            </div>
-            <div className="p-6 bg-gray-50 rounded-lg border border-gray-200">
-              <h3 className="text-sm font-semibold text-gray-700 mb-2">Net Income</h3>
-              <p className="text-3xl font-bold text-gray-900">
-                ${(data.net_income / 1e9).toFixed(2)}B
-              </p>
-            </div>
+            {Object.entries(data).map(([year, metrics]) => (
+              <div key={year} className="p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">Year {year}</h3>
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-sm text-gray-600">Revenue</p>
+                    <p className="text-xl font-bold text-gray-900">
+                      ${(metrics.Revenue / 1e9).toFixed(2)}B
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Net Income</p>
+                    <p className="text-xl font-bold text-gray-900">
+                      ${(metrics['Net Income'] / 1e9).toFixed(2)}B
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
           <p className="text-sm font-medium text-gray-700">
             Data for Q{data.quarter} {data.year}

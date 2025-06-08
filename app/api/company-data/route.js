@@ -35,7 +35,13 @@ export async function GET(request) {
     );
 
     if (!response.ok) {
-      throw new Error(`Tiingo API error: ${response.status}`);
+      const errorText = await response.text();
+      console.error('Tiingo API Error Response:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText
+      });
+      throw new Error(`Tiingo API error: ${response.status} - ${errorText}`);
     }
 
     const statements = await response.json();
