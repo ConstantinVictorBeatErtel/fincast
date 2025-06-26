@@ -105,15 +105,33 @@ export default function DCFValuation() {
         throw new Error('Invalid valuation data structure: Missing required analysis fields');
       }
 
-      if (!valuation.projections || !Array.isArray(valuation.projections) || valuation.projections.length === 0) {
-        console.error('Missing or invalid projections');
-        throw new Error('Invalid valuation data structure: Missing or invalid projections');
+      // Method-specific projections validation
+      if (method === 'dcf' || method === 'exit-multiple') {
+        if (!valuation.projections || !Array.isArray(valuation.projections) || valuation.projections.length === 0) {
+          console.error('Missing or invalid projections');
+          throw new Error('Invalid valuation data structure: Missing or invalid projections');
+        }
       }
 
-      if (!valuation.assumptions || !valuation.assumptions.growthRate || !valuation.assumptions.terminalGrowth || 
-          !valuation.assumptions.discountRate || !valuation.assumptions.exitMultiple) {
-        console.error('Missing required assumptions');
-        throw new Error('Invalid valuation data structure: Missing required assumptions');
+      // Method-specific assumption validation
+      if (method === 'dcf') {
+        if (!valuation.assumptions || !valuation.assumptions.growthRate || !valuation.assumptions.terminalGrowth || 
+            !valuation.assumptions.discountRate) {
+          console.error('Missing required DCF assumptions');
+          throw new Error('Invalid valuation data structure: Missing required DCF assumptions');
+        }
+      } else if (method === 'exit-multiple') {
+        if (!valuation.assumptions || !valuation.assumptions.growthRate || !valuation.assumptions.discountRate || 
+            !valuation.assumptions.exitMultiple) {
+          console.error('Missing required exit-multiple assumptions');
+          throw new Error('Invalid valuation data structure: Missing required exit-multiple assumptions');
+        }
+      } else if (method === 'comparable-multiples') {
+        if (!valuation.assumptions || !valuation.assumptions.peRatio || !valuation.assumptions.evEbitdaRatio || 
+            !valuation.assumptions.evRevenueRatio) {
+          console.error('Missing required comparable-multiples assumptions');
+          throw new Error('Invalid valuation data structure: Missing required comparable-multiples assumptions');
+        }
       }
 
       // Set the valuation state with the correct structure
@@ -196,8 +214,8 @@ export default function DCFValuation() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="dcf">Discounted Cash Flow</SelectItem>
-              <SelectItem value="multiples">Comparable Multiples</SelectItem>
-              <SelectItem value="ddm">Dividend Discount Model</SelectItem>
+              <SelectItem value="exit-multiple">Exit Multiple DCF</SelectItem>
+              <SelectItem value="comparable-multiples">Comparable Multiples</SelectItem>
             </SelectContent>
           </Select>
           <Button type="submit" disabled={loading}>
@@ -262,47 +280,88 @@ export default function DCFValuation() {
             </CardContent>
           </Card>
 
-          <Tabs defaultValue="projections">
+          <Tabs defaultValue={method === 'comparable-multiples' ? 'multiples' : 'projections'}>
             <TabsList>
-              <TabsTrigger value="projections">Projections</TabsTrigger>
+              {(method === 'dcf' || method === 'exit-multiple') && (
+                <TabsTrigger value="projections">Projections</TabsTrigger>
+              )}
+              {method === 'comparable-multiples' && (
+                <TabsTrigger value="multiples">Multiples</TabsTrigger>
+              )}
               <TabsTrigger value="analysis">Analysis</TabsTrigger>
               <TabsTrigger value="assumptions">Assumptions</TabsTrigger>
             </TabsList>
-            <TabsContent value="projections">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Financial Projections</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr>
-                          <th className="text-left">Year</th>
-                          <th className="text-right">Revenue</th>
-                          <th className="text-right">EBITDA</th>
-                          <th className="text-right">Free Cash Flow</th>
-                          <th className="text-right">Capex</th>
-                          <th className="text-right">Working Capital</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {valuation.projections?.map((projection) => (
-                          <tr key={projection.year}>
-                            <td>{projection.year}</td>
-                            <td className="text-right">${projection.revenue?.toLocaleString() || 'N/A'}</td>
-                            <td className="text-right">${projection.ebitda?.toLocaleString() || 'N/A'}</td>
-                            <td className="text-right">${projection.freeCashFlow?.toLocaleString() || 'N/A'}</td>
-                            <td className="text-right">${projection.capex?.toLocaleString() || 'N/A'}</td>
-                            <td className="text-right">${projection.workingCapital?.toLocaleString() || 'N/A'}</td>
+            {(method === 'dcf' || method === 'exit-multiple') && (
+              <TabsContent value="projections">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Financial Projections</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr>
+                            <th className="text-left">Year</th>
+                            <th className="text-right">Revenue</th>
+                            <th className="text-right">EBITDA</th>
+                            <th className="text-right">Free Cash Flow</th>
+                            <th className="text-right">Capex</th>
+                            <th className="text-right">Working Capital</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
+                        </thead>
+                        <tbody>
+                          {valuation.projections?.map((projection) => (
+                            <tr key={projection.year}>
+                              <td>{projection.year}</td>
+                              <td className="text-right">${projection.revenue?.toLocaleString() || 'N/A'}</td>
+                              <td className="text-right">${projection.ebitda?.toLocaleString() || 'N/A'}</td>
+                              <td className="text-right">${projection.freeCashFlow?.toLocaleString() || 'N/A'}</td>
+                              <td className="text-right">${projection.capex?.toLocaleString() || 'N/A'}</td>
+                              <td className="text-right">${projection.workingCapital?.toLocaleString() || 'N/A'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            )}
+            {method === 'comparable-multiples' && (
+              <TabsContent value="multiples">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Valuation Multiples</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <h3 className="text-lg font-medium mb-4">Company Multiples</h3>
+                        <div className="space-y-3">
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">P/E Ratio:</span>
+                            <span className="font-medium">{formatMultiple(valuation.multiples?.peRatio)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">EV/EBITDA Ratio:</span>
+                            <span className="font-medium">{formatMultiple(valuation.multiples?.evEbitdaRatio)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">EV/Revenue Ratio:</span>
+                            <span className="font-medium">{formatMultiple(valuation.multiples?.evRevenueRatio)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Price to Book:</span>
+                            <span className="font-medium">{formatMultiple(valuation.multiples?.priceToBook)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            )}
             <TabsContent value="analysis">
               <Card>
                 <CardHeader>
@@ -344,30 +403,84 @@ export default function DCFValuation() {
                     <div>
                       <h3 className="text-lg font-medium mb-2">Key Assumptions</h3>
                       <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <p className="text-sm text-gray-500">Growth Rate</p>
-                          <p className="text-lg font-medium">
-                            {formatPercentage(valuation.assumptions.growthRate)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-500">Terminal Growth</p>
-                          <p className="text-lg font-medium">
-                            {formatPercentage(valuation.assumptions.terminalGrowth)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-500">Discount Rate</p>
-                          <p className="text-lg font-medium">
-                            {formatPercentage(valuation.assumptions.discountRate)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-500">Exit Multiple</p>
-                          <p className="text-lg font-medium">
-                            {formatMultiple(valuation.assumptions.exitMultiple)}
-                          </p>
-                        </div>
+                        {method === 'dcf' && (
+                          <>
+                            <div>
+                              <p className="text-sm text-gray-500">Growth Rate</p>
+                              <p className="text-lg font-medium">
+                                {formatPercentage(valuation.assumptions.growthRate)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">Terminal Growth</p>
+                              <p className="text-lg font-medium">
+                                {formatPercentage(valuation.assumptions.terminalGrowth)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">Discount Rate</p>
+                              <p className="text-lg font-medium">
+                                {formatPercentage(valuation.assumptions.discountRate)}
+                              </p>
+                            </div>
+                          </>
+                        )}
+                        {method === 'exit-multiple' && (
+                          <>
+                            <div>
+                              <p className="text-sm text-gray-500">Growth Rate</p>
+                              <p className="text-lg font-medium">
+                                {formatPercentage(valuation.assumptions.growthRate)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">Discount Rate</p>
+                              <p className="text-lg font-medium">
+                                {formatPercentage(valuation.assumptions.discountRate)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">Exit Multiple</p>
+                              <p className="text-lg font-medium">
+                                {formatMultiple(valuation.assumptions.exitMultiple)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">Exit Multiple Type</p>
+                              <p className="text-lg font-medium">
+                                {valuation.assumptions.exitMultipleType || 'N/A'}
+                              </p>
+                            </div>
+                          </>
+                        )}
+                        {method === 'comparable-multiples' && (
+                          <>
+                            <div>
+                              <p className="text-sm text-gray-500">P/E Ratio</p>
+                              <p className="text-lg font-medium">
+                                {formatMultiple(valuation.assumptions.peRatio)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">EV/EBITDA Ratio</p>
+                              <p className="text-lg font-medium">
+                                {formatMultiple(valuation.assumptions.evEbitdaRatio)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">EV/Revenue Ratio</p>
+                              <p className="text-lg font-medium">
+                                {formatMultiple(valuation.assumptions.evRevenueRatio)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">Peer Count</p>
+                              <p className="text-lg font-medium">
+                                {valuation.assumptions.peerCount || 'N/A'}
+                              </p>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                     <div>

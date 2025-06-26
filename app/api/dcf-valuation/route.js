@@ -4,9 +4,11 @@ export const runtime = 'edge';
 
 // Simple in-memory rate limiter with request tracking
 const rateLimiter = new Map();
-const RATE_LIMIT = 5; // requests per minute
+const RATE_LIMIT = 40; // requests per minute (leave buffer for other routes)
 const RATE_WINDOW = 60 * 1000; // 1 minute in milliseconds
 const activeRequests = new Set(); // Track active requests
+const globalRateLimiter = new Map(); // Track global requests
+const tokenUsageTracker = new Map(); // Track token usage per minute
 
 function checkRateLimit(ticker) {
   const now = Date.now();
@@ -19,88 +21,90 @@ function checkRateLimit(ticker) {
     }
   }
   
+  for (const [timestamp] of globalRateLimiter) {
+    if (timestamp < minuteAgo) {
+      globalRateLimiter.delete(timestamp);
+    }
+  }
+  
+  for (const [timestamp] of tokenUsageTracker) {
+    if (timestamp < minuteAgo) {
+      tokenUsageTracker.delete(timestamp);
+    }
+  }
+  
   // Check if there's already an active request for this ticker
   if (activeRequests.has(ticker)) {
+    console.log(`Rate limit: Active request already exists for ${ticker}`);
     return false;
   }
   
-  // Count requests in the last minute
+  // Count global requests in the last minute
+  const globalRecentRequests = Array.from(globalRateLimiter.keys())
+    .filter(timestamp => timestamp > minuteAgo)
+    .length;
+  
+  if (globalRecentRequests >= RATE_LIMIT) {
+    console.log(`Rate limit: Global limit exceeded (${globalRecentRequests}/${RATE_LIMIT})`);
+    return false;
+  }
+  
+  // Count requests for this specific ticker in the last minute
   const recentRequests = Array.from(rateLimiter.keys())
     .filter(timestamp => timestamp > minuteAgo)
     .length;
   
-  if (recentRequests >= RATE_LIMIT) {
+  // Allow up to 3 requests per ticker per minute
+  if (recentRequests >= 3) {
+    console.log(`Rate limit: Ticker limit exceeded for ${ticker} (${recentRequests}/3)`);
     return false;
   }
   
   // Add current request
-  rateLimiter.set(now, true);
+  rateLimiter.set(now, ticker);
+  globalRateLimiter.set(now, true);
   activeRequests.add(ticker);
+  
+  console.log(`Rate limit: Request allowed for ${ticker} (Global: ${globalRecentRequests + 1}/${RATE_LIMIT}, Ticker: ${recentRequests + 1}/3)`);
   return true;
 }
 
 const generateValuation = async (ticker, method) => {
   try {
+    // Add a small delay to prevent rapid successive requests
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
     console.log('Generating valuation for:', { ticker, method });
     
-    const prompt = `Generate a DCF valuation for ${ticker} in two steps:
+    let prompt;
+    
+    if (method === 'dcf') {
+      prompt = `DCF for ${ticker}. FCF 5y, terminal = FCF×(1+g)/(r-g), discount. Return ONLY:
 
-STEP 1 - NUMBERS ONLY:
-Return ONLY a JSON object with the following structure. Do not include any other text, explanations, or markdown:
+1. {"valuation":{"fairValue":number,"currentPrice":number,"upside":number,"confidence":"high|medium|low","method":"dcf","assumptions":{"growthRate":number,"terminalGrowth":number,"discountRate":number},"projections":[{"year":number,"revenue":number,"ebitda":number,"freeCashFlow":number,"capex":number,"workingCapital":number}]}}
 
-{
-  "valuation": {
-    "fairValue": number,
-    "currentPrice": number,
-    "upside": number,
-    "confidence": "high|medium|low",
-    "method": "dcf",
-    "assumptions": {
-      "growthRate": number,
-      "terminalGrowth": number,
-      "discountRate": number,
-      "exitMultiple": number
-    },
-    "projections": [
-      {
-        "year": number,
-        "revenue": number,
-        "ebitda": number,
-        "freeCashFlow": number,
-        "capex": number,
-        "workingCapital": number
-      }
-    ]
-  }
-}
+2. {"analysis":{"companyOverview":string,"keyDrivers":string[],"risks":string[],"sensitivity":{"bullCase":number,"baseCase":number,"bearCase":number}}}
 
-STEP 2 - ANALYSIS:
-Immediately after the first JSON object, return a second JSON object with the following structure:
+Current price. NO text. ONLY JSON.`;
+    } else if (method === 'exit-multiple') {
+      prompt = `DCF exit multiple for ${ticker}. FCF 5y, exit multiple terminal. Return ONLY:
 
-{
-  "analysis": {
-    "companyOverview": string,
-    "keyDrivers": string[],
-    "risks": string[],
-    "sensitivity": {
-      "bullCase": number,
-      "baseCase": number,
-      "bearCase": number
+1. {"valuation":{"fairValue":number,"currentPrice":number,"upside":number,"confidence":"high|medium|low","method":"exit-multiple","assumptions":{"growthRate":number,"discountRate":number,"exitMultiple":number,"exitMultipleType":"EV/EBITDA|P/E"},"projections":[{"year":number,"revenue":number,"ebitda":number,"freeCashFlow":number,"capex":number,"workingCapital":number}]}}
+
+2. {"analysis":{"companyOverview":string,"keyDrivers":string[],"risks":string[],"sensitivity":{"bullCase":number,"baseCase":number,"bearCase":number}}}
+
+Current price. NO text. ONLY JSON.`;
+    } else if (method === 'comparable-multiples') {
+      prompt = `Multiples for ${ticker}. P/E, EV/EBITDA, EV/Revenue peers. Return ONLY:
+
+1. {"valuation":{"fairValue":number,"currentPrice":number,"upside":number,"confidence":"high|medium|low","method":"comparable-multiples","assumptions":{"peRatio":number,"evEbitdaRatio":number,"evRevenueRatio":number,"peerCount":number},"multiples":{"peRatio":number,"evEbitdaRatio":number,"evRevenueRatio":number,"priceToBook":number}}}
+
+2. {"analysis":{"companyOverview":string,"keyDrivers":string[],"risks":string[],"sensitivity":{"bullCase":number,"baseCase":number,"bearCase":number}}}
+
+Current price. NO text. ONLY JSON.`;
+    } else {
+      throw new Error(`Unsupported valuation method: ${method}`);
     }
-  }
-}
-
-CRITICAL REQUIREMENTS:
-1. Return ONLY the two JSON objects, one after another
-2. Do not include any text between the JSON objects
-3. All numeric values must be numbers, not strings
-4. Include 5 years of projections
-5. Use realistic assumptions based on industry and company data
-6. If you cannot find current stock price, use the most recent available price
-7. Do not include any explanations or additional text
-8. Do not use markdown formatting
-9. Do not include any comments
-10. The two JSON objects must be separated by a single newline`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -111,8 +115,8 @@ CRITICAL REQUIREMENTS:
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 4000,
-        system: "You are a financial analyst specializing in company valuations. Your responses must be ONLY valid JSON objects with no additional text or explanations. Use web search to get current stock price and recent financial data. Never include any text outside the JSON objects. Always return exactly two JSON objects separated by a newline.",
+        max_tokens: 2000,
+        system: "Return ONLY valid JSON. NO text. Get current stock price. Use web search.",
         messages: [
           {
             role: 'user',
@@ -124,13 +128,7 @@ CRITICAL REQUIREMENTS:
           {
             type: "web_search_20250305",
             name: "web_search",
-            max_uses: 1,
-            allowed_domains: [
-              "finance.yahoo.com",
-              "reuters.com",
-              "bloomberg.com",
-              "sec.gov"
-            ],
+            max_uses: 5,
             user_location: {
               type: "approximate",
               country: "US",
@@ -145,8 +143,10 @@ CRITICAL REQUIREMENTS:
       const error = await response.json().catch(() => ({ error: { message: 'Failed to parse error response' } }));
       console.error('Claude API error:', error);
       
-      if (error.error?.type === 'rate_limit_error') {
-        throw new Error('Rate limit exceeded. Please try again in a minute.');
+      if (error.error?.type === 'rate_limit_error' || response.status === 429) {
+        // Remove from active requests so user can retry
+        activeRequests.delete(ticker);
+        throw new Error('Rate limit exceeded. Please wait 1-2 minutes and try again.');
       }
       
       if (response.status === 404) {
@@ -326,10 +326,11 @@ CRITICAL REQUIREMENTS:
 function generateExcelData(valuation) {
   // Extract the valuation data from the nested structure
   const valuationData = valuation.valuation || valuation;
-  const analysis = valuation.analysis || valuationData.analysis;
+  const analysis = valuationData.analysis || valuationData.analysis;
+  const method = valuationData.method || 'dcf';
 
   // Create Excel data structure
-  const sheets = [
+  let sheets = [
     {
       name: 'Valuation Summary',
       data: [
@@ -340,19 +341,46 @@ function generateExcelData(valuation) {
         ['Confidence', valuationData.confidence],
         ['Method', valuationData.method],
         [],
-        ['Assumptions'],
-        ['Growth Rate', valuationData.assumptions?.growthRate || 0],
-        ['Terminal Growth', valuationData.assumptions?.terminalGrowth || 0],
-        ['Discount Rate', valuationData.assumptions?.discountRate || 0],
-        ['Exit Multiple', valuationData.assumptions?.exitMultiple || 0],
-        [],
-        ['Sensitivity Analysis'],
-        ['Bull Case', analysis?.sensitivity?.bullCase || 0],
-        ['Base Case', analysis?.sensitivity?.baseCase || 0],
-        ['Bear Case', analysis?.sensitivity?.bearCase || 0]
+        ['Assumptions']
       ]
-    },
-    {
+    }
+  ];
+
+  // Add method-specific assumptions
+  if (method === 'dcf') {
+    sheets[0].data.push(
+      ['Growth Rate', valuationData.assumptions?.growthRate || 0],
+      ['Terminal Growth', valuationData.assumptions?.terminalGrowth || 0],
+      ['Discount Rate', valuationData.assumptions?.discountRate || 0]
+    );
+  } else if (method === 'exit-multiple') {
+    sheets[0].data.push(
+      ['Growth Rate', valuationData.assumptions?.growthRate || 0],
+      ['Discount Rate', valuationData.assumptions?.discountRate || 0],
+      ['Exit Multiple', valuationData.assumptions?.exitMultiple || 0],
+      ['Exit Multiple Type', valuationData.assumptions?.exitMultipleType || 'N/A']
+    );
+  } else if (method === 'comparable-multiples') {
+    sheets[0].data.push(
+      ['P/E Ratio', valuationData.assumptions?.peRatio || 0],
+      ['EV/EBITDA Ratio', valuationData.assumptions?.evEbitdaRatio || 0],
+      ['EV/Revenue Ratio', valuationData.assumptions?.evRevenueRatio || 0],
+      ['Peer Count', valuationData.assumptions?.peerCount || 0]
+    );
+  }
+
+  // Add sensitivity analysis
+  sheets[0].data.push(
+    [],
+    ['Sensitivity Analysis'],
+    ['Bull Case', analysis?.sensitivity?.bullCase || 0],
+    ['Base Case', analysis?.sensitivity?.baseCase || 0],
+    ['Bear Case', analysis?.sensitivity?.bearCase || 0]
+  );
+
+  // Add projections sheet for DCF and exit-multiple methods
+  if (method === 'dcf' || method === 'exit-multiple') {
+    sheets.push({
       name: 'Projections',
       data: [
         ['Year', 'Revenue', 'EBITDA', 'Free Cash Flow', 'Capex', 'Working Capital'],
@@ -365,21 +393,37 @@ function generateExcelData(valuation) {
           p.workingCapital
         ])
       ]
-    },
-    {
-      name: 'Analysis',
+    });
+  }
+
+  // Add multiples sheet for comparable-multiples method
+  if (method === 'comparable-multiples') {
+    sheets.push({
+      name: 'Multiples',
       data: [
-        ['Company Overview'],
-        [analysis?.companyOverview || 'No overview available'],
-        [],
-        ['Key Drivers'],
-        ...(analysis?.keyDrivers || []).map(d => [d]),
-        [],
-        ['Risks'],
-        ...(analysis?.risks || []).map(r => [r])
+        ['Multiple Type', 'Value'],
+        ['P/E Ratio', valuationData.multiples?.peRatio || 0],
+        ['EV/EBITDA Ratio', valuationData.multiples?.evEbitdaRatio || 0],
+        ['EV/Revenue Ratio', valuationData.multiples?.evRevenueRatio || 0],
+        ['Price to Book', valuationData.multiples?.priceToBook || 0]
       ]
-    }
-  ];
+    });
+  }
+
+  // Add analysis sheet
+  sheets.push({
+    name: 'Analysis',
+    data: [
+      ['Company Overview'],
+      [analysis?.companyOverview || 'No overview available'],
+      [],
+      ['Key Drivers'],
+      ...(analysis?.keyDrivers || []).map(d => [d]),
+      [],
+      ['Risks'],
+      ...(analysis?.risks || []).map(r => [r])
+    ]
+  });
 
   return sheets;
 }
@@ -447,22 +491,53 @@ export async function GET(request) {
           bearCase: 0
         }
       },
-      projections: (valuation.valuation.projections || []).map(p => ({
+      excelData: excelData
+    };
+
+    // Add method-specific data
+    if (method === 'dcf') {
+      formattedValuation.projections = (valuation.valuation.projections || []).map(p => ({
         year: parseInt(p.year),
         revenue: parseFloat(p.revenue),
         ebitda: parseFloat(p.ebitda),
         freeCashFlow: parseFloat(p.freeCashFlow),
         capex: parseFloat(p.capex),
         workingCapital: parseFloat(p.workingCapital)
-      })),
-      assumptions: {
+      }));
+      formattedValuation.assumptions = {
         growthRate: parseFloat(valuation.valuation.assumptions?.growthRate || 0),
         terminalGrowth: parseFloat(valuation.valuation.assumptions?.terminalGrowth || 0),
+        discountRate: parseFloat(valuation.valuation.assumptions?.discountRate || 0)
+      };
+    } else if (method === 'exit-multiple') {
+      formattedValuation.projections = (valuation.valuation.projections || []).map(p => ({
+        year: parseInt(p.year),
+        revenue: parseFloat(p.revenue),
+        ebitda: parseFloat(p.ebitda),
+        freeCashFlow: parseFloat(p.freeCashFlow),
+        capex: parseFloat(p.capex),
+        workingCapital: parseFloat(p.workingCapital)
+      }));
+      formattedValuation.assumptions = {
+        growthRate: parseFloat(valuation.valuation.assumptions?.growthRate || 0),
         discountRate: parseFloat(valuation.valuation.assumptions?.discountRate || 0),
-        exitMultiple: parseFloat(valuation.valuation.assumptions?.exitMultiple || 0)
-      },
-      excelData: excelData
-    };
+        exitMultiple: parseFloat(valuation.valuation.assumptions?.exitMultiple || 0),
+        exitMultipleType: valuation.valuation.assumptions?.exitMultipleType || 'N/A'
+      };
+    } else if (method === 'comparable-multiples') {
+      formattedValuation.assumptions = {
+        peRatio: parseFloat(valuation.valuation.assumptions?.peRatio || 0),
+        evEbitdaRatio: parseFloat(valuation.valuation.assumptions?.evEbitdaRatio || 0),
+        evRevenueRatio: parseFloat(valuation.valuation.assumptions?.evRevenueRatio || 0),
+        peerCount: parseInt(valuation.valuation.assumptions?.peerCount || 0)
+      };
+      formattedValuation.multiples = {
+        peRatio: parseFloat(valuation.valuation.multiples?.peRatio || 0),
+        evEbitdaRatio: parseFloat(valuation.valuation.multiples?.evEbitdaRatio || 0),
+        evRevenueRatio: parseFloat(valuation.valuation.multiples?.evRevenueRatio || 0),
+        priceToBook: parseFloat(valuation.valuation.multiples?.priceToBook || 0)
+      };
+    }
 
     console.log('Formatted valuation analysis:', {
       companyOverview: formattedValuation.analysis.companyOverview,
