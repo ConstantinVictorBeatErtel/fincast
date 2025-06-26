@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import yahooFinance from 'yahoo-finance2';
 
 export const runtime = 'edge';
 
@@ -13,108 +14,37 @@ export async function GET(request) {
     );
   }
 
-  if (!process.env.TIINGO_API_KEY) {
-    console.error('TIINGO_API_KEY is not set');
-    return NextResponse.json(
-      { error: 'API key not configured' },
-      { status: 500 }
-    );
-  }
-
   try {
-    // Fetch financial statements
-    const statementsResponse = await fetch(
-      `https://api.tiingo.com/tiingo/fundamentals/${ticker}/statements?token=${process.env.TIINGO_API_KEY}`,
-      {
-        headers: {
-          'Authorization': `Token ${process.env.TIINGO_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+    // Fetch financial data from Yahoo Finance
+    const [incomeStatement, balanceSheet, cashFlow] = await Promise.all([
+      yahooFinance.incomeStatement(ticker, { period1: '2020-01-01' }),
+      yahooFinance.balanceSheet(ticker, { period1: '2020-01-01' }),
+      yahooFinance.cashFlow(ticker, { period1: '2020-01-01' })
+    ]);
 
-    if (!statementsResponse.ok) {
-      const errorText = await statementsResponse.text();
-      console.error('Tiingo API Error:', {
-        status: statementsResponse.status,
-        statusText: statementsResponse.statusText,
-        body: errorText
-      });
-      throw new Error(`Failed to fetch financial statements: ${statementsResponse.status} ${statementsResponse.statusText}`);
-    }
+    // Process historical data
+    const historicalData = incomeStatement.map((quarter, index) => ({
+      date: quarter.endDate,
+      revenue: quarter.totalRevenue / 1e6, // Convert to millions
+      netIncome: quarter.netIncome / 1e6,
+      freeCashFlow: (cashFlow[index]?.freeCashFlow || 0) / 1e6,
+      roic: calculateROIC(
+        quarter.netIncome,
+        balanceSheet[index]?.totalStockholderEquity || 0,
+        balanceSheet[index]?.totalLiab || 0
+      )
+    }));
 
-    const statements = await statementsResponse.json();
+    // Calculate TTM metrics
+    const ttmMetrics = calculateTTM(historicalData);
 
-    // Fetch company info for dividend yield
-    const infoResponse = await fetch(
-      `https://api.tiingo.com/tiingo/daily/${ticker}?token=${process.env.TIINGO_API_KEY}`,
-      {
-        headers: {
-          'Authorization': `Token ${process.env.TIINGO_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    if (!infoResponse.ok) {
-      const errorText = await infoResponse.text();
-      console.error('Tiingo API Error:', {
-        status: infoResponse.status,
-        statusText: infoResponse.statusText,
-        body: errorText
-      });
-      throw new Error(`Failed to fetch company info: ${infoResponse.status} ${infoResponse.statusText}`);
-    }
-
-    const companyInfo = await infoResponse.json();
-
-    // Process and format the data
-    const processedData = statements.map(statement => {
-      // Calculate Free Cash Flow
-      const operatingCashFlow = statement.cashFlowStatement?.operatingCashFlow || 0;
-      const capitalExpenditure = statement.cashFlowStatement?.capitalExpenditure || 0;
-      const freeCashFlow = operatingCashFlow - Math.abs(capitalExpenditure);
-
-      // Calculate ROIC
-      const netIncome = statement.incomeStatement?.netIncome || 0;
-      const totalAssets = statement.balanceSheet?.totalAssets || 0;
-      const totalLiabilities = statement.balanceSheet?.totalLiabilities || 0;
-      const investedCapital = totalAssets - totalLiabilities;
-      const roic = investedCapital !== 0 ? (netIncome / investedCapital) * 100 : 0;
-
-      return {
-        date: statement.date,
-        revenue: statement.incomeStatement?.revenue || 0,
-        netIncome: netIncome,
-        freeCashFlow: freeCashFlow,
-        roic: roic,
-      };
-    });
-
-    // Calculate TTM values
-    const ttmValues = processedData.slice(0, 4).reduce((acc, curr) => {
-      acc.revenue += curr.revenue;
-      acc.netIncome += curr.netIncome;
-      acc.freeCashFlow += curr.freeCashFlow;
-      return acc;
-    }, { revenue: 0, netIncome: 0, freeCashFlow: 0 });
-
-    // Calculate TTM ROIC
-    const latestStatement = statements[0];
-    const ttmNetIncome = ttmValues.netIncome;
-    const ttmInvestedCapital = (latestStatement.balanceSheet?.totalAssets || 0) - 
-                             (latestStatement.balanceSheet?.totalLiabilities || 0);
-    const ttmRoic = ttmInvestedCapital !== 0 ? (ttmNetIncome / ttmInvestedCapital) * 100 : 0;
+    // Generate simple commentary based on trends
+    const commentary = generateCommentary(historicalData);
 
     return NextResponse.json({
-      historicalData: processedData,
-      ttmMetrics: {
-        revenue: ttmValues.revenue,
-        netIncome: ttmValues.netIncome,
-        freeCashFlow: ttmValues.freeCashFlow,
-        roic: ttmRoic,
-        dividendYield: companyInfo.dividendYield || 0
-      }
+      historicalData,
+      ttmMetrics,
+      commentary
     });
   } catch (error) {
     console.error('Error fetching company data:', error);
@@ -126,4 +56,48 @@ export async function GET(request) {
       { status: 500 }
     );
   }
+}
+
+function calculateROIC(netIncome, equity, debt) {
+  const investedCapital = equity + debt;
+  if (!investedCapital) return 0;
+  return netIncome / investedCapital;
+}
+
+function calculateTTM(data) {
+  if (data.length < 4) return null;
+
+  const last4Quarters = data.slice(-4);
+  return {
+    revenue: last4Quarters.reduce((sum, q) => sum + q.revenue, 0),
+    netIncome: last4Quarters.reduce((sum, q) => sum + q.netIncome, 0),
+    freeCashFlow: last4Quarters.reduce((sum, q) => sum + q.freeCashFlow, 0),
+    roic: last4Quarters.reduce((sum, q) => sum + q.roic, 0) / 4,
+    dividendYield: 0 // Would need to fetch from dividend history
+  };
+}
+
+function generateCommentary(data) {
+  const revenueGrowth = calculateGrowthRate(data.map(d => d.revenue));
+  const netIncomeGrowth = calculateGrowthRate(data.map(d => d.netIncome));
+  const fcfGrowth = calculateGrowthRate(data.map(d => d.freeCashFlow));
+
+  const lastYear = new Date().getFullYear();
+  const commentary = {};
+
+  for (let i = 1; i <= 5; i++) {
+    const year = lastYear + i;
+    commentary[year] = `Projected growth based on historical performance: Revenue ${(revenueGrowth * 100).toFixed(1)}%, Net Income ${(netIncomeGrowth * 100).toFixed(1)}%, FCF ${(fcfGrowth * 100).toFixed(1)}%`;
+  }
+
+  return commentary;
+}
+
+function calculateGrowthRate(values) {
+  if (values.length < 2) return 0.1;
+  const first = values[0];
+  const last = values[values.length - 1];
+  const years = values.length / 4;
+  const growthRate = Math.pow(last / first, 1 / years) - 1;
+  return Math.max(-0.2, Math.min(0.5, growthRate));
 }

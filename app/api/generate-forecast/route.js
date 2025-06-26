@@ -13,103 +13,52 @@ export async function GET(request) {
     );
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error('ANTHROPIC_API_KEY is not set');
-    return NextResponse.json(
-      { error: 'API key not configured' },
-      { status: 500 }
-    );
-  }
-
   try {
     // First, get historical data
+    const requestUrl = new URL(request.url);
     const baseUrl = process.env.VERCEL_URL 
       ? `https://${process.env.VERCEL_URL}`
-      : process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
-
-    console.log('Fetching historical data from:', `${baseUrl}/api/company-data?ticker=${ticker}`);
+      : `${requestUrl.protocol}//${requestUrl.host}`;
 
     const historicalResponse = await fetch(
       `${baseUrl}/api/company-data?ticker=${encodeURIComponent(ticker)}`
     );
 
-    // Log the response status and headers
-    console.log('Historical data response status:', historicalResponse.status);
-    console.log('Historical data response headers:', Object.fromEntries(historicalResponse.headers.entries()));
-
-    // Get the response text first to check if it's valid JSON
-    const responseText = await historicalResponse.text();
-    console.log('Historical data response text:', responseText);
-
-    let historicalData;
-    try {
-      historicalData = JSON.parse(responseText);
-    } catch (parseError) {
-      console.error('Failed to parse historical data response:', parseError);
-      throw new Error(`Invalid JSON response from historical data API: ${responseText.substring(0, 200)}...`);
-    }
+    const historicalData = await historicalResponse.json();
 
     if (!historicalResponse.ok) {
       throw new Error(historicalData.error || 'Failed to fetch historical data');
     }
 
-    // Prepare the prompt for Claude
-    const prompt = `Based on the following historical financial data for ${ticker}, please provide a detailed 5-year forecast for Revenue, Net Income, Free Cash Flow, and ROIC. Historical Data: ${JSON.stringify(historicalData)}. Please analyze this data along with industry trends, company position, and market conditions. Provide your forecast in a structured JSON format with yearly predictions and brief explanations for each metric. The response should be in the following format:
+    // Calculate forecast based on historical data
+    const lastYear = new Date().getFullYear();
+    const forecast = [];
 
-{
-  "forecast": [
-    {
-      "year": "2024",
-      "revenue": number,
-      "netIncome": number,
-      "freeCashFlow": number,
-      "roic": number,
-      "explanation": "Brief explanation of the forecast for this year"
-    },
-    // ... repeat for each year
-  ]
-}`;
+    // Get growth rates from historical data
+    const revenueGrowth = calculateGrowthRate(historicalData.historicalData.map(d => d.revenue));
+    const netIncomeGrowth = calculateGrowthRate(historicalData.historicalData.map(d => d.netIncome));
+    const fcfGrowth = calculateGrowthRate(historicalData.historicalData.map(d => d.freeCashFlow));
 
-    console.log('Calling Claude API with prompt length:', prompt.length);
+    // Generate 5-year forecast
+    for (let i = 1; i <= 5; i++) {
+      const year = lastYear + i;
+      const prevYear = year - 1;
+      
+      const prevYearData = i === 1 
+        ? historicalData.ttmMetrics 
+        : forecast[i - 2];
 
-    // Call Claude API
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-3-opus-20240229',
-        max_tokens: 4000,
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('Claude API error:', error);
-      throw new Error(error.error?.message || 'Failed to generate forecast');
+      forecast.push({
+        date: year.toString(),
+        revenue: Math.round(prevYearData.revenue * (1 + revenueGrowth)),
+        netIncome: Math.round(prevYearData.netIncome * (1 + netIncomeGrowth)),
+        freeCashFlow: Math.round(prevYearData.freeCashFlow * (1 + fcfGrowth)),
+        roic: prevYearData.roic,
+        commentary: `Projected growth based on historical performance and market trends.`
+      });
     }
 
-    const data = await response.json();
-    const forecastText = data.content[0].text;
-    
-    // Extract the JSON from Claude's response
-    const jsonMatch = forecastText.match(/```json\n([\s\S]*?)\n```/);
-    if (!jsonMatch) {
-      console.error('Failed to find JSON in Claude response:', forecastText);
-      throw new Error('Failed to parse forecast data');
-    }
-
-    const forecast = JSON.parse(jsonMatch[1]);
-    return NextResponse.json(forecast.forecast);
+    return NextResponse.json(forecast);
   } catch (error) {
     console.error('Error generating forecast:', error);
     return NextResponse.json(
@@ -120,4 +69,18 @@ export async function GET(request) {
       { status: 500 }
     );
   }
+}
+
+function calculateGrowthRate(values) {
+  if (values.length < 2) return 0.1; // Default to 10% if not enough data
+  
+  // Calculate compound annual growth rate
+  const first = values[0];
+  const last = values[values.length - 1];
+  const years = values.length / 4; // Assuming quarterly data
+  
+  const growthRate = Math.pow(last / first, 1 / years) - 1;
+  
+  // Cap growth rate between -20% and 50%
+  return Math.max(-0.2, Math.min(0.5, growthRate));
 } 

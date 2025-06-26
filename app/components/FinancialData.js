@@ -67,12 +67,14 @@ export default function FinancialData({ ticker }) {
   };
 
   const formatCurrency = (value) => {
+    if (!value) return '$0';
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
       notation: 'compact',
-      maximumFractionDigits: 1
-    }).format(value);
+      maximumFractionDigits: 1,
+      minimumFractionDigits: 1
+    }).format(value * 1000000); // Convert millions to actual dollars
   };
 
   const calculateGrowthRates = (data) => {
@@ -108,103 +110,127 @@ export default function FinancialData({ ticker }) {
   };
 
   const prepareChartData = (data, type) => {
-    const labels = data.map(item => item.date.substring(0, 4));
-    const datasets = [];
-
-    if (type === 'historical') {
-      datasets.push(
-        {
-          label: 'Revenue',
-          data: data.map(item => item.revenue),
-          borderColor: 'rgb(75, 192, 192)',
-          tension: 0.1
-        },
-        {
-          label: 'Net Income',
-          data: data.map(item => item.netIncome),
-          borderColor: 'rgb(255, 99, 132)',
-          tension: 0.1
-        },
-        {
-          label: 'Free Cash Flow',
-          data: data.map(item => item.freeCashFlow),
-          borderColor: 'rgb(54, 162, 235)',
-          tension: 0.1
-        }
-      );
-    } else {
-      datasets.push(
-        {
-          label: 'Revenue',
-          data: data.map(item => item.revenue),
-          borderColor: 'rgb(75, 192, 192)',
-          tension: 0.1
-        },
-        {
-          label: 'Net Income',
-          data: data.map(item => item.netIncome),
-          borderColor: 'rgb(255, 99, 132)',
-          tension: 0.1
-        },
-        {
-          label: 'Free Cash Flow',
-          data: data.map(item => item.freeCashFlow),
-          borderColor: 'rgb(54, 162, 235)',
-          tension: 0.1
-        }
-      );
+    if (!Array.isArray(data)) {
+      console.error('Invalid data format:', data);
+      return {
+        labels: [],
+        datasets: []
+      };
     }
+
+    // For historical data, use TTM metrics
+    if (type === 'historical' && data.ttmMetrics) {
+      const ttmData = data.ttmMetrics;
+      return {
+        labels: ['TTM'],
+        datasets: [
+          {
+            label: 'Revenue',
+            data: [ttmData.revenue],
+            borderColor: 'rgb(75, 192, 192)',
+            tension: 0.1
+          },
+          {
+            label: 'Net Income',
+            data: [ttmData.netIncome],
+            borderColor: 'rgb(255, 99, 132)',
+            tension: 0.1
+          },
+          {
+            label: 'Free Cash Flow',
+            data: [ttmData.freeCashFlow],
+            borderColor: 'rgb(54, 162, 235)',
+            tension: 0.1
+          }
+        ]
+      };
+    }
+
+    // For forecast data, use the array directly
+    const labels = data.map(item => item.date.substring(0, 4));
+    const datasets = [
+      {
+        label: 'Revenue',
+        data: data.map(item => item.revenue),
+        borderColor: 'rgb(75, 192, 192)',
+        tension: 0.1
+      },
+      {
+        label: 'Net Income',
+        data: data.map(item => item.netIncome),
+        borderColor: 'rgb(255, 99, 132)',
+        tension: 0.1
+      },
+      {
+        label: 'Free Cash Flow',
+        data: data.map(item => item.freeCashFlow),
+        borderColor: 'rgb(54, 162, 235)',
+        tension: 0.1
+      }
+    ];
 
     return { labels, datasets };
   };
 
   const prepareMarginChartData = (data, type) => {
-    const labels = data.map(item => item.date.substring(0, 4));
-    const datasets = [];
-
-    if (type === 'historical') {
-      datasets.push(
-        {
-          label: 'Net Income Margin',
-          data: data.map(item => (item.netIncome / item.revenue) * 100),
-          borderColor: 'rgb(255, 99, 132)',
-          tension: 0.1
-        },
-        {
-          label: 'FCF Margin',
-          data: data.map(item => (item.freeCashFlow / item.revenue) * 100),
-          borderColor: 'rgb(54, 162, 235)',
-          tension: 0.1
-        },
-        {
-          label: 'ROIC',
-          data: data.map(item => item.roic),
-          borderColor: 'rgb(153, 102, 255)',
-          tension: 0.1
-        }
-      );
-    } else {
-      datasets.push(
-        {
-          label: 'Net Income Margin',
-          data: data.map(item => (item.netIncome / item.revenue) * 100),
-          borderColor: 'rgb(255, 99, 132)',
-          tension: 0.1
-        },
-        {
-          label: 'FCF Margin',
-          data: data.map(item => (item.freeCashFlow / item.revenue) * 100),
-          borderColor: 'rgb(54, 162, 235)',
-          tension: 0.1
-        },
-        {
-          label: 'ROIC',
-          data: data.map(item => item.roic),
-          borderColor: 'rgb(153, 102, 255)',
-          tension: 0.1
-        }
-      );
+    if (!Array.isArray(data)) {
+      console.error('Invalid data format in prepareMarginChartData:', data);
+      return {
+        labels: [],
+        datasets: []
+      };
     }
+
+    // For historical data, use TTM metrics
+    if (type === 'historical' && data.ttmMetrics) {
+      const ttmData = data.ttmMetrics;
+      return {
+        labels: ['TTM'],
+        datasets: [
+          {
+            label: 'Net Income Margin',
+            data: [(ttmData.netIncome / ttmData.revenue) * 100],
+            borderColor: 'rgb(255, 99, 132)',
+            tension: 0.1
+          },
+          {
+            label: 'FCF Margin',
+            data: [(ttmData.freeCashFlow / ttmData.revenue) * 100],
+            borderColor: 'rgb(54, 162, 235)',
+            tension: 0.1
+          },
+          {
+            label: 'ROIC',
+            data: [ttmData.roic * 100],
+            borderColor: 'rgb(153, 102, 255)',
+            tension: 0.1
+          }
+        ]
+      };
+    }
+
+    // For forecast data, use the array directly
+    const labels = data.map(item => item.date.substring(0, 4));
+    const datasets = [
+      {
+        label: 'Net Income Margin',
+        data: data.map(item => (item.netIncome / item.revenue) * 100),
+        borderColor: 'rgb(255, 99, 132)',
+        tension: 0.1
+      },
+      {
+        label: 'FCF Margin',
+        data: data.map(item => (item.freeCashFlow / item.revenue) * 100),
+        borderColor: 'rgb(54, 162, 235)',
+        tension: 0.1
+      },
+      {
+        label: 'ROIC',
+        data: data.map(item => item.roic * 100),
+        borderColor: 'rgb(153, 102, 255)',
+        tension: 0.1
+      }
+    ];
 
     return { labels, datasets };
   };
@@ -318,7 +344,7 @@ export default function FinancialData({ ticker }) {
         {/* Historical Data */}
         <Card>
           <CardHeader>
-            <CardTitle>Historical Data</CardTitle>
+            <CardTitle>Historical Data (TTM)</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
