@@ -206,7 +206,6 @@ export default function DCFValuation() {
             <SelectContent>
               <SelectItem value="dcf">Discounted Cash Flow</SelectItem>
               <SelectItem value="exit-multiple">Exit Multiple DCF</SelectItem>
-              <SelectItem value="comparable-multiples">Comparable Multiples</SelectItem>
             </SelectContent>
           </Select>
           <Button type="submit" disabled={loading}>
@@ -271,100 +270,59 @@ export default function DCFValuation() {
             </CardContent>
           </Card>
 
-          <Tabs defaultValue={method === 'comparable-multiples' ? 'multiples' : 'projections'}>
+          <Tabs defaultValue="projections">
             <TabsList>
-              {(method === 'dcf' || method === 'exit-multiple') && (
-                <TabsTrigger value="projections">Projections</TabsTrigger>
-              )}
-              {method === 'comparable-multiples' && (
-                <TabsTrigger value="multiples">Multiples</TabsTrigger>
-              )}
+              <TabsTrigger value="projections">Projections</TabsTrigger>
               <TabsTrigger value="analysis">Analysis</TabsTrigger>
               <TabsTrigger value="assumptions">Assumptions</TabsTrigger>
             </TabsList>
-            {(method === 'dcf' || method === 'exit-multiple') && (
-              <TabsContent value="projections">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Financial Projections</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="overflow-x-auto">
-                      <table className="w-full">
-                        <thead>
-                          <tr>
-                            <th className="text-left">Year</th>
-                            <th className="text-right">Revenue</th>
-                            <th className="text-right">Free Cash Flow</th>
+            <TabsContent value="projections">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Financial Projections</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr>
+                          <th className="text-left">Year</th>
+                          <th className="text-right">Revenue</th>
+                          <th className="text-right">Free Cash Flow</th>
+                          {valuation.projections?.[0]?.ebitda && (
+                            <th className="text-right">EBITDA</th>
+                          )}
+                          {valuation.projections?.[0]?.capex && (
+                            <th className="text-right">Capex</th>
+                          )}
+                          {valuation.projections?.[0]?.workingCapital && (
+                            <th className="text-right">Working Capital</th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {valuation.projections?.map((projection) => (
+                          <tr key={projection.year}>
+                            <td>{projection.year}</td>
+                            <td className="text-right">${projection.revenue?.toLocaleString() || 'N/A'}</td>
+                            <td className="text-right">${(projection.fcf || projection.freeCashFlow)?.toLocaleString() || 'N/A'}</td>
                             {valuation.projections?.[0]?.ebitda && (
-                              <th className="text-right">EBITDA</th>
+                              <td className="text-right">${projection.ebitda?.toLocaleString() || 'N/A'}</td>
                             )}
                             {valuation.projections?.[0]?.capex && (
-                              <th className="text-right">Capex</th>
+                              <td className="text-right">${projection.capex?.toLocaleString() || 'N/A'}</td>
                             )}
                             {valuation.projections?.[0]?.workingCapital && (
-                              <th className="text-right">Working Capital</th>
+                              <td className="text-right">${projection.workingCapital?.toLocaleString() || 'N/A'}</td>
                             )}
                           </tr>
-                        </thead>
-                        <tbody>
-                          {valuation.projections?.map((projection) => (
-                            <tr key={projection.year}>
-                              <td>{projection.year}</td>
-                              <td className="text-right">${projection.revenue?.toLocaleString() || 'N/A'}</td>
-                              <td className="text-right">${(projection.fcf || projection.freeCashFlow)?.toLocaleString() || 'N/A'}</td>
-                              {valuation.projections?.[0]?.ebitda && (
-                                <td className="text-right">${projection.ebitda?.toLocaleString() || 'N/A'}</td>
-                              )}
-                              {valuation.projections?.[0]?.capex && (
-                                <td className="text-right">${projection.capex?.toLocaleString() || 'N/A'}</td>
-                              )}
-                              {valuation.projections?.[0]?.workingCapital && (
-                                <td className="text-right">${projection.workingCapital?.toLocaleString() || 'N/A'}</td>
-                              )}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-            )}
-            {method === 'comparable-multiples' && (
-              <TabsContent value="multiples">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Valuation Multiples</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-2 gap-6">
-                      <div>
-                        <h3 className="text-lg font-medium mb-4">Company Multiples</h3>
-                        <div className="space-y-3">
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">P/E Ratio:</span>
-                            <span className="font-medium">{formatMultiple(valuation.multiples?.peRatio)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">EV/EBITDA Ratio:</span>
-                            <span className="font-medium">{formatMultiple(valuation.multiples?.evEbitdaRatio)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">EV/Revenue Ratio:</span>
-                            <span className="font-medium">{formatMultiple(valuation.multiples?.evRevenueRatio)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Price to Book:</span>
-                            <span className="font-medium">{formatMultiple(valuation.multiples?.priceToBook)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-            )}
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
             <TabsContent value="analysis">
               <Card>
                 <CardHeader>
@@ -461,34 +419,6 @@ export default function DCFValuation() {
                               <p className="text-sm text-gray-500">Exit Multiple Type</p>
                               <p className="text-lg font-medium">
                                 {valuation.assumptions.exitMultipleType || 'N/A'}
-                              </p>
-                            </div>
-                          </>
-                        )}
-                        {method === 'comparable-multiples' && (
-                          <>
-                            <div>
-                              <p className="text-sm text-gray-500">P/E Ratio</p>
-                              <p className="text-lg font-medium">
-                                {formatMultiple(valuation.assumptions.peRatio)}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">EV/EBITDA Ratio</p>
-                              <p className="text-lg font-medium">
-                                {formatMultiple(valuation.assumptions.evEbitdaRatio)}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">EV/Revenue Ratio</p>
-                              <p className="text-lg font-medium">
-                                {formatMultiple(valuation.assumptions.evRevenueRatio)}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">Peer Count</p>
-                              <p className="text-lg font-medium">
-                                {valuation.assumptions.peerCount || 'N/A'}
                               </p>
                             </div>
                           </>

@@ -82,8 +82,6 @@ Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
   }
 }
 Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
-    } else if (method === 'comparable-multiples') {
-      prompt = `Multiples ${ticker}. Return ONLY JSON. NO explanations. NO text. ONLY: {"valuation":{...}} {"analysis":{...}}`;
     } else {
       throw new Error(`Unsupported valuation method: ${method}`);
     }
@@ -458,13 +456,6 @@ function generateExcelData(valuation) {
       ['Exit Multiple', valuationData.assumptions?.exitMultiple || 0],
       ['Exit Multiple Type', valuationData.assumptions?.exitMultipleType || 'N/A']
     );
-  } else if (method === 'comparable-multiples') {
-    sheets[0].data.push(
-      ['P/E Ratio', valuationData.assumptions?.peRatio || 0],
-      ['EV/EBITDA Ratio', valuationData.assumptions?.evEbitdaRatio || 0],
-      ['EV/Revenue Ratio', valuationData.assumptions?.evRevenueRatio || 0],
-      ['Peer Count', valuationData.assumptions?.peerCount || 0]
-    );
   }
 
   // Add sensitivity analysis
@@ -490,20 +481,6 @@ function generateExcelData(valuation) {
           p.capex,
           p.workingCapital
         ])
-      ]
-    });
-  }
-
-  // Add multiples sheet for comparable-multiples method
-  if (method === 'comparable-multiples') {
-    sheets.push({
-      name: 'Multiples',
-      data: [
-        ['Multiple Type', 'Value'],
-        ['P/E Ratio', valuationData.multiples?.peRatio || 0],
-        ['EV/EBITDA Ratio', valuationData.multiples?.evEbitdaRatio || 0],
-        ['EV/Revenue Ratio', valuationData.multiples?.evRevenueRatio || 0],
-        ['Price to Book', valuationData.multiples?.priceToBook || 0]
       ]
     });
   }
@@ -685,19 +662,6 @@ export async function GET(request) {
         discountRate: parseFloat(valuation.valuation.assumptions?.discountRate || 0),
         exitMultiple: parseFloat(valuation.valuation.assumptions?.exitMultiple || 0),
         exitMultipleType: valuation.valuation.assumptions?.exitMultipleType || 'N/A'
-      };
-    } else if (method === 'comparable-multiples') {
-      formattedValuation.assumptions = {
-        peRatio: parseFloat(valuation.valuation.assumptions?.peRatio || 0),
-        evEbitdaRatio: parseFloat(valuation.valuation.assumptions?.evEbitdaRatio || 0),
-        evRevenueRatio: parseFloat(valuation.valuation.assumptions?.evRevenueRatio || 0),
-        peerCount: parseInt(valuation.valuation.assumptions?.peerCount || 0)
-      };
-      formattedValuation.multiples = {
-        peRatio: parseFloat(valuation.valuation.multiples?.peRatio || 0),
-        evEbitdaRatio: parseFloat(valuation.valuation.multiples?.evEbitdaRatio || 0),
-        evRevenueRatio: parseFloat(valuation.valuation.multiples?.evRevenueRatio || 0),
-        priceToBook: parseFloat(valuation.valuation.multiples?.priceToBook || 0)
       };
     }
 
