@@ -113,27 +113,6 @@ export default function DCFValuation() {
         }
       }
 
-      // Method-specific assumption validation
-      if (method === 'dcf') {
-        if (!valuation.assumptions || !valuation.assumptions.growthRate || !valuation.assumptions.terminalGrowth || 
-            !valuation.assumptions.discountRate) {
-          console.error('Missing required DCF assumptions');
-          throw new Error('Invalid valuation data structure: Missing required DCF assumptions');
-        }
-      } else if (method === 'exit-multiple') {
-        if (!valuation.assumptions || !valuation.assumptions.growthRate || !valuation.assumptions.discountRate || 
-            !valuation.assumptions.exitMultiple) {
-          console.error('Missing required exit-multiple assumptions');
-          throw new Error('Invalid valuation data structure: Missing required exit-multiple assumptions');
-        }
-      } else if (method === 'comparable-multiples') {
-        if (!valuation.assumptions || !valuation.assumptions.peRatio || !valuation.assumptions.evEbitdaRatio || 
-            !valuation.assumptions.evRevenueRatio) {
-          console.error('Missing required comparable-multiples assumptions');
-          throw new Error('Invalid valuation data structure: Missing required comparable-multiples assumptions');
-        }
-      }
-
       // Set the valuation state with the correct structure
       setValuation(valuation);
     } catch (err) {
@@ -187,6 +166,18 @@ export default function DCFValuation() {
 
   // Helper function to format percentage values
   const formatPercentage = (value) => {
+    if (typeof value !== 'number' || isNaN(value)) return 'N/A';
+    return `${value.toFixed(1)}%`;
+  };
+
+  // Helper function to format percentage values for DCF (expects decimal values)
+  const formatDCFPercentage = (value) => {
+    if (typeof value !== 'number' || isNaN(value)) return 'N/A';
+    return `${(value * 100).toFixed(1)}%`;
+  };
+
+  // Helper function to format percentage values for exit-multiple (expects raw percentage values)
+  const formatExitMultiplePercentage = (value) => {
     if (typeof value !== 'number' || isNaN(value)) return 'N/A';
     return `${value.toFixed(1)}%`;
   };
@@ -304,10 +295,16 @@ export default function DCFValuation() {
                           <tr>
                             <th className="text-left">Year</th>
                             <th className="text-right">Revenue</th>
-                            <th className="text-right">EBITDA</th>
                             <th className="text-right">Free Cash Flow</th>
-                            <th className="text-right">Capex</th>
-                            <th className="text-right">Working Capital</th>
+                            {valuation.projections?.[0]?.ebitda && (
+                              <th className="text-right">EBITDA</th>
+                            )}
+                            {valuation.projections?.[0]?.capex && (
+                              <th className="text-right">Capex</th>
+                            )}
+                            {valuation.projections?.[0]?.workingCapital && (
+                              <th className="text-right">Working Capital</th>
+                            )}
                           </tr>
                         </thead>
                         <tbody>
@@ -315,10 +312,16 @@ export default function DCFValuation() {
                             <tr key={projection.year}>
                               <td>{projection.year}</td>
                               <td className="text-right">${projection.revenue?.toLocaleString() || 'N/A'}</td>
-                              <td className="text-right">${projection.ebitda?.toLocaleString() || 'N/A'}</td>
-                              <td className="text-right">${projection.freeCashFlow?.toLocaleString() || 'N/A'}</td>
-                              <td className="text-right">${projection.capex?.toLocaleString() || 'N/A'}</td>
-                              <td className="text-right">${projection.workingCapital?.toLocaleString() || 'N/A'}</td>
+                              <td className="text-right">${(projection.fcf || projection.freeCashFlow)?.toLocaleString() || 'N/A'}</td>
+                              {valuation.projections?.[0]?.ebitda && (
+                                <td className="text-right">${projection.ebitda?.toLocaleString() || 'N/A'}</td>
+                              )}
+                              {valuation.projections?.[0]?.capex && (
+                                <td className="text-right">${projection.capex?.toLocaleString() || 'N/A'}</td>
+                              )}
+                              {valuation.projections?.[0]?.workingCapital && (
+                                <td className="text-right">${projection.workingCapital?.toLocaleString() || 'N/A'}</td>
+                              )}
                             </tr>
                           ))}
                         </tbody>
@@ -406,21 +409,30 @@ export default function DCFValuation() {
                         {method === 'dcf' && (
                           <>
                             <div>
-                              <p className="text-sm text-gray-500">Growth Rate</p>
+                              <p className="text-sm text-gray-500">Revenue Growth Rate</p>
                               <p className="text-lg font-medium">
-                                {formatPercentage(valuation.assumptions.growthRate)}
+                                {formatDCFPercentage(valuation.assumptions.revenueGrowthRate || 
+                                                valuation.assumptions.fcfGrowthRate5yr ||
+                                                (Array.isArray(valuation.assumptions.revenueGrowth) ? 
+                                                 valuation.assumptions.revenueGrowth[0] : null))}
                               </p>
                             </div>
                             <div>
-                              <p className="text-sm text-gray-500">Terminal Growth</p>
+                              <p className="text-sm text-gray-500">Terminal Growth Rate</p>
                               <p className="text-lg font-medium">
-                                {formatPercentage(valuation.assumptions.terminalGrowth)}
+                                {formatDCFPercentage(valuation.assumptions.terminalGrowthRate)}
                               </p>
                             </div>
                             <div>
                               <p className="text-sm text-gray-500">Discount Rate</p>
                               <p className="text-lg font-medium">
-                                {formatPercentage(valuation.assumptions.discountRate)}
+                                {formatDCFPercentage(valuation.assumptions.discountRate || valuation.assumptions.wacc)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">FCF Margin</p>
+                              <p className="text-lg font-medium">
+                                {formatDCFPercentage(valuation.assumptions.fcfMargin)}
                               </p>
                             </div>
                           </>
@@ -430,13 +442,13 @@ export default function DCFValuation() {
                             <div>
                               <p className="text-sm text-gray-500">Growth Rate</p>
                               <p className="text-lg font-medium">
-                                {formatPercentage(valuation.assumptions.growthRate)}
+                                {formatExitMultiplePercentage(valuation.assumptions.growthRate)}
                               </p>
                             </div>
                             <div>
                               <p className="text-sm text-gray-500">Discount Rate</p>
                               <p className="text-lg font-medium">
-                                {formatPercentage(valuation.assumptions.discountRate)}
+                                {formatExitMultiplePercentage(valuation.assumptions.discountRate)}
                               </p>
                             </div>
                             <div>

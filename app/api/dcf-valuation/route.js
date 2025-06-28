@@ -2,106 +2,88 @@ import { NextResponse } from 'next/server';
 
 export const runtime = 'edge';
 
-// Simple in-memory rate limiter with request tracking
-const rateLimiter = new Map();
-const RATE_LIMIT = 40; // requests per minute (leave buffer for other routes)
-const RATE_WINDOW = 60 * 1000; // 1 minute in milliseconds
-const activeRequests = new Set(); // Track active requests
-const globalRateLimiter = new Map(); // Track global requests
-const tokenUsageTracker = new Map(); // Track token usage per minute
-
-function checkRateLimit(ticker) {
-  const now = Date.now();
-  const minuteAgo = now - RATE_WINDOW;
-  
-  // Clean up old entries
-  for (const [timestamp] of rateLimiter) {
-    if (timestamp < minuteAgo) {
-      rateLimiter.delete(timestamp);
-    }
-  }
-  
-  for (const [timestamp] of globalRateLimiter) {
-    if (timestamp < minuteAgo) {
-      globalRateLimiter.delete(timestamp);
-    }
-  }
-  
-  for (const [timestamp] of tokenUsageTracker) {
-    if (timestamp < minuteAgo) {
-      tokenUsageTracker.delete(timestamp);
-    }
-  }
-  
-  // Check if there's already an active request for this ticker
-  if (activeRequests.has(ticker)) {
-    console.log(`Rate limit: Active request already exists for ${ticker}`);
-    return false;
-  }
-  
-  // Count global requests in the last minute
-  const globalRecentRequests = Array.from(globalRateLimiter.keys())
-    .filter(timestamp => timestamp > minuteAgo)
-    .length;
-  
-  if (globalRecentRequests >= RATE_LIMIT) {
-    console.log(`Rate limit: Global limit exceeded (${globalRecentRequests}/${RATE_LIMIT})`);
-    return false;
-  }
-  
-  // Count requests for this specific ticker in the last minute
-  const recentRequests = Array.from(rateLimiter.keys())
-    .filter(timestamp => timestamp > minuteAgo)
-    .length;
-  
-  // Allow up to 3 requests per ticker per minute
-  if (recentRequests >= 3) {
-    console.log(`Rate limit: Ticker limit exceeded for ${ticker} (${recentRequests}/3)`);
-    return false;
-  }
-  
-  // Add current request
-  rateLimiter.set(now, ticker);
-  globalRateLimiter.set(now, true);
-  activeRequests.add(ticker);
-  
-  console.log(`Rate limit: Request allowed for ${ticker} (Global: ${globalRecentRequests + 1}/${RATE_LIMIT}, Ticker: ${recentRequests + 1}/3)`);
-  return true;
-}
-
 const generateValuation = async (ticker, method) => {
   try {
-    // Add a small delay to prevent rapid successive requests
-    await new Promise(resolve => setTimeout(resolve, 200));
-    
     console.log('Generating valuation for:', { ticker, method });
     
     let prompt;
     
     if (method === 'dcf') {
-      prompt = `DCF for ${ticker}. FCF 5y, terminal = FCF×(1+g)/(r-g), discount. Return ONLY:
-
-1. {"valuation":{"fairValue":number,"currentPrice":number,"upside":number,"confidence":"high|medium|low","method":"dcf","assumptions":{"growthRate":number,"terminalGrowth":number,"discountRate":number},"projections":[{"year":number,"revenue":number,"ebitda":number,"freeCashFlow":number,"capex":number,"workingCapital":number}]}}
-
-2. {"analysis":{"companyOverview":string,"keyDrivers":string[],"risks":string[],"sensitivity":{"bullCase":number,"baseCase":number,"bearCase":number}}}
-
-Current price. NO text. ONLY JSON.`;
+      prompt = `DCF ${ticker}. Return ONLY JSON with this structure:
+{
+  "valuation": {
+    "current_price": X,
+    "dcf_value": X,
+    "upside": X,
+    "assumptions": {
+      "revenueGrowthRate": X,
+      "terminalGrowthRate": X,
+      "discountRate": X,
+      "fcfMargin": X
+    },
+    "projections": [
+      // Repeat the following object for each year 2025-2029:
+      {
+        "year": YEAR,
+        "revenue": X,
+        "freeCashFlow": X,
+        "ebitda": X,
+        "capex": X,
+        "workingCapital": X
+      }
+    ]
+  },
+  "analysis": {
+    "companyOverview": "...",
+    "keyDrivers": ["...", "..."],
+    "risks": ["...", "..."],
+    "sensitivity": {
+      "bullCase": X,
+      "baseCase": X,
+      "bearCase": X
+    }
+  }
+}
+Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
     } else if (method === 'exit-multiple') {
-      prompt = `DCF exit multiple for ${ticker}. FCF 5y, exit multiple terminal. Return ONLY:
-
-1. {"valuation":{"fairValue":number,"currentPrice":number,"upside":number,"confidence":"high|medium|low","method":"exit-multiple","assumptions":{"growthRate":number,"discountRate":number,"exitMultiple":number,"exitMultipleType":"EV/EBITDA|P/E"},"projections":[{"year":number,"revenue":number,"ebitda":number,"freeCashFlow":number,"capex":number,"workingCapital":number}]}}
-
-2. {"analysis":{"companyOverview":string,"keyDrivers":string[],"risks":string[],"sensitivity":{"bullCase":number,"baseCase":number,"bearCase":number}}}
-
-Current price. NO text. ONLY JSON.`;
+      prompt = `DCF exit multiple ${ticker}. Return ONLY JSON with this structure:
+{
+  "valuation": {
+    "current_price": X,
+    "fair_value": X,
+    "upside": X,
+    "assumptions": {
+      "growthRate": X,
+      "discountRate": X,
+      "exitMultiple": X,
+      "exitMultipleType": "..."
+    },
+    "projections": [
+      // Repeat the following object for each year 2025-2029:
+      {
+        "year": YEAR,
+        "revenue": X,
+        "freeCashFlow": X,
+        "ebitda": X,
+        "capex": X,
+        "workingCapital": X
+      }
+    ]
+  },
+  "analysis": {
+    "companyOverview": "...",
+    "keyDrivers": ["...", "..."],
+    "risks": ["...", "..."],
+    "sensitivity": {
+      "bullCase": X,
+      "baseCase": X,
+      "bearCase": X
+    }
+  }
+}
+Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
     } else if (method === 'comparable-multiples') {
-      prompt = `Multiples for ${ticker}. P/E, EV/EBITDA, EV/Revenue peers. Return ONLY:
-
-1. {"valuation":{"fairValue":number,"currentPrice":number,"upside":number,"confidence":"high|medium|low","method":"comparable-multiples","assumptions":{"peRatio":number,"evEbitdaRatio":number,"evRevenueRatio":number,"peerCount":number},"multiples":{"peRatio":number,"evEbitdaRatio":number,"evRevenueRatio":number,"priceToBook":number}}}
-
-2. {"analysis":{"companyOverview":string,"keyDrivers":string[],"risks":string[],"sensitivity":{"bullCase":number,"baseCase":number,"bearCase":number}}}
-
-Current price. NO text. ONLY JSON.`;
+      prompt = `Multiples ${ticker}. Return ONLY JSON. NO explanations. NO text. ONLY: {"valuation":{...}} {"analysis":{...}}`;
     } else {
       throw new Error(`Unsupported valuation method: ${method}`);
     }
@@ -115,8 +97,8 @@ Current price. NO text. ONLY JSON.`;
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        system: "Return ONLY valid JSON. NO text. Get current stock price. Use web search.",
+        max_tokens: 800,
+        system: `CRITICAL: Return ONLY JSON objects. NO explanations. NO text. NO analysis. ONLY: {"valuation":{...}} {"analysis":{...}}. Get CURRENT price and data. Include realistic assumptions and sensitivity analysis.`,
         messages: [
           {
             role: 'user',
@@ -128,7 +110,7 @@ Current price. NO text. ONLY JSON.`;
           {
             type: "web_search_20250305",
             name: "web_search",
-            max_uses: 5,
+            max_uses: 2,
             user_location: {
               type: "approximate",
               country: "US",
@@ -142,12 +124,6 @@ Current price. NO text. ONLY JSON.`;
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: { message: 'Failed to parse error response' } }));
       console.error('Claude API error:', error);
-      
-      if (error.error?.type === 'rate_limit_error' || response.status === 429) {
-        // Remove from active requests so user can retry
-        activeRequests.delete(ticker);
-        throw new Error('Rate limit exceeded. Please wait 1-2 minutes and try again.');
-      }
       
       if (response.status === 404) {
         throw new Error(`Unable to find data for ${ticker}. Please verify the ticker symbol.`);
@@ -190,10 +166,66 @@ Current price. NO text. ONLY JSON.`;
       throw new Error('Invalid response from Claude API: Empty text content');
     }
 
-    // Check if the response starts with a JSON object
-    if (!valuationText.trim().startsWith('{')) {
-      console.error('Response does not start with JSON object:', valuationText.substring(0, 200));
-      throw new Error('Invalid response format: Expected JSON object');
+    // Extract JSON objects from the response, regardless of position
+    let jsonObjects = [];
+    
+    // First try to extract from markdown code blocks
+    const jsonMatches = valuationText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/g);
+    if (jsonMatches) {
+      jsonMatches.forEach(match => {
+        const jsonStr = match.replace(/```(?:json)?\s*/, '').replace(/\s*```/, '');
+        try {
+          JSON.parse(jsonStr);
+          jsonObjects.push(jsonStr);
+        } catch (e) {
+          // Not valid JSON, continue
+        }
+      });
+    }
+    
+    // If no markdown blocks, try to parse the entire text as JSON first
+    if (jsonObjects.length === 0) {
+      try {
+        const parsed = JSON.parse(valuationText);
+        jsonObjects.push(valuationText);
+      } catch (e) {
+        // Not a single JSON object, try to find multiple objects
+        let braceCount = 0;
+        let startIndex = -1;
+        
+        for (let i = 0; i < valuationText.length; i++) {
+          if (valuationText[i] === '{') {
+            if (braceCount === 0) {
+              startIndex = i;
+            }
+            braceCount++;
+          } else if (valuationText[i] === '}') {
+            braceCount--;
+            if (braceCount === 0 && startIndex !== -1) {
+              const jsonStr = valuationText.substring(startIndex, i + 1);
+              try {
+                JSON.parse(jsonStr);
+                jsonObjects.push(jsonStr);
+              } catch (e) {
+                // Not valid JSON, continue
+              }
+              startIndex = -1;
+            }
+          }
+        }
+      }
+    }
+    
+    if (jsonObjects.length === 0) {
+      console.error('No JSON objects found in response. Full response:', valuationText);
+      throw new Error('Invalid response format: No JSON objects found');
+    }
+    
+    // Use the found JSON objects
+    if (jsonObjects.length === 1) {
+      valuationText = jsonObjects[0];
+    } else {
+      valuationText = jsonObjects.join('\n');
     }
 
     console.log('Raw valuation text length:', valuationText.length);
@@ -202,12 +234,6 @@ Current price. NO text. ONLY JSON.`;
     try {
       // Clean the response text
       let cleanText = valuationText
-        .replace(/```json\n|\n```/g, '') // Remove markdown code blocks
-        .replace(/\n\s*\/\/.*$/gm, '') // Remove single-line comments
-        .replace(/,(\s*[}\]])/g, '$1') // Remove trailing commas
-        .replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3') // Ensure property names are quoted
-        .replace(/,\s*\.\.\./g, '') // Remove trailing ellipsis
-        .replace(/\.\.\./g, '') // Remove any remaining ellipsis
         .replace(/\n/g, ' ') // Replace newlines with spaces
         .replace(/\s+/g, ' ') // Normalize whitespace
         .trim();
@@ -217,27 +243,45 @@ Current price. NO text. ONLY JSON.`;
       // Split the text into two JSON objects
       const jsonParts = cleanText.split(/(?<=})\s*(?={)/);
       
-      if (jsonParts.length !== 2) {
+      let valuationObj, analysisObj;
+      
+      if (jsonParts.length === 2) {
+        // Two separate JSON objects
+        try {
+          valuationObj = JSON.parse(jsonParts[0]);
+          analysisObj = JSON.parse(jsonParts[1]);
+        } catch (parseError) {
+          console.error('JSON parse error:', {
+            error: parseError.message,
+            firstPart: jsonParts[0]?.substring(0, 100),
+            secondPart: jsonParts[1]?.substring(0, 100)
+          });
+          throw new Error('Failed to parse JSON objects: ' + parseError.message);
+        }
+      } else if (jsonParts.length === 1) {
+        // Single JSON object with nested properties
+        try {
+          const singleObj = JSON.parse(jsonParts[0]);
+          if (singleObj.valuation && singleObj.analysis) {
+            valuationObj = { valuation: singleObj.valuation };
+            analysisObj = { analysis: singleObj.analysis };
+          } else {
+            throw new Error('Single JSON object does not contain both valuation and analysis');
+          }
+        } catch (parseError) {
+          console.error('JSON parse error for single object:', {
+            error: parseError.message,
+            firstPart: jsonParts[0]?.substring(0, 100)
+          });
+          throw new Error('Failed to parse JSON object: ' + parseError.message);
+        }
+      } else {
         console.error('Failed to split JSON objects:', {
           parts: jsonParts.length,
           firstPart: jsonParts[0]?.substring(0, 100),
           secondPart: jsonParts[1]?.substring(0, 100)
         });
-        throw new Error('Expected two JSON objects but found ' + jsonParts.length);
-      }
-
-      // Parse each JSON object
-      let valuationObj, analysisObj;
-      try {
-        valuationObj = JSON.parse(jsonParts[0]);
-        analysisObj = JSON.parse(jsonParts[1]);
-      } catch (parseError) {
-        console.error('JSON parse error:', {
-          error: parseError.message,
-          firstPart: jsonParts[0]?.substring(0, 100),
-          secondPart: jsonParts[1]?.substring(0, 100)
-        });
-        throw new Error('Failed to parse JSON objects: ' + parseError.message);
+        throw new Error('Expected one or two JSON objects but found ' + jsonParts.length);
       }
 
       // Convert string numbers to actual numbers in valuation
@@ -262,28 +306,55 @@ Current price. NO text. ONLY JSON.`;
       const valuation = convertNumbers(valuationObj.valuation);
       const analysis = convertNumbers(analysisObj.analysis);
 
+      console.log('Raw valuation fields:', Object.keys(valuation));
+      console.log('Raw analysis fields:', Object.keys(analysis));
+      console.log('Raw projections data:', valuation.projections);
+      console.log('Raw assumptions data:', valuation.assumptions);
+      console.log('Raw sensitivity data:', analysis.sensitivity);
+
+      // Normalize field names and ensure all required fields are present
+      const normalizedAnalysis = {
+        companyOverview: (analysis.companyOverview || analysis.company_overview || 'No overview available')
+          .replace(/<cite[^>]*>.*?<\/cite>/g, '') // Remove citation tags
+          .replace(/\s+/g, ' ') // Normalize whitespace
+          .trim(),
+        keyDrivers: (analysis.keyDrivers || analysis.key_drivers || [])
+          .map(driver => typeof driver === 'string' ? 
+            driver.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim() : driver),
+        risks: Array.isArray(analysis.risks) ? 
+               analysis.risks.map(risk => typeof risk === 'string' ? 
+                 risk.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim() : risk) :
+               (typeof analysis.risks === 'object' && analysis.risks !== null) ? 
+               Object.keys(analysis.risks).map(key => `${key}: ${analysis.risks[key]}`.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim()) : [],
+        sensitivity: {
+          bullCase: parseFloat(analysis.sensitivity?.bullCase || analysis.sensitivity?.bull_case || 0),
+          baseCase: parseFloat(analysis.sensitivity?.baseCase || analysis.sensitivity?.base_case || 0),
+          bearCase: parseFloat(analysis.sensitivity?.bearCase || analysis.sensitivity?.bear_case || 0)
+        }
+      };
+
       console.log('Converted objects:', {
         valuation: valuation,
-        analysis: analysis,
-        analysisKeys: Object.keys(analysis),
-        hasKeyDrivers: Array.isArray(analysis.keyDrivers),
-        keyDriversLength: analysis.keyDrivers?.length,
-        hasRisks: Array.isArray(analysis.risks),
-        risksLength: analysis.risks?.length,
-        sensitivity: analysis.sensitivity
+        analysis: normalizedAnalysis,
+        analysisKeys: Object.keys(normalizedAnalysis),
+        hasKeyDrivers: Array.isArray(normalizedAnalysis.keyDrivers),
+        keyDriversLength: normalizedAnalysis.keyDrivers?.length,
+        hasRisks: Array.isArray(normalizedAnalysis.risks),
+        risksLength: normalizedAnalysis.risks?.length,
+        sensitivity: normalizedAnalysis.sensitivity
       });
 
       // Generate Excel data
       const excelData = generateExcelData({
         valuation,
-        analysis
+        analysis: normalizedAnalysis
       });
 
       // Return the data in the expected format
       const result = {
         valuation: {
           ...valuation,
-          analysis,
+          analysis: normalizedAnalysis,
           projections: valuation.projections,
           assumptions: valuation.assumptions,
           excelData: excelData
@@ -317,17 +388,35 @@ Current price. NO text. ONLY JSON.`;
       stack: error.stack
     });
     throw error;
-  } finally {
-    // Always remove the ticker from active requests when done
-    activeRequests.delete(ticker);
   }
 };
 
 function generateExcelData(valuation) {
   // Extract the valuation data from the nested structure
   const valuationData = valuation.valuation || valuation;
-  const analysis = valuationData.analysis || valuationData.analysis;
+  const analysis = valuationData.analysis || {};
   const method = valuationData.method || 'dcf';
+
+  // Normalize field names for analysis
+  const normalizedAnalysis = {
+    companyOverview: (analysis.companyOverview || analysis.company_overview || 'No overview available')
+      .replace(/<cite[^>]*>.*?<\/cite>/g, '') // Remove citation tags
+      .replace(/\s+/g, ' ') // Normalize whitespace
+      .trim(),
+    keyDrivers: (analysis.keyDrivers || analysis.key_drivers || [])
+      .map(driver => typeof driver === 'string' ? 
+        driver.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim() : driver),
+    risks: Array.isArray(analysis.risks) ? 
+           analysis.risks.map(risk => typeof risk === 'string' ? 
+             risk.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim() : risk) :
+           (typeof analysis.risks === 'object' && analysis.risks !== null) ? 
+           Object.keys(analysis.risks).map(key => `${key}: ${analysis.risks[key]}`.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim()) : [],
+    sensitivity: {
+      bullCase: parseFloat(analysis.sensitivity?.bullCase || analysis.sensitivity?.bull_case || 0),
+      baseCase: parseFloat(analysis.sensitivity?.baseCase || analysis.sensitivity?.base_case || 0),
+      bearCase: parseFloat(analysis.sensitivity?.bearCase || analysis.sensitivity?.bear_case || 0)
+    }
+  };
 
   // Create Excel data structure
   let sheets = [
@@ -335,11 +424,11 @@ function generateExcelData(valuation) {
       name: 'Valuation Summary',
       data: [
         ['Valuation Summary'],
-        ['Fair Value', valuationData.fairValue],
-        ['Current Price', valuationData.currentPrice],
-        ['Upside', valuationData.upside],
-        ['Confidence', valuationData.confidence],
-        ['Method', valuationData.method],
+        ['Fair Value', valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0],
+        ['Current Price', valuationData.currentPrice || valuationData.current_price || 0],
+        ['Upside', valuationData.upside || valuationData.upside_downside || valuationData.upside_potential || valuationData.gf_upside || 0],
+        ['Confidence', valuationData.confidence || valuationData.recommendation || valuationData.analyst_consensus || 'Medium'],
+        ['Method', valuationData.method || method],
         [],
         ['Assumptions']
       ]
@@ -349,9 +438,18 @@ function generateExcelData(valuation) {
   // Add method-specific assumptions
   if (method === 'dcf') {
     sheets[0].data.push(
-      ['Growth Rate', valuationData.assumptions?.growthRate || 0],
-      ['Terminal Growth', valuationData.assumptions?.terminalGrowth || 0],
-      ['Discount Rate', valuationData.assumptions?.discountRate || 0]
+      ['Growth Rate', valuationData.assumptions?.growthRate || 
+                     valuationData.assumptions?.revenueGrowthRate || 
+                     valuationData.assumptions?.revenue_growth ||
+                     valuationData.revenue_growth || 0],
+      ['Terminal Growth', valuationData.assumptions?.terminalGrowthRate || 
+                         valuationData.assumptions?.terminal_growth_rate ||
+                         valuationData.terminal_growth_rate || 0],
+      ['Discount Rate', valuationData.assumptions?.discountRate || 
+                       valuationData.assumptions?.wacc || 
+                       valuationData.assumptions?.discount_rate ||
+                       valuationData.wacc ||
+                       valuationData.discount_rate || 0]
     );
   } else if (method === 'exit-multiple') {
     sheets[0].data.push(
@@ -373,9 +471,9 @@ function generateExcelData(valuation) {
   sheets[0].data.push(
     [],
     ['Sensitivity Analysis'],
-    ['Bull Case', analysis?.sensitivity?.bullCase || 0],
-    ['Base Case', analysis?.sensitivity?.baseCase || 0],
-    ['Bear Case', analysis?.sensitivity?.bearCase || 0]
+    ['Bull Case', normalizedAnalysis.sensitivity?.bullCase || 0],
+    ['Base Case', normalizedAnalysis.sensitivity?.baseCase || 0],
+    ['Bear Case', normalizedAnalysis.sensitivity?.bearCase || 0]
   );
 
   // Add projections sheet for DCF and exit-multiple methods
@@ -415,13 +513,13 @@ function generateExcelData(valuation) {
     name: 'Analysis',
     data: [
       ['Company Overview'],
-      [analysis?.companyOverview || 'No overview available'],
+      [normalizedAnalysis.companyOverview],
       [],
       ['Key Drivers'],
-      ...(analysis?.keyDrivers || []).map(d => [d]),
+      ...(normalizedAnalysis.keyDrivers || []).map(d => [d]),
       [],
       ['Risks'],
-      ...(analysis?.risks || []).map(r => [r])
+      ...(normalizedAnalysis.risks || []).map(r => [r])
     ]
   });
 
@@ -450,14 +548,6 @@ export async function GET(request) {
     );
   }
 
-  // Check rate limit
-  if (!checkRateLimit(ticker)) {
-    return NextResponse.json(
-      { error: 'Rate limit exceeded. Please try again in 1 minute.' },
-      { status: 429 }
-    );
-  }
-
   try {
     // Generate valuation
     const valuation = await generateValuation(ticker, method);
@@ -471,27 +561,52 @@ export async function GET(request) {
       );
     }
 
-    // Generate Excel data
-    const excelData = generateExcelData(valuation);
-
     // Ensure all required fields are present and properly structured
     const formattedValuation = {
-      fairValue: parseFloat(valuation.valuation.fairValue),
-      currentPrice: parseFloat(valuation.valuation.currentPrice),
-      upside: parseFloat(valuation.valuation.upside),
-      confidence: valuation.valuation.confidence,
-      method: valuation.valuation.method,
-      analysis: valuation.valuation.analysis || {
-        companyOverview: 'No overview available',
-        keyDrivers: [],
-        risks: [],
+      fairValue: parseFloat(valuation.valuation.fairValue || 
+                           valuation.valuation.fair_value ||
+                           valuation.valuation.dcf_value || 
+                           valuation.valuation.dcf_fair_value || 
+                           valuation.valuation.fair_value_per_share ||
+                           valuation.valuation.target_price ||
+                           valuation.valuation.gf_value ||
+                           valuation.valuation.intrinsic_value_per_share || 0),
+      currentPrice: parseFloat(valuation.valuation.currentPrice || 
+                              valuation.valuation.current_price || 0),
+      upside: parseFloat(valuation.valuation.upside || 
+                        valuation.valuation.upside_downside || 
+                        valuation.valuation.upside_potential ||
+                        valuation.valuation.gf_upside || 0),
+      confidence: valuation.valuation.confidence || valuation.valuation.recommendation || valuation.valuation.analyst_consensus || 'Medium',
+      method: valuation.valuation.method || method,
+      analysis: {
+        companyOverview: (valuation.valuation.analysis?.companyOverview || 'No overview available')
+          .replace(/<cite[^>]*>.*?<\/cite>/g, '') // Remove citation tags
+          .replace(/\s+/g, ' ') // Normalize whitespace
+          .trim(),
+        keyDrivers: Array.isArray(valuation.valuation.analysis?.keyDrivers) ? 
+                   valuation.valuation.analysis.keyDrivers.map(driver => 
+                     typeof driver === 'string' ? 
+                       driver.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim() : driver
+                   ) : [],
+        risks: Array.isArray(valuation.valuation.analysis?.risks) ? 
+               valuation.valuation.analysis.risks.map(risk => 
+                 typeof risk === 'string' ? 
+                   risk.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim() : risk
+               ) : 
+               (typeof valuation.valuation.analysis?.risks === 'object' && valuation.valuation.analysis?.risks !== null) ? 
+               Object.keys(valuation.valuation.analysis.risks).map(key => 
+                 `${key}: ${valuation.valuation.analysis.risks[key]}`.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim()
+               ) : [],
         sensitivity: {
-          bullCase: 0,
-          baseCase: 0,
-          bearCase: 0
+          bullCase: parseFloat(valuation.valuation.analysis?.sensitivity?.bullCase || 
+                              valuation.valuation.analysis?.sensitivity?.bull_case || 0),
+          baseCase: parseFloat(valuation.valuation.analysis?.sensitivity?.baseCase || 
+                              valuation.valuation.analysis?.sensitivity?.base_case || 0),
+          bearCase: parseFloat(valuation.valuation.analysis?.sensitivity?.bearCase || 
+                              valuation.valuation.analysis?.sensitivity?.bear_case || 0)
         }
-      },
-      excelData: excelData
+      }
     };
 
     // Add method-specific data
@@ -499,25 +614,72 @@ export async function GET(request) {
       formattedValuation.projections = (valuation.valuation.projections || []).map(p => ({
         year: parseInt(p.year),
         revenue: parseFloat(p.revenue),
-        ebitda: parseFloat(p.ebitda),
         freeCashFlow: parseFloat(p.freeCashFlow),
+        fcf: parseFloat(p.freeCashFlow), // Also map to fcf for frontend compatibility
+        ebitda: parseFloat(p.ebitda),
         capex: parseFloat(p.capex),
         workingCapital: parseFloat(p.workingCapital)
       }));
+      
+      // Fallback: If projections is empty, add a dummy row
+      if (!formattedValuation.projections || formattedValuation.projections.length === 0) {
+        formattedValuation.projections = [{
+          year: new Date().getFullYear(),
+          revenue: 0,
+          freeCashFlow: 0,
+          ebitda: 0,
+          capex: 0,
+          workingCapital: 0
+        }];
+      }
+      
       formattedValuation.assumptions = {
-        growthRate: parseFloat(valuation.valuation.assumptions?.growthRate || 0),
-        terminalGrowth: parseFloat(valuation.valuation.assumptions?.terminalGrowth || 0),
-        discountRate: parseFloat(valuation.valuation.assumptions?.discountRate || 0)
+        revenueGrowthRate: parseFloat(valuation.valuation.assumptions?.revenueGrowthRate || 
+                                    valuation.valuation.assumptions?.fcfGrowthRate5yr || 
+                                    valuation.valuation.assumptions?.revenue_growth ||
+                                    valuation.valuation.revenue_growth ||
+                                    (Array.isArray(valuation.valuation.assumptions?.revenueGrowth) ? 
+                                     valuation.valuation.assumptions.revenueGrowth[0] : 0) || 0) / 100,
+        terminalGrowthRate: parseFloat(valuation.valuation.assumptions?.terminalGrowthRate || 
+                                     valuation.valuation.assumptions?.terminal_growth_rate ||
+                                     valuation.valuation.terminal_growth_rate || 0) / 100,
+        discountRate: parseFloat(valuation.valuation.assumptions?.discountRate || 
+                               valuation.valuation.assumptions?.wacc ||
+                               valuation.valuation.assumptions?.discount_rate ||
+                               valuation.valuation.wacc ||
+                               valuation.valuation.discount_rate || 0) / 100,
+        fcfMargin: parseFloat(valuation.valuation.assumptions?.fcfMargin || 
+                            valuation.valuation.assumptions?.fcf_margin || 0) / 100,
+        taxRate: parseFloat(valuation.valuation.assumptions?.taxRate || 0) / 100,
+        // Also include the original field names for flexibility
+        wacc: parseFloat(valuation.valuation.assumptions?.wacc || 
+                        valuation.valuation.wacc || 0) / 100,
+        fcfGrowthRate5yr: parseFloat(valuation.valuation.assumptions?.fcfGrowthRate5yr || 0) / 100,
+        revenueGrowth: valuation.valuation.assumptions?.revenueGrowth || []
       };
     } else if (method === 'exit-multiple') {
       formattedValuation.projections = (valuation.valuation.projections || []).map(p => ({
         year: parseInt(p.year),
         revenue: parseFloat(p.revenue),
-        ebitda: parseFloat(p.ebitda),
         freeCashFlow: parseFloat(p.freeCashFlow),
+        fcf: parseFloat(p.freeCashFlow), // Also map to fcf for frontend compatibility
+        ebitda: parseFloat(p.ebitda),
         capex: parseFloat(p.capex),
         workingCapital: parseFloat(p.workingCapital)
       }));
+      
+      // Fallback: If projections is empty, add a dummy row
+      if (!formattedValuation.projections || formattedValuation.projections.length === 0) {
+        formattedValuation.projections = [{
+          year: new Date().getFullYear(),
+          revenue: 0,
+          freeCashFlow: 0,
+          ebitda: 0,
+          capex: 0,
+          workingCapital: 0
+        }];
+      }
+      
       formattedValuation.assumptions = {
         growthRate: parseFloat(valuation.valuation.assumptions?.growthRate || 0),
         discountRate: parseFloat(valuation.valuation.assumptions?.discountRate || 0),
@@ -539,10 +701,16 @@ export async function GET(request) {
       };
     }
 
+    // Generate Excel data with the properly formatted valuation
+    const excelData = generateExcelData(formattedValuation);
+    
+    // Add excelData to the formatted valuation
+    formattedValuation.excelData = excelData;
+
     console.log('Formatted valuation analysis:', {
       companyOverview: formattedValuation.analysis.companyOverview,
-      keyDriversLength: formattedValuation.analysis.keyDrivers.length,
-      risksLength: formattedValuation.analysis.risks.length,
+      keyDriversLength: formattedValuation.analysis.keyDrivers?.length || 0,
+      risksLength: formattedValuation.analysis.risks?.length || 0,
       sensitivity: formattedValuation.analysis.sensitivity
     });
 
@@ -561,13 +729,6 @@ export async function GET(request) {
       );
     }
 
-    if (error.message.includes('rate limit')) {
-      return NextResponse.json(
-        { error: 'Rate limit exceeded. Please try again in 1 minute.' },
-        { status: 429 }
-      );
-    }
-
     if (error.message.includes('JSON')) {
       return NextResponse.json(
         { error: 'Invalid response format from valuation service' },
@@ -579,8 +740,5 @@ export async function GET(request) {
       { error: 'Failed to generate valuation' },
       { status: 500 }
     );
-  } finally {
-    // Always remove the ticker from active requests when done
-    activeRequests.delete(ticker);
   }
 } 
