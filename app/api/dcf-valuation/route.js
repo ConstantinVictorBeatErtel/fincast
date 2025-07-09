@@ -495,34 +495,11 @@ function generateExcelData(valuation) {
                        valuationData.wacc ||
                        valuationData.discount_rate || 0]
     );
-    
-    // Add margin data if available
-    if (valuationData.margins) {
-      sheets[0].data.push(
-        [],
-        ['Key Metrics'],
-        ['YoY Revenue Growth', `${valuationData.margins.revenueGrowth.toFixed(1)}%`],
-        ['FCF Margin', `${valuationData.margins.fcfMargin.toFixed(1)}%`],
-        ['EBITDA Margin', `${valuationData.margins.ebitdaMargin.toFixed(1)}%`]
-      );
-    }
   } else if (method === 'exit-multiple') {
     sheets[0].data.push(
       ['Exit Multiple', valuationData.assumptions?.exitMultiple || 0],
       ['Exit Multiple Type', valuationData.assumptions?.exitMultipleType || 'N/A']
     );
-    
-    // Add margin data if available
-    if (valuationData.margins) {
-      sheets[0].data.push(
-        [],
-        ['Key Metrics'],
-        ['YoY Revenue Growth', `${valuationData.margins.revenueGrowth.toFixed(1)}%`],
-        ['FCF Margin', `${valuationData.margins.fcfMargin.toFixed(1)}%`],
-        ['EBITDA Margin', `${valuationData.margins.ebitdaMargin.toFixed(1)}%`],
-        ['Net Income Margin', `${valuationData.margins.netIncomeMargin.toFixed(1)}%`]
-      );
-    }
   }
 
   // Add sensitivity analysis
@@ -536,22 +513,25 @@ function generateExcelData(valuation) {
 
   // Add projections sheet for DCF and exit-multiple methods
   if (method === 'dcf' || method === 'exit-multiple') {
-    const projectionHeaders = ['Year', 'Revenue (M)', 'Free Cash Flow (M)'];
+    const projectionHeaders = ['Year', 'Revenue (M)', 'Free Cash Flow (M)', 'FCF Margin (%)', 'EBITDA Margin (%)'];
     const projectionData = (valuationData.projections || []).map(p => [
       p.year,
-      (p.revenue / 1000000).toFixed(1),
-      ((p.fcf || p.freeCashFlow) / 1000000).toFixed(1)
+      ((p.revenue * 1000) / 1000000).toFixed(1),
+      (((p.fcf || p.freeCashFlow) * 1000) / 1000000).toFixed(1),
+      p.revenue > 0 ? ((p.fcf || p.freeCashFlow) / p.revenue * 100).toFixed(1) : '0.0',
+      p.revenue > 0 ? (p.ebitda / p.revenue * 100).toFixed(1) : '0.0'
     ]);
     
     // Add additional columns for exit-multiple method
     if (method === 'exit-multiple') {
-      projectionHeaders.push('EBITDA (M)', 'Net Income (M)', 'EPS');
+      projectionHeaders.push('EBITDA (M)', 'Net Income (M)', 'EPS', 'Net Income Margin (%)');
       projectionData.forEach((row, index) => {
         const projection = valuationData.projections[index];
         row.push(
-          (projection.ebitda / 1000000).toFixed(1),
-          (projection.netIncome / 1000000).toFixed(1),
-          projection.eps.toFixed(2)
+          ((projection.ebitda * 1000) / 1000000).toFixed(1),
+          ((projection.netIncome * 1000) / 1000000).toFixed(1),
+          projection.eps.toFixed(2),
+          projection.revenue > 0 ? (projection.netIncome / projection.revenue * 100).toFixed(1) : '0.0'
         );
       });
     } else {
@@ -560,9 +540,9 @@ function generateExcelData(valuation) {
       projectionData.forEach((row, index) => {
         const projection = valuationData.projections[index];
         row.push(
-          (projection.ebitda / 1000000).toFixed(1),
-          (projection.capex / 1000000).toFixed(1),
-          (projection.workingCapital / 1000000).toFixed(1)
+          ((projection.ebitda * 1000) / 1000000).toFixed(1),
+          ((projection.capex * 1000) / 1000000).toFixed(1),
+          ((projection.workingCapital * 1000) / 1000000).toFixed(1)
         );
       });
     }
