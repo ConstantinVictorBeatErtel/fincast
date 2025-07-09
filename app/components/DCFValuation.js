@@ -13,6 +13,7 @@ import * as XLSX from 'xlsx';
 export default function DCFValuation() {
   const [ticker, setTicker] = useState('');
   const [method, setMethod] = useState('dcf');
+  const [selectedMultiple, setSelectedMultiple] = useState('auto');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [valuation, setValuation] = useState(null);
@@ -43,8 +44,8 @@ export default function DCFValuation() {
     }
 
     try {
-      console.log('Fetching valuation for:', { ticker, method });
-      const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}`);
+      console.log('Fetching valuation for:', { ticker, method, selectedMultiple });
+      const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}`);
       let data;
       
       try {
@@ -164,6 +165,12 @@ export default function DCFValuation() {
     return `$${value.toFixed(2)}`;
   };
 
+  // Helper function to format values in millions
+  const formatMillions = (value) => {
+    if (typeof value !== 'number' || isNaN(value)) return 'N/A';
+    return `$${(value / 1000).toFixed(1)}M`;
+  };
+
   // Helper function to format percentage values
   const formatPercentage = (value) => {
     if (typeof value !== 'number' || isNaN(value)) return 'N/A';
@@ -188,10 +195,18 @@ export default function DCFValuation() {
     return `${value.toFixed(1)}x`;
   };
 
+  // Helper function to determine if we should show EV-based display
+  const shouldShowEVDisplay = () => {
+    return method === 'exit-multiple' && 
+           valuation?.assumptions?.exitMultipleType && 
+           (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || 
+            valuation.assumptions.exitMultipleType === 'EV/FCF');
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <form onSubmit={handleSubmit} className="mb-8">
-        <div className="flex gap-4">
+        <div className="flex gap-4 flex-wrap">
           <Input
             type="text"
             placeholder="Enter ticker symbol (e.g., AAPL)"
@@ -208,6 +223,20 @@ export default function DCFValuation() {
               <SelectItem value="exit-multiple">Exit Multiple DCF</SelectItem>
             </SelectContent>
           </Select>
+          {method === 'exit-multiple' && (
+            <Select value={selectedMultiple} onValueChange={setSelectedMultiple}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="Select multiple type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">AI Decision (Standard)</SelectItem>
+                <SelectItem value="P/E">P/E Multiple</SelectItem>
+                <SelectItem value="EV/EBITDA">EV/EBITDA Multiple</SelectItem>
+                <SelectItem value="EV/FCF">EV/FCF Multiple</SelectItem>
+                <SelectItem value="EV/Sales">EV/Sales Multiple</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           <Button type="submit" disabled={loading}>
             {loading ? (
               <>
@@ -241,17 +270,21 @@ export default function DCFValuation() {
               <CardTitle>Valuation Summary</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+              <div className="grid grid-cols-1 gap-8 md:grid-cols-4">
                 <div>
-                  <h3 className="text-sm font-medium text-gray-500">Fair Value</h3>
+                  <h3 className="text-sm font-medium text-gray-500">
+                    {shouldShowEVDisplay() ? 'Fair EV' : 'Fair Value'}
+                  </h3>
                   <p className="text-2xl font-bold">
-                    {formatCurrency(valuation.fairValue)}
+                    {shouldShowEVDisplay() ? formatMillions(valuation.fairValue) : formatCurrency(valuation.fairValue)}
                   </p>
                 </div>
                 <div>
-                  <h3 className="text-sm font-medium text-gray-500">Current Price</h3>
+                  <h3 className="text-sm font-medium text-gray-500">
+                    {shouldShowEVDisplay() ? 'Current EV' : 'Current Price'}
+                  </h3>
                   <p className="text-2xl font-bold">
-                    {formatCurrency(valuation.currentPrice)}
+                    {shouldShowEVDisplay() ? formatMillions(valuation.currentEV) : formatCurrency(valuation.currentPrice)}
                   </p>
                 </div>
                 <div>
@@ -279,7 +312,14 @@ export default function DCFValuation() {
             <TabsContent value="projections">
               <Card>
                 <CardHeader>
-                  <CardTitle>Financial Projections</CardTitle>
+                  <CardTitle>
+                    Financial Projections
+                    {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && (
+                      <span className="text-sm font-normal text-gray-500 ml-2">
+                        (Showing metrics relevant for {valuation.assumptions.exitMultipleType} multiple)
+                      </span>
+                    )}
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="overflow-x-auto">
@@ -289,14 +329,30 @@ export default function DCFValuation() {
                           <th className="text-left">Year</th>
                           <th className="text-right">Revenue</th>
                           <th className="text-right">Free Cash Flow</th>
-                          {valuation.projections?.[0]?.ebitda && (
-                            <th className="text-right">EBITDA</th>
-                          )}
-                          {valuation.projections?.[0]?.capex && (
-                            <th className="text-right">Capex</th>
-                          )}
-                          {valuation.projections?.[0]?.workingCapital && (
-                            <th className="text-right">Working Capital</th>
+                          {method === 'dcf' ? (
+                            <>
+                              {valuation.projections?.[0]?.ebitda && (
+                                <th className="text-right">EBITDA</th>
+                              )}
+                              {valuation.projections?.[0]?.capex && (
+                                <th className="text-right">Capex</th>
+                              )}
+                              {valuation.projections?.[0]?.workingCapital && (
+                                <th className="text-right">Working Capital</th>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              {valuation.projections?.[0]?.ebitda && (
+                                <th className="text-right">EBITDA</th>
+                              )}
+                              {valuation.projections?.[0]?.netIncome && (
+                                <th className="text-right">Net Income</th>
+                              )}
+                              {valuation.projections?.[0]?.eps && (
+                                <th className="text-right">EPS</th>
+                              )}
+                            </>
                           )}
                         </tr>
                       </thead>
@@ -304,16 +360,32 @@ export default function DCFValuation() {
                         {valuation.projections?.map((projection) => (
                           <tr key={projection.year}>
                             <td>{projection.year}</td>
-                            <td className="text-right">${projection.revenue?.toLocaleString() || 'N/A'}</td>
-                            <td className="text-right">${(projection.fcf || projection.freeCashFlow)?.toLocaleString() || 'N/A'}</td>
-                            {valuation.projections?.[0]?.ebitda && (
-                              <td className="text-right">${projection.ebitda?.toLocaleString() || 'N/A'}</td>
-                            )}
-                            {valuation.projections?.[0]?.capex && (
-                              <td className="text-right">${projection.capex?.toLocaleString() || 'N/A'}</td>
-                            )}
-                            {valuation.projections?.[0]?.workingCapital && (
-                              <td className="text-right">${projection.workingCapital?.toLocaleString() || 'N/A'}</td>
+                            <td className="text-right">{formatMillions(projection.revenue)}</td>
+                            <td className="text-right">{formatMillions(projection.fcf || projection.freeCashFlow)}</td>
+                            {method === 'dcf' ? (
+                              <>
+                                {valuation.projections?.[0]?.ebitda && (
+                                  <td className="text-right">{formatMillions(projection.ebitda)}</td>
+                                )}
+                                {valuation.projections?.[0]?.capex && (
+                                  <td className="text-right">{formatMillions(projection.capex)}</td>
+                                )}
+                                {valuation.projections?.[0]?.workingCapital && (
+                                  <td className="text-right">{formatMillions(projection.workingCapital)}</td>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                {valuation.projections?.[0]?.ebitda && (
+                                  <td className="text-right">{formatMillions(projection.ebitda)}</td>
+                                )}
+                                {valuation.projections?.[0]?.netIncome && (
+                                  <td className="text-right">{formatMillions(projection.netIncome)}</td>
+                                )}
+                                {valuation.projections?.[0]?.eps && (
+                                  <td className="text-right">${projection.eps?.toFixed(2) || 'N/A'}</td>
+                                )}
+                              </>
                             )}
                           </tr>
                         ))}
@@ -398,18 +470,6 @@ export default function DCFValuation() {
                         {method === 'exit-multiple' && (
                           <>
                             <div>
-                              <p className="text-sm text-gray-500">Growth Rate</p>
-                              <p className="text-lg font-medium">
-                                {formatExitMultiplePercentage(valuation.assumptions.growthRate)}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">Discount Rate</p>
-                              <p className="text-lg font-medium">
-                                {formatExitMultiplePercentage(valuation.assumptions.discountRate)}
-                              </p>
-                            </div>
-                            <div>
                               <p className="text-sm text-gray-500">Exit Multiple</p>
                               <p className="text-lg font-medium">
                                 {formatMultiple(valuation.assumptions.exitMultiple)}
@@ -431,23 +491,40 @@ export default function DCFValuation() {
                         <div>
                           <p className="text-sm text-gray-500">Bull Case</p>
                           <p className="text-lg font-medium">
-                            {formatCurrency(valuation.analysis.sensitivity.bullCase)}
+                            {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
+                             (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
+                             ? formatMillions(valuation.analysis.sensitivity.bullCase) 
+                             : formatCurrency(valuation.analysis.sensitivity.bullCase)}
                           </p>
                         </div>
                         <div>
                           <p className="text-sm text-gray-500">Base Case</p>
                           <p className="text-lg font-medium">
-                            {formatCurrency(valuation.analysis.sensitivity.baseCase)}
+                            {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
+                             (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
+                             ? formatMillions(valuation.analysis.sensitivity.baseCase) 
+                             : formatCurrency(valuation.analysis.sensitivity.baseCase)}
                           </p>
                         </div>
                         <div>
                           <p className="text-sm text-gray-500">Bear Case</p>
                           <p className="text-lg font-medium">
-                            {formatCurrency(valuation.analysis.sensitivity.bearCase)}
+                            {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
+                             (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
+                             ? formatMillions(valuation.analysis.sensitivity.bearCase) 
+                             : formatCurrency(valuation.analysis.sensitivity.bearCase)}
                           </p>
                         </div>
                       </div>
                     </div>
+                    {method === 'exit-multiple' && valuation.analysis.multipleExplanation && (
+                      <div>
+                        <h3 className="text-lg font-medium mb-2">Multiple Selection Reasoning</h3>
+                        <p className="text-gray-600 whitespace-pre-wrap">
+                          {valuation.analysis.multipleExplanation}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>

@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server';
 
 export const runtime = 'edge';
 
-const generateValuation = async (ticker, method) => {
+const generateValuation = async (ticker, method, selectedMultiple = 'auto') => {
   try {
-    console.log('Generating valuation for:', { ticker, method });
+    console.log('Generating valuation for:', { ticker, method, selectedMultiple });
     
     let prompt;
     
@@ -46,17 +46,31 @@ const generateValuation = async (ticker, method) => {
 }
 Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
     } else if (method === 'exit-multiple') {
+      // Determine the appropriate multiple type based on industry and user selection
+      let multipleTypeInstruction = '';
+      
+      if (selectedMultiple === 'auto') {
+        multipleTypeInstruction = `Choose the most appropriate exit multiple based on industry:
+- P/E: Consumer staples, Healthcare, Retail, Financials
+- EV/FCF: Software (mature stage), Industrial compounders, Capital-light consumer businesses, High FCF-yield investors
+- EV/EBITDA: Industrial conglomerates, Telecoms, Infrastructure, Manufacturing
+- EV/Sales: High-growth firms with negative or erratic earnings`;
+
+      } else {
+        multipleTypeInstruction = `Use ${selectedMultiple} multiple. For P/E multiples, set enterpriseValue to 0.`;
+      }
+      
       prompt = `DCF exit multiple ${ticker}. Return ONLY JSON with this structure:
 {
   "valuation": {
     "current_price": X,
-    "fair_value": X,
-    "upside": X,
+    "current_ev": X,
     "assumptions": {
       "growthRate": X,
       "discountRate": X,
       "exitMultiple": X,
-      "exitMultipleType": "..."
+      "exitMultipleType": "...",
+      "enterpriseValue": X
     },
     "projections": [
       // Repeat the following object for each year 2025-2029:
@@ -65,6 +79,8 @@ Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
         "revenue": X,
         "freeCashFlow": X,
         "ebitda": X,
+        "netIncome": X,
+        "eps": X,
         "capex": X,
         "workingCapital": X
       }
@@ -78,10 +94,15 @@ Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
       "bullCase": X,
       "baseCase": X,
       "bearCase": X
-    }
+    },
+    "multipleExplanation": "..."
   }
 }
-Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
+Projections must be for years 2025, 2026, 2027, 2028, and 2029. Include EBITDA, Net Income, and EPS for multiple analysis.
+
+${multipleTypeInstruction}
+
+CRITICAL: If you use EV/EBITDA or EV/FCF, get the MOST CURRENT and UPDATED current_ev (current enterprise value) from recent market data. Do not use outdated or estimated values. Search for the latest EV information.`;
     } else {
       throw new Error(`Unsupported valuation method: ${method}`);
     }
@@ -95,8 +116,8 @@ Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 800,
-        system: `CRITICAL: Return ONLY JSON objects. NO explanations. NO text. NO analysis. ONLY: {"valuation":{...}} {"analysis":{...}}. Get CURRENT price and data. Include realistic assumptions and sensitivity analysis.`,
+        max_tokens: 1200,
+        system: `Return ONLY JSON. NO text. NO explanations. Get CURRENT data.`,
         messages: [
           {
             role: 'user',
@@ -216,7 +237,26 @@ Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
     
     if (jsonObjects.length === 0) {
       console.error('No JSON objects found in response. Full response:', valuationText);
-      throw new Error('Invalid response format: No JSON objects found');
+      
+      // Try to fix incomplete JSON by adding missing closing braces
+      let fixedText = valuationText;
+      if (fixedText.includes('"sensitivity"') && !fixedText.includes('"multipleExplanation"')) {
+        // Add missing multipleExplanation and closing braces
+        fixedText = fixedText.replace(/}$/, '') + 
+          ',\n    "multipleExplanation": "Multiple selected based on industry standards and company characteristics."\n  }\n}';
+      } else if (fixedText.includes('"analysis"') && !fixedText.includes('}')) {
+        // Add missing closing braces
+        fixedText = fixedText + '\n}';
+      }
+      
+      try {
+        JSON.parse(fixedText);
+        jsonObjects.push(fixedText);
+        console.log('Successfully fixed incomplete JSON response');
+      } catch (e) {
+        console.error('Failed to fix JSON:', e);
+        throw new Error('Invalid response format: No JSON objects found');
+      }
     }
     
     // Use the found JSON objects
@@ -328,7 +368,8 @@ Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
           bullCase: parseFloat(analysis.sensitivity?.bullCase || analysis.sensitivity?.bull_case || 0),
           baseCase: parseFloat(analysis.sensitivity?.baseCase || analysis.sensitivity?.base_case || 0),
           bearCase: parseFloat(analysis.sensitivity?.bearCase || analysis.sensitivity?.bear_case || 0)
-        }
+        },
+        multipleExplanation: method === 'exit-multiple' ? analysis.multipleExplanation || 'No explanation provided' : null
       };
 
       console.log('Converted objects:', {
@@ -413,7 +454,8 @@ function generateExcelData(valuation) {
       bullCase: parseFloat(analysis.sensitivity?.bullCase || analysis.sensitivity?.bull_case || 0),
       baseCase: parseFloat(analysis.sensitivity?.baseCase || analysis.sensitivity?.base_case || 0),
       bearCase: parseFloat(analysis.sensitivity?.bearCase || analysis.sensitivity?.bear_case || 0)
-    }
+    },
+    multipleExplanation: method === 'exit-multiple' ? analysis.multipleExplanation || 'No explanation provided' : null
   };
 
   // Create Excel data structure
@@ -424,6 +466,10 @@ function generateExcelData(valuation) {
         ['Valuation Summary'],
         ['Fair Value', valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0],
         ['Current Price', valuationData.currentPrice || valuationData.current_price || 0],
+        ...(method === 'exit-multiple' && valuationData.currentEV && 
+            valuationData.assumptions?.exitMultipleType && 
+            (valuationData.assumptions.exitMultipleType === 'EV/EBITDA' || valuationData.assumptions.exitMultipleType === 'EV/FCF') 
+            ? [['Current EV (M)', (valuationData.currentEV / 1000).toFixed(1)]] : []),
         ['Upside', valuationData.upside || valuationData.upside_downside || valuationData.upside_potential || valuationData.gf_upside || 0],
         ['Confidence', valuationData.confidence || valuationData.recommendation || valuationData.analyst_consensus || 'Medium'],
         ['Method', valuationData.method || method],
@@ -451,8 +497,6 @@ function generateExcelData(valuation) {
     );
   } else if (method === 'exit-multiple') {
     sheets[0].data.push(
-      ['Growth Rate', valuationData.assumptions?.growthRate || 0],
-      ['Discount Rate', valuationData.assumptions?.discountRate || 0],
       ['Exit Multiple', valuationData.assumptions?.exitMultiple || 0],
       ['Exit Multiple Type', valuationData.assumptions?.exitMultipleType || 'N/A']
     );
@@ -469,19 +513,40 @@ function generateExcelData(valuation) {
 
   // Add projections sheet for DCF and exit-multiple methods
   if (method === 'dcf' || method === 'exit-multiple') {
+    const projectionHeaders = ['Year', 'Revenue (M)', 'Free Cash Flow (M)'];
+    const projectionData = (valuationData.projections || []).map(p => [
+      p.year,
+      (p.revenue / 1000000).toFixed(1),
+      ((p.fcf || p.freeCashFlow) / 1000000).toFixed(1)
+    ]);
+    
+    // Add additional columns for exit-multiple method
+    if (method === 'exit-multiple') {
+      projectionHeaders.push('EBITDA (M)', 'Net Income (M)', 'EPS');
+      projectionData.forEach((row, index) => {
+        const projection = valuationData.projections[index];
+        row.push(
+          (projection.ebitda / 1000000).toFixed(1),
+          (projection.netIncome / 1000000).toFixed(1),
+          projection.eps.toFixed(2)
+        );
+      });
+    } else {
+      // For DCF, add the original columns
+      projectionHeaders.push('EBITDA (M)', 'Capex (M)', 'Working Capital (M)');
+      projectionData.forEach((row, index) => {
+        const projection = valuationData.projections[index];
+        row.push(
+          (projection.ebitda / 1000000).toFixed(1),
+          (projection.capex / 1000000).toFixed(1),
+          (projection.workingCapital / 1000000).toFixed(1)
+        );
+      });
+    }
+    
     sheets.push({
       name: 'Projections',
-      data: [
-        ['Year', 'Revenue', 'EBITDA', 'Free Cash Flow', 'Capex', 'Working Capital'],
-        ...(valuationData.projections || []).map(p => [
-          p.year,
-          p.revenue,
-          p.ebitda,
-          p.freeCashFlow,
-          p.capex,
-          p.workingCapital
-        ])
-      ]
+      data: [projectionHeaders, ...projectionData]
     });
   }
 
@@ -500,13 +565,91 @@ function generateExcelData(valuation) {
     ]
   });
 
+  // Add multiple explanation for exit-multiple method
+  if (method === 'exit-multiple' && normalizedAnalysis.multipleExplanation) {
+    sheets.push({
+      name: 'Multiple Analysis',
+      data: [
+        ['Exit Multiple Explanation'],
+        [normalizedAnalysis.multipleExplanation]
+      ]
+    });
+  }
+
   return sheets;
 }
+
+// Function to calculate fair value using exit multiple
+const calculateExitMultipleValue = (projections, assumptions, currentPrice, currentEV) => {
+  if (!projections || projections.length === 0 || !assumptions) {
+    return { fairValue: 0, upside: 0 };
+  }
+  
+  const finalYear = projections[projections.length - 1];
+  const exitMultiple = assumptions.exitMultiple;
+  const exitType = assumptions.exitMultipleType;
+  
+  let fairValue = 0;
+  let upside = 0;
+  
+  switch (exitType) {
+    case 'P/E':
+      fairValue = finalYear.eps * exitMultiple;
+      upside = ((fairValue - currentPrice) / currentPrice) * 100;
+      break;
+    case 'EV/EBITDA':
+      // Calculate Enterprise Value = EBITDA × multiple
+      const enterpriseValue = finalYear.ebitda * exitMultiple;
+      // Calculate upside based on fair EV vs current EV
+      if (currentEV && currentEV > 0) {
+        upside = ((enterpriseValue / currentEV) - 1) * 100;
+      } else {
+        // Fallback to market cap comparison if no current EV
+        const estimatedMarketCap = currentPrice * 1000000;
+        upside = ((enterpriseValue - estimatedMarketCap) / estimatedMarketCap) * 100;
+      }
+      // Display the EV in millions (divide by 1000 for display)
+      fairValue = enterpriseValue / 1000;
+      break;
+    case 'EV/FCF':
+      // Calculate Enterprise Value = FCF × multiple
+      const evFcf = finalYear.freeCashFlow * exitMultiple;
+      if (currentEV && currentEV > 0) {
+        upside = ((evFcf / currentEV) - 1) * 100;
+      } else {
+        // Fallback to market cap comparison if no current EV
+        const estimatedMarketCap = currentPrice * 1000000;
+        upside = ((evFcf - estimatedMarketCap) / estimatedMarketCap) * 100;
+      }
+      // Display the EV in millions (divide by 1000 for display)
+      fairValue = evFcf / 1000;
+      break;
+    default:
+      // Default to P/E if type is unknown
+      fairValue = finalYear.eps * exitMultiple;
+      upside = ((fairValue - currentPrice) / currentPrice) * 100;
+  }
+  
+  console.log('Exit Multiple Calculation:', {
+    exitType,
+    exitMultiple,
+    finalYearEPS: finalYear.eps,
+    finalYearEBITDA: finalYear.ebitda,
+    finalYearFCF: finalYear.freeCashFlow,
+    calculatedFairValue: fairValue,
+    currentPrice,
+    currentEV,
+    calculatedUpside: upside
+  });
+  
+  return { fairValue, upside };
+};
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const ticker = searchParams.get('ticker');
   const method = searchParams.get('method') || 'dcf';
+  const selectedMultiple = searchParams.get('multiple') || 'auto';
 
   // Validate required parameters
   if (!ticker) {
@@ -527,7 +670,7 @@ export async function GET(request) {
 
   try {
     // Generate valuation
-    const valuation = await generateValuation(ticker, method);
+    const valuation = await generateValuation(ticker, method, selectedMultiple);
     
     // Validate the valuation structure
     if (!valuation || !valuation.valuation) {
@@ -550,6 +693,8 @@ export async function GET(request) {
                            valuation.valuation.intrinsic_value_per_share || 0),
       currentPrice: parseFloat(valuation.valuation.currentPrice || 
                               valuation.valuation.current_price || 0),
+      currentEV: parseFloat(valuation.valuation.current_ev || 
+                           valuation.valuation.currentEv || 0),
       upside: parseFloat(valuation.valuation.upside || 
                         valuation.valuation.upside_downside || 
                         valuation.valuation.upside_potential ||
@@ -641,6 +786,8 @@ export async function GET(request) {
         freeCashFlow: parseFloat(p.freeCashFlow),
         fcf: parseFloat(p.freeCashFlow), // Also map to fcf for frontend compatibility
         ebitda: parseFloat(p.ebitda),
+        netIncome: parseFloat(p.netIncome),
+        eps: parseFloat(p.eps),
         capex: parseFloat(p.capex),
         workingCapital: parseFloat(p.workingCapital)
       }));
@@ -652,21 +799,46 @@ export async function GET(request) {
           revenue: 0,
           freeCashFlow: 0,
           ebitda: 0,
+          netIncome: 0,
+          eps: 0,
           capex: 0,
           workingCapital: 0
         }];
       }
       
       formattedValuation.assumptions = {
-        growthRate: parseFloat(valuation.valuation.assumptions?.growthRate || 0),
-        discountRate: parseFloat(valuation.valuation.assumptions?.discountRate || 0),
         exitMultiple: parseFloat(valuation.valuation.assumptions?.exitMultiple || 0),
-        exitMultipleType: valuation.valuation.assumptions?.exitMultipleType || 'N/A'
+        exitMultipleType: valuation.valuation.assumptions?.exitMultipleType || 'N/A',
+        enterpriseValue: valuation.valuation.assumptions?.enterpriseValue || 0
       };
+      
+      // Calculate fair value ourselves using exit multiple
+      const { fairValue, upside } = calculateExitMultipleValue(
+        formattedValuation.projections,
+        formattedValuation.assumptions,
+        formattedValuation.currentPrice,
+        formattedValuation.currentEV
+      );
+      
+      // Override Claude's values with our calculated values
+      formattedValuation.fairValue = fairValue;
+      formattedValuation.upside = upside;
+      
+      // Convert sensitivity values to EV-based for EV multiples
+      if (formattedValuation.assumptions.exitMultipleType === 'EV/EBITDA' || 
+          formattedValuation.assumptions.exitMultipleType === 'EV/FCF') {
+        // Convert sensitivity values from per-share to EV values (multiply by 1000 for display)
+        formattedValuation.analysis.sensitivity.bullCase = formattedValuation.analysis.sensitivity.bullCase * 1000;
+        formattedValuation.analysis.sensitivity.baseCase = formattedValuation.analysis.sensitivity.baseCase * 1000;
+        formattedValuation.analysis.sensitivity.bearCase = formattedValuation.analysis.sensitivity.bearCase * 1000;
+      }
     }
 
     // Generate Excel data with the properly formatted valuation
-    const excelData = generateExcelData(formattedValuation);
+    const excelData = generateExcelData({
+      valuation: formattedValuation,
+      analysis: formattedValuation.analysis
+    });
     
     // Add excelData to the formatted valuation
     formattedValuation.excelData = excelData;
