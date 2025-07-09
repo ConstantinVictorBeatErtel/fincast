@@ -168,7 +168,7 @@ export default function DCFValuation() {
   // Helper function to format values in millions
   const formatMillions = (value) => {
     if (typeof value !== 'number' || isNaN(value)) return 'N/A';
-    return `$${(value / 1000).toFixed(1)}M`;
+    return `$${(value / 1000000).toFixed(1)}M`;
   };
 
   // Helper function to format percentage values
@@ -314,11 +314,6 @@ export default function DCFValuation() {
                 <CardHeader>
                   <CardTitle>
                     Financial Projections
-                    {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && (
-                      <span className="text-sm font-normal text-gray-500 ml-2">
-                        (Showing metrics relevant for {valuation.assumptions.exitMultipleType} multiple)
-                      </span>
-                    )}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
