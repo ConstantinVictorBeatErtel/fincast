@@ -290,7 +290,7 @@ export default function DCFValuation() {
                     {shouldShowEVDisplay() ? 'Current EV' : 'Current Price'}
                   </h3>
                   <p className="text-2xl font-bold">
-                    {shouldShowEVDisplay() ? formatFairEVMillions(valuation.currentEV / 1000) : formatCurrency(valuation.currentPrice)}
+                    {shouldShowEVDisplay() ? formatFairEVMillions(valuation.currentEV * 1000) : formatCurrency(valuation.currentPrice)}
                   </p>
                 </div>
                 <div>
