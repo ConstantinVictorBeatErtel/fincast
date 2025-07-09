@@ -464,12 +464,14 @@ function generateExcelData(valuation) {
       name: 'Valuation Summary',
       data: [
         ['Valuation Summary'],
-        ['Fair Value', valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0],
+        ['Fair Value', method === 'exit-multiple' && valuationData.assumptions?.exitMultipleType && 
+                      (valuationData.assumptions.exitMultipleType === 'EV/EBITDA' || valuationData.assumptions.exitMultipleType === 'EV/FCF') 
+                      ? (valuationData.fairValue * 1000) : (valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0)],
         ['Current Price', valuationData.currentPrice || valuationData.current_price || 0],
         ...(method === 'exit-multiple' && valuationData.currentEV && 
             valuationData.assumptions?.exitMultipleType && 
             (valuationData.assumptions.exitMultipleType === 'EV/EBITDA' || valuationData.assumptions.exitMultipleType === 'EV/FCF') 
-            ? [['Current EV (M)', (valuationData.currentEV / 1000).toFixed(1)]] : []),
+            ? [['Current EV (M)', (valuationData.currentEV * 1000 / 1000).toFixed(1)]] : []),
         ['Upside', valuationData.upside || valuationData.upside_downside || valuationData.upside_potential || valuationData.gf_upside || 0],
         ['Confidence', valuationData.confidence || valuationData.recommendation || valuationData.analyst_consensus || 'Medium'],
         ['Method', valuationData.method || method],
@@ -738,12 +740,12 @@ export async function GET(request) {
     if (method === 'dcf') {
       formattedValuation.projections = (valuation.valuation.projections || []).map(p => ({
         year: parseInt(p.year),
-        revenue: parseFloat(p.revenue),
-        freeCashFlow: parseFloat(p.freeCashFlow),
-        fcf: parseFloat(p.freeCashFlow), // Also map to fcf for frontend compatibility
-        ebitda: parseFloat(p.ebitda),
-        capex: parseFloat(p.capex),
-        workingCapital: parseFloat(p.workingCapital)
+        revenue: parseFloat(p.revenue) * 1000,
+        freeCashFlow: parseFloat(p.freeCashFlow) * 1000,
+        fcf: parseFloat(p.freeCashFlow) * 1000, // Also map to fcf for frontend compatibility
+        ebitda: parseFloat(p.ebitda) * 1000,
+        capex: parseFloat(p.capex) * 1000,
+        workingCapital: parseFloat(p.workingCapital) * 1000
       }));
       
       // Fallback: If projections is empty, add a dummy row
@@ -797,14 +799,14 @@ export async function GET(request) {
     } else if (method === 'exit-multiple') {
       formattedValuation.projections = (valuation.valuation.projections || []).map(p => ({
         year: parseInt(p.year),
-        revenue: parseFloat(p.revenue),
-        freeCashFlow: parseFloat(p.freeCashFlow),
-        fcf: parseFloat(p.freeCashFlow), // Also map to fcf for frontend compatibility
-        ebitda: parseFloat(p.ebitda),
-        netIncome: parseFloat(p.netIncome),
+        revenue: parseFloat(p.revenue) * 1000,
+        freeCashFlow: parseFloat(p.freeCashFlow) * 1000,
+        fcf: parseFloat(p.freeCashFlow) * 1000, // Also map to fcf for frontend compatibility
+        ebitda: parseFloat(p.ebitda) * 1000,
+        netIncome: parseFloat(p.netIncome) * 1000,
         eps: parseFloat(p.eps),
-        capex: parseFloat(p.capex),
-        workingCapital: parseFloat(p.workingCapital)
+        capex: parseFloat(p.capex) * 1000,
+        workingCapital: parseFloat(p.workingCapital) * 1000
       }));
       
       // Fallback: If projections is empty, add a dummy row
@@ -860,8 +862,10 @@ export async function GET(request) {
       // Convert sensitivity values to EV-based for EV multiples
       if (formattedValuation.assumptions.exitMultipleType === 'EV/EBITDA' || 
           formattedValuation.assumptions.exitMultipleType === 'EV/FCF') {
-        // Sensitivity values are already in the correct scale for EV multiples
-        // No multiplication needed since they should be displayed as-is
+        // Add 3 zeros to sensitivity values for EV multiples
+        formattedValuation.analysis.sensitivity.bullCase = formattedValuation.analysis.sensitivity.bullCase * 1000;
+        formattedValuation.analysis.sensitivity.baseCase = formattedValuation.analysis.sensitivity.baseCase * 1000;
+        formattedValuation.analysis.sensitivity.bearCase = formattedValuation.analysis.sensitivity.bearCase * 1000;
       }
     }
 
