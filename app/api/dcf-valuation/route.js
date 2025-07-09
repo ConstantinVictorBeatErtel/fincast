@@ -466,7 +466,7 @@ function generateExcelData(valuation) {
         ['Valuation Summary'],
         ['Fair Value', method === 'exit-multiple' && valuationData.assumptions?.exitMultipleType && 
                       (valuationData.assumptions.exitMultipleType === 'EV/EBITDA' || valuationData.assumptions.exitMultipleType === 'EV/FCF') 
-                      ? (valuationData.fairValue * 1000) : (valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0)],
+                      ? (valuationData.fairValue) : (valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0)],
         ['Current Price', valuationData.currentPrice || valuationData.current_price || 0],
         ...(method === 'exit-multiple' && valuationData.currentEV && 
             valuationData.assumptions?.exitMultipleType && 
@@ -604,7 +604,8 @@ const calculateExitMultipleValue = (projections, assumptions, currentPrice, curr
       break;
     case 'EV/EBITDA':
       // Calculate Enterprise Value = EBITDA × multiple
-      const enterpriseValue = finalYear.ebitda * exitMultiple;
+      // Note: projections are already multiplied by 1000, so divide by 1000 to get original scale
+      const enterpriseValue = (finalYear.ebitda / 1000) * exitMultiple;
       // Calculate upside based on fair EV vs current EV
       if (currentEV && currentEV > 0) {
         upside = ((enterpriseValue / currentEV) - 1) * 100;
@@ -618,7 +619,8 @@ const calculateExitMultipleValue = (projections, assumptions, currentPrice, curr
       break;
     case 'EV/FCF':
       // Calculate Enterprise Value = FCF × multiple
-      const evFcf = finalYear.freeCashFlow * exitMultiple;
+      // Note: projections are already multiplied by 1000, so divide by 1000 to get original scale
+      const evFcf = (finalYear.freeCashFlow / 1000) * exitMultiple;
       if (currentEV && currentEV > 0) {
         upside = ((evFcf / currentEV) - 1) * 100;
       } else {

@@ -323,14 +323,15 @@ export default function DCFValuation() {
                         <tr>
                           <th className="text-left">Year</th>
                           <th className="text-right">Revenue</th>
+                          <th className="text-right">Revenue Growth</th>
                           <th className="text-right">Free Cash Flow</th>
+                          <th className="text-right">FCF Growth</th>
                           <th className="text-right">FCF Margin</th>
+                          <th className="text-right">EBITDA</th>
+                          <th className="text-right">EBITDA Growth</th>
                           <th className="text-right">EBITDA Margin</th>
                           {method === 'dcf' ? (
                             <>
-                              {valuation.projections?.[0]?.ebitda && (
-                                <th className="text-right">EBITDA</th>
-                              )}
                               {valuation.projections?.[0]?.capex && (
                                 <th className="text-right">Capex</th>
                               )}
@@ -340,60 +341,86 @@ export default function DCFValuation() {
                             </>
                           ) : (
                             <>
-                              {valuation.projections?.[0]?.ebitda && (
-                                <th className="text-right">EBITDA</th>
-                              )}
                               {valuation.projections?.[0]?.netIncome && (
                                 <th className="text-right">Net Income</th>
+                              )}
+                              {valuation.projections?.[0]?.netIncome && (
+                                <th className="text-right">Net Income Growth</th>
+                              )}
+                              {valuation.projections?.[0]?.netIncome && (
+                                <th className="text-right">Net Income Margin</th>
                               )}
                               {valuation.projections?.[0]?.eps && (
                                 <th className="text-right">EPS</th>
                               )}
-                              {valuation.projections?.[0]?.netIncome && (
-                                <th className="text-right">Net Income Margin</th>
+                              {valuation.projections?.[0]?.eps && (
+                                <th className="text-right">EPS Growth</th>
                               )}
                             </>
                           )}
                         </tr>
                       </thead>
                       <tbody>
-                        {valuation.projections?.map((projection) => (
-                          <tr key={projection.year}>
-                            <td>{projection.year}</td>
-                            <td className="text-right">{formatMillions(projection.revenue)}</td>
-                            <td className="text-right">{formatMillions(projection.fcf || projection.freeCashFlow)}</td>
-                            <td className="text-right">{formatPercentage((projection.fcf || projection.freeCashFlow) / projection.revenue * 100)}</td>
-                            <td className="text-right">{formatPercentage(projection.ebitda / projection.revenue * 100)}</td>
-                            {method === 'dcf' ? (
-                              <>
-                                {valuation.projections?.[0]?.ebitda && (
-                                  <td className="text-right">{formatMillions(projection.ebitda)}</td>
-                                )}
-                                {valuation.projections?.[0]?.capex && (
-                                  <td className="text-right">{formatMillions(projection.capex)}</td>
-                                )}
-                                {valuation.projections?.[0]?.workingCapital && (
-                                  <td className="text-right">{formatMillions(projection.workingCapital)}</td>
-                                )}
-                              </>
-                            ) : (
-                              <>
-                                {valuation.projections?.[0]?.ebitda && (
-                                  <td className="text-right">{formatMillions(projection.ebitda)}</td>
-                                )}
-                                {valuation.projections?.[0]?.netIncome && (
-                                  <td className="text-right">{formatMillions(projection.netIncome)}</td>
-                                )}
-                                {valuation.projections?.[0]?.eps && (
-                                  <td className="text-right">${projection.eps?.toFixed(2) || 'N/A'}</td>
-                                )}
-                                {valuation.projections?.[0]?.netIncome && (
-                                  <td className="text-right">{formatPercentage(projection.netIncome / projection.revenue * 100)}</td>
-                                )}
-                              </>
-                            )}
-                          </tr>
-                        ))}
+                        {valuation.projections?.map((projection, index) => {
+                          const prevProjection = index > 0 ? valuation.projections[index - 1] : null;
+                          const revenueGrowth = prevProjection && prevProjection.revenue > 0 
+                            ? ((projection.revenue - prevProjection.revenue) / prevProjection.revenue) * 100 
+                            : 0;
+                          const fcfGrowth = prevProjection && prevProjection.fcf > 0 
+                            ? (((projection.fcf || projection.freeCashFlow) - prevProjection.fcf) / prevProjection.fcf) * 100 
+                            : 0;
+                          const ebitdaGrowth = prevProjection && prevProjection.ebitda > 0 
+                            ? ((projection.ebitda - prevProjection.ebitda) / prevProjection.ebitda) * 100 
+                            : 0;
+                          const netIncomeGrowth = prevProjection && prevProjection.netIncome > 0 
+                            ? ((projection.netIncome - prevProjection.netIncome) / prevProjection.netIncome) * 100 
+                            : 0;
+                          const epsGrowth = prevProjection && prevProjection.eps > 0 
+                            ? ((projection.eps - prevProjection.eps) / prevProjection.eps) * 100 
+                            : 0;
+                          
+                          return (
+                            <tr key={projection.year}>
+                              <td>{projection.year}</td>
+                              <td className="text-right">{formatMillions(projection.revenue)}</td>
+                              <td className="text-right">{index === 0 ? 'N/A' : formatPercentage(revenueGrowth)}</td>
+                              <td className="text-right">{formatMillions(projection.fcf || projection.freeCashFlow)}</td>
+                              <td className="text-right">{index === 0 ? 'N/A' : formatPercentage(fcfGrowth)}</td>
+                              <td className="text-right">{formatPercentage((projection.fcf || projection.freeCashFlow) / projection.revenue * 100)}</td>
+                              <td className="text-right">{formatMillions(projection.ebitda)}</td>
+                              <td className="text-right">{index === 0 ? 'N/A' : formatPercentage(ebitdaGrowth)}</td>
+                              <td className="text-right">{formatPercentage(projection.ebitda / projection.revenue * 100)}</td>
+                              {method === 'dcf' ? (
+                                <>
+                                  {valuation.projections?.[0]?.capex && (
+                                    <td className="text-right">{formatMillions(projection.capex)}</td>
+                                  )}
+                                  {valuation.projections?.[0]?.workingCapital && (
+                                    <td className="text-right">{formatMillions(projection.workingCapital)}</td>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  {valuation.projections?.[0]?.netIncome && (
+                                    <td className="text-right">{formatMillions(projection.netIncome)}</td>
+                                  )}
+                                  {valuation.projections?.[0]?.netIncome && (
+                                    <td className="text-right">{index === 0 ? 'N/A' : formatPercentage(netIncomeGrowth)}</td>
+                                  )}
+                                  {valuation.projections?.[0]?.netIncome && (
+                                    <td className="text-right">{formatPercentage(projection.netIncome / projection.revenue * 100)}</td>
+                                  )}
+                                  {valuation.projections?.[0]?.eps && (
+                                    <td className="text-right">${projection.eps?.toFixed(2) || 'N/A'}</td>
+                                  )}
+                                  {valuation.projections?.[0]?.eps && (
+                                    <td className="text-right">{index === 0 ? 'N/A' : formatPercentage(epsGrowth)}</td>
+                                  )}
+                                </>
+                              )}
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
