@@ -454,38 +454,41 @@ export default function DCFValuation() {
                         ))}
                       </ul>
                     </div>
-                    <div>
-                      <h3 className="text-lg font-medium mb-2">Sensitivity Analysis</h3>
-                      <div className="grid grid-cols-3 gap-4">
-                        <div>
-                          <p className="text-sm text-gray-500">Bull Case</p>
-                          <p className="text-lg font-medium">
-                            {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
-                             (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
-                             ? formatMillions(valuation.analysis.sensitivity.bullCase) 
-                             : formatCurrency(valuation.analysis.sensitivity.bullCase)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-500">Base Case</p>
-                          <p className="text-lg font-medium">
-                            {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
-                             (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
-                             ? formatMillions(valuation.analysis.sensitivity.baseCase) 
-                             : formatCurrency(valuation.analysis.sensitivity.baseCase)}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-500">Bear Case</p>
-                          <p className="text-lg font-medium">
-                            {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
-                             (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
-                             ? formatMillions(valuation.analysis.sensitivity.bearCase) 
-                             : formatCurrency(valuation.analysis.sensitivity.bearCase)}
-                          </p>
+                    {method !== 'exit-multiple' || !valuation.assumptions?.exitMultipleType || 
+                     (valuation.assumptions.exitMultipleType !== 'EV/EBITDA' && valuation.assumptions.exitMultipleType !== 'EV/FCF') ? (
+                      <div>
+                        <h3 className="text-lg font-medium mb-2">Sensitivity Analysis</h3>
+                        <div className="grid grid-cols-3 gap-4">
+                          <div>
+                            <p className="text-sm text-gray-500">Bull Case</p>
+                            <p className="text-lg font-medium">
+                              {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
+                               (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
+                               ? formatMillions(valuation.analysis.sensitivity?.bullCase || 0) 
+                               : formatCurrency(valuation.analysis.sensitivity?.bullCase || 0)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">Base Case</p>
+                            <p className="text-lg font-medium">
+                              {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
+                               (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
+                               ? formatMillions(valuation.analysis.sensitivity?.baseCase || 0) 
+                               : formatCurrency(valuation.analysis.sensitivity?.baseCase || 0)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">Bear Case</p>
+                            <p className="text-lg font-medium">
+                              {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
+                               (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
+                               ? formatMillions(valuation.analysis.sensitivity?.bearCase || 0) 
+                               : formatCurrency(valuation.analysis.sensitivity?.bearCase || 0)}
+                            </p>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    ) : null}
                     {method === 'exit-multiple' && valuation.analysis.multipleExplanation && (
                       <div>
                         <h3 className="text-lg font-medium mb-2">Multiple Selection Reasoning</h3>
