@@ -608,8 +608,8 @@ const calculateExitMultipleValue = (projections, assumptions, currentPrice, curr
         const estimatedMarketCap = currentPrice * 1000000;
         upside = ((enterpriseValue - estimatedMarketCap) / estimatedMarketCap) * 100;
       }
-      // Display the EV in millions (divide by 1000 for display)
-      fairValue = enterpriseValue / 1000;
+      // Display the EV as the raw calculated value
+      fairValue = enterpriseValue;
       break;
     case 'EV/FCF':
       // Calculate Enterprise Value = FCF × multiple
@@ -621,8 +621,8 @@ const calculateExitMultipleValue = (projections, assumptions, currentPrice, curr
         const estimatedMarketCap = currentPrice * 1000000;
         upside = ((evFcf - estimatedMarketCap) / estimatedMarketCap) * 100;
       }
-      // Display the EV in millions (divide by 1000 for display)
-      fairValue = evFcf / 1000;
+      // Display the EV as the raw calculated value
+      fairValue = evFcf;
       break;
     default:
       // Default to P/E if type is unknown
@@ -827,10 +827,8 @@ export async function GET(request) {
       // Convert sensitivity values to EV-based for EV multiples
       if (formattedValuation.assumptions.exitMultipleType === 'EV/EBITDA' || 
           formattedValuation.assumptions.exitMultipleType === 'EV/FCF') {
-        // Convert sensitivity values from per-share to EV values (multiply by 1000 for display)
-        formattedValuation.analysis.sensitivity.bullCase = formattedValuation.analysis.sensitivity.bullCase * 1000;
-        formattedValuation.analysis.sensitivity.baseCase = formattedValuation.analysis.sensitivity.baseCase * 1000;
-        formattedValuation.analysis.sensitivity.bearCase = formattedValuation.analysis.sensitivity.bearCase * 1000;
+        // Sensitivity values are already in the correct scale for EV multiples
+        // No multiplication needed since they should be displayed as-is
       }
     }
 
