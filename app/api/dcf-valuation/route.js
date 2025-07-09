@@ -464,12 +464,12 @@ function generateExcelData(valuation) {
       name: 'Valuation Summary',
       data: [
         ['Valuation Summary'],
-        ['Fair Value', valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0],
+        ['Fair Value', (valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0) * 1000],
         ['Current Price', valuationData.currentPrice || valuationData.current_price || 0],
         ...(method === 'exit-multiple' && valuationData.currentEV && 
             valuationData.assumptions?.exitMultipleType && 
             (valuationData.assumptions.exitMultipleType === 'EV/EBITDA' || valuationData.assumptions.exitMultipleType === 'EV/FCF') 
-            ? [['Current EV (M)', (valuationData.currentEV / 1000).toFixed(1)]] : []),
+            ? [['Current EV (M)', ((valuationData.currentEV * 1000) / 1000).toFixed(1)]] : []),
         ['Upside', valuationData.upside || valuationData.upside_downside || valuationData.upside_potential || valuationData.gf_upside || 0],
         ['Confidence', valuationData.confidence || valuationData.recommendation || valuationData.analyst_consensus || 'Medium'],
         ['Method', valuationData.method || method],
@@ -519,8 +519,8 @@ function generateExcelData(valuation) {
     const projectionHeaders = ['Year', 'Revenue (M)', 'Free Cash Flow (M)', 'FCF Margin (%)', 'EBITDA Margin (%)'];
     const projectionData = (valuationData.projections || []).map(p => [
       p.year,
-      (p.revenue / 1000000).toFixed(1),
-      ((p.fcf || p.freeCashFlow) / 1000000).toFixed(1),
+      ((p.revenue * 1000000) / 1000000).toFixed(1),
+      (((p.fcf || p.freeCashFlow) * 1000000) / 1000000).toFixed(1),
       p.revenue > 0 ? ((p.fcf || p.freeCashFlow) / p.revenue * 100).toFixed(1) : '0.0',
       p.revenue > 0 ? (p.ebitda / p.revenue * 100).toFixed(1) : '0.0'
     ]);
@@ -531,8 +531,8 @@ function generateExcelData(valuation) {
       projectionData.forEach((row, index) => {
         const projection = valuationData.projections[index];
         row.push(
-          (projection.ebitda / 1000000).toFixed(1),
-          (projection.netIncome / 1000000).toFixed(1),
+          ((projection.ebitda * 1000000) / 1000000).toFixed(1),
+          ((projection.netIncome * 1000000) / 1000000).toFixed(1),
           projection.eps.toFixed(2),
           projection.revenue > 0 ? (projection.netIncome / projection.revenue * 100).toFixed(1) : '0.0'
         );
@@ -543,7 +543,7 @@ function generateExcelData(valuation) {
       projectionData.forEach((row, index) => {
         const projection = valuationData.projections[index];
         row.push(
-          (projection.ebitda / 1000000).toFixed(1),
+          ((projection.ebitda * 1000000) / 1000000).toFixed(1),
           (projection.capex / 1000000).toFixed(1),
           (projection.workingCapital / 1000000).toFixed(1)
         );

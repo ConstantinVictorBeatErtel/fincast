@@ -171,6 +171,12 @@ export default function DCFValuation() {
     return `$${(value / 1000).toFixed(1)}M`;
   };
 
+  // Helper function to format Fair EV values in millions (multiply by 1000 for dashboard display)
+  const formatFairEVMillions = (value) => {
+    if (typeof value !== 'number' || isNaN(value)) return 'N/A';
+    return `$${(value * 1000 / 1000).toFixed(1)}M`;
+  };
+
   // Helper function to format percentage values
   const formatPercentage = (value) => {
     if (typeof value !== 'number' || isNaN(value)) return 'N/A';
@@ -276,7 +282,7 @@ export default function DCFValuation() {
                     {shouldShowEVDisplay() ? 'Fair EV' : 'Fair Value'}
                   </h3>
                   <p className="text-2xl font-bold">
-                    {shouldShowEVDisplay() ? formatMillions(valuation.fairValue) : formatCurrency(valuation.fairValue)}
+                    {shouldShowEVDisplay() ? formatFairEVMillions(valuation.fairValue) : formatCurrency(valuation.fairValue)}
                   </p>
                 </div>
                 <div>
@@ -325,10 +331,8 @@ export default function DCFValuation() {
                           <th className="text-right">Revenue</th>
                           <th className="text-right">Revenue Growth</th>
                           <th className="text-right">Free Cash Flow</th>
-                          <th className="text-right">FCF Growth</th>
                           <th className="text-right">FCF Margin</th>
                           <th className="text-right">EBITDA</th>
-                          <th className="text-right">EBITDA Growth</th>
                           <th className="text-right">EBITDA Margin</th>
                           {method === 'dcf' ? (
                             <>
@@ -345,16 +349,10 @@ export default function DCFValuation() {
                                 <th className="text-right">Net Income</th>
                               )}
                               {valuation.projections?.[0]?.netIncome && (
-                                <th className="text-right">Net Income Growth</th>
-                              )}
-                              {valuation.projections?.[0]?.netIncome && (
                                 <th className="text-right">Net Income Margin</th>
                               )}
                               {valuation.projections?.[0]?.eps && (
                                 <th className="text-right">EPS</th>
-                              )}
-                              {valuation.projections?.[0]?.eps && (
-                                <th className="text-right">EPS Growth</th>
                               )}
                             </>
                           )}
@@ -366,55 +364,35 @@ export default function DCFValuation() {
                           const revenueGrowth = prevProjection && prevProjection.revenue > 0 
                             ? ((projection.revenue - prevProjection.revenue) / prevProjection.revenue) * 100 
                             : 0;
-                          const fcfGrowth = prevProjection && prevProjection.fcf > 0 
-                            ? (((projection.fcf || projection.freeCashFlow) - prevProjection.fcf) / prevProjection.fcf) * 100 
-                            : 0;
-                          const ebitdaGrowth = prevProjection && prevProjection.ebitda > 0 
-                            ? ((projection.ebitda - prevProjection.ebitda) / prevProjection.ebitda) * 100 
-                            : 0;
-                          const netIncomeGrowth = prevProjection && prevProjection.netIncome > 0 
-                            ? ((projection.netIncome - prevProjection.netIncome) / prevProjection.netIncome) * 100 
-                            : 0;
-                          const epsGrowth = prevProjection && prevProjection.eps > 0 
-                            ? ((projection.eps - prevProjection.eps) / prevProjection.eps) * 100 
-                            : 0;
                           
                           return (
                             <tr key={projection.year}>
                               <td>{projection.year}</td>
-                              <td className="text-right">{formatMillions(projection.revenue)}</td>
+                              <td className="text-right">{formatMillions(projection.revenue * 1000)}</td>
                               <td className="text-right">{index === 0 ? 'N/A' : formatPercentage(revenueGrowth)}</td>
-                              <td className="text-right">{formatMillions(projection.fcf || projection.freeCashFlow)}</td>
-                              <td className="text-right">{index === 0 ? 'N/A' : formatPercentage(fcfGrowth)}</td>
+                              <td className="text-right">{formatMillions((projection.fcf || projection.freeCashFlow) * 1000)}</td>
                               <td className="text-right">{formatPercentage((projection.fcf || projection.freeCashFlow) / projection.revenue * 100)}</td>
-                              <td className="text-right">{formatMillions(projection.ebitda)}</td>
-                              <td className="text-right">{index === 0 ? 'N/A' : formatPercentage(ebitdaGrowth)}</td>
+                              <td className="text-right">{formatMillions(projection.ebitda * 1000)}</td>
                               <td className="text-right">{formatPercentage(projection.ebitda / projection.revenue * 100)}</td>
                               {method === 'dcf' ? (
                                 <>
                                   {valuation.projections?.[0]?.capex && (
-                                    <td className="text-right">{formatMillions(projection.capex)}</td>
+                                    <td className="text-right">{formatMillions(projection.capex * 1000)}</td>
                                   )}
                                   {valuation.projections?.[0]?.workingCapital && (
-                                    <td className="text-right">{formatMillions(projection.workingCapital)}</td>
+                                    <td className="text-right">{formatMillions(projection.workingCapital * 1000)}</td>
                                   )}
                                 </>
                               ) : (
                                 <>
                                   {valuation.projections?.[0]?.netIncome && (
-                                    <td className="text-right">{formatMillions(projection.netIncome)}</td>
-                                  )}
-                                  {valuation.projections?.[0]?.netIncome && (
-                                    <td className="text-right">{index === 0 ? 'N/A' : formatPercentage(netIncomeGrowth)}</td>
+                                    <td className="text-right">{formatMillions(projection.netIncome * 1000)}</td>
                                   )}
                                   {valuation.projections?.[0]?.netIncome && (
                                     <td className="text-right">{formatPercentage(projection.netIncome / projection.revenue * 100)}</td>
                                   )}
                                   {valuation.projections?.[0]?.eps && (
                                     <td className="text-right">${projection.eps?.toFixed(2) || 'N/A'}</td>
-                                  )}
-                                  {valuation.projections?.[0]?.eps && (
-                                    <td className="text-right">{index === 0 ? 'N/A' : formatPercentage(epsGrowth)}</td>
                                   )}
                                 </>
                               )}
