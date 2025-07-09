@@ -21,6 +21,13 @@ const generateValuation = async (ticker, method, selectedMultiple = 'auto') => {
       "discountRate": X,
       "fcfMargin": X
     },
+    "actual_2024": {
+      "revenue": X,
+      "freeCashFlow": X,
+      "ebitda": X,
+      "capex": X,
+      "workingCapital": X
+    },
     "projections": [
       // Repeat the following object for each year 2025-2029:
       {
@@ -44,7 +51,7 @@ const generateValuation = async (ticker, method, selectedMultiple = 'auto') => {
     }
   }
 }
-Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
+Projections must be for years 2025, 2026, 2027, 2028, and 2029. Use actual 2024 financial data as the starting point for projections. Include actual 2024 numbers in actual_2024 section.`;
     } else if (method === 'exit-multiple') {
       // Determine the appropriate multiple type based on industry and user selection
       let multipleTypeInstruction = '';
@@ -72,6 +79,15 @@ Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
       "exitMultipleType": "...",
       "enterpriseValue": X
     },
+    "actual_2024": {
+      "revenue": X,
+      "freeCashFlow": X,
+      "ebitda": X,
+      "netIncome": X,
+      "eps": X,
+      "capex": X,
+      "workingCapital": X
+    },
     "projections": [
       // Repeat the following object for each year 2025-2029:
       {
@@ -98,7 +114,7 @@ Projections must be for years 2025, 2026, 2027, 2028, and 2029.`;
     "multipleExplanation": "..."
   }
 }
-Projections must be for years 2025, 2026, 2027, 2028, and 2029. Include EBITDA, Net Income, and EPS for multiple analysis.
+Projections must be for years 2025, 2026, 2027, 2028, and 2029. Include EBITDA, Net Income, and EPS for multiple analysis. Use actual 2024 financial data as the starting point for projections. Include actual 2024 numbers in actual_2024 section.
 
 ${multipleTypeInstruction}
 
@@ -117,7 +133,7 @@ CRITICAL: If you use EV/EBITDA or EV/FCF, get the MOST CURRENT and UPDATED curre
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1200,
-        system: `Return ONLY JSON. NO text. NO explanations. Get CURRENT data.`,
+        system: `Return ONLY JSON. NO text. NO explanations. Get CURRENT data. Use actual 2024 financial results and current market data. Search for the most recent quarterly/annual reports and current stock prices.`,
         messages: [
           {
             role: 'user',
@@ -517,7 +533,21 @@ function generateExcelData(valuation) {
   // Add projections sheet for DCF and exit-multiple methods
   if (method === 'dcf' || method === 'exit-multiple') {
     const projectionHeaders = ['Year', 'Revenue (M)', 'Free Cash Flow (M)', 'FCF Margin (%)', 'EBITDA Margin (%)'];
-    const projectionData = (valuationData.projections || []).map(p => [
+    const projectionData = [];
+    
+    // Add actual 2024 data if available
+    if (valuationData.actual2024) {
+      projectionData.push([
+        '2024 (Actual)',
+        ((valuationData.actual2024.revenue * 1000000) / 1000000).toFixed(1),
+        (((valuationData.actual2024.fcf || valuationData.actual2024.freeCashFlow) * 1000000) / 1000000).toFixed(1),
+        valuationData.actual2024.revenue > 0 ? ((valuationData.actual2024.fcf || valuationData.actual2024.freeCashFlow) / valuationData.actual2024.revenue * 100).toFixed(1) : '0.0',
+        valuationData.actual2024.revenue > 0 ? (valuationData.actual2024.ebitda / valuationData.actual2024.revenue * 100).toFixed(1) : '0.0'
+      ]);
+    }
+    
+    // Add projected years
+    const projectedData = (valuationData.projections || []).map(p => [
       p.year,
       ((p.revenue * 1000000) / 1000000).toFixed(1),
       (((p.fcf || p.freeCashFlow) * 1000000) / 1000000).toFixed(1),
@@ -525,28 +555,57 @@ function generateExcelData(valuation) {
       p.revenue > 0 ? (p.ebitda / p.revenue * 100).toFixed(1) : '0.0'
     ]);
     
+    projectionData.push(...projectedData);
+    
     // Add additional columns for exit-multiple method
     if (method === 'exit-multiple') {
       projectionHeaders.push('EBITDA (M)', 'Net Income (M)', 'EPS', 'Net Income Margin (%)');
-      projectionData.forEach((row, index) => {
-        const projection = valuationData.projections[index];
-        row.push(
-          ((projection.ebitda * 1000000) / 1000000).toFixed(1),
-          ((projection.netIncome * 1000000) / 1000000).toFixed(1),
-          projection.eps.toFixed(2),
-          projection.revenue > 0 ? (projection.netIncome / projection.revenue * 100).toFixed(1) : '0.0'
+      
+      // Update actual 2024 row with additional columns
+      if (valuationData.actual2024) {
+        projectionData[0].push(
+          ((valuationData.actual2024.ebitda * 1000000) / 1000000).toFixed(1),
+          ((valuationData.actual2024.netIncome * 1000000) / 1000000).toFixed(1),
+          valuationData.actual2024.eps.toFixed(2),
+          valuationData.actual2024.revenue > 0 ? (valuationData.actual2024.netIncome / valuationData.actual2024.revenue * 100).toFixed(1) : '0.0'
         );
+      }
+      
+      // Update projected rows with additional columns
+      projectionData.forEach((row, index) => {
+        if (index > 0 || !valuationData.actual2024) { // Skip actual 2024 row if it exists
+          const projection = valuationData.projections[index - (valuationData.actual2024 ? 1 : 0)];
+          row.push(
+            ((projection.ebitda * 1000000) / 1000000).toFixed(1),
+            ((projection.netIncome * 1000000) / 1000000).toFixed(1),
+            projection.eps.toFixed(2),
+            projection.revenue > 0 ? (projection.netIncome / projection.revenue * 100).toFixed(1) : '0.0'
+          );
+        }
       });
     } else {
       // For DCF, add the original columns
       projectionHeaders.push('EBITDA (M)', 'Capex (M)', 'Working Capital (M)');
-      projectionData.forEach((row, index) => {
-        const projection = valuationData.projections[index];
-        row.push(
-          ((projection.ebitda * 1000000) / 1000000).toFixed(1),
-          (projection.capex / 1000000).toFixed(1),
-          (projection.workingCapital / 1000000).toFixed(1)
+      
+      // Update actual 2024 row with additional columns
+      if (valuationData.actual2024) {
+        projectionData[0].push(
+          ((valuationData.actual2024.ebitda * 1000000) / 1000000).toFixed(1),
+          (valuationData.actual2024.capex / 1000000).toFixed(1),
+          (valuationData.actual2024.workingCapital / 1000000).toFixed(1)
         );
+      }
+      
+      // Update projected rows with additional columns
+      projectionData.forEach((row, index) => {
+        if (index > 0 || !valuationData.actual2024) { // Skip actual 2024 row if it exists
+          const projection = valuationData.projections[index - (valuationData.actual2024 ? 1 : 0)];
+          row.push(
+            ((projection.ebitda * 1000000) / 1000000).toFixed(1),
+            (projection.capex / 1000000).toFixed(1),
+            (projection.workingCapital / 1000000).toFixed(1)
+          );
+        }
       });
     }
     
@@ -749,6 +808,18 @@ export async function GET(request) {
         workingCapital: parseFloat(p.workingCapital)
       }));
       
+      // Add actual 2024 data
+      if (valuation.valuation.actual_2024) {
+        formattedValuation.actual2024 = {
+          revenue: parseFloat(valuation.valuation.actual_2024.revenue),
+          freeCashFlow: parseFloat(valuation.valuation.actual_2024.freeCashFlow),
+          fcf: parseFloat(valuation.valuation.actual_2024.freeCashFlow), // Also map to fcf for frontend compatibility
+          ebitda: parseFloat(valuation.valuation.actual_2024.ebitda),
+          capex: parseFloat(valuation.valuation.actual_2024.capex),
+          workingCapital: parseFloat(valuation.valuation.actual_2024.workingCapital)
+        };
+      }
+      
       // Fallback: If projections is empty, add a dummy row
       if (!formattedValuation.projections || formattedValuation.projections.length === 0) {
         formattedValuation.projections = [{
@@ -809,6 +880,20 @@ export async function GET(request) {
         capex: parseFloat(p.capex),
         workingCapital: parseFloat(p.workingCapital)
       }));
+      
+      // Add actual 2024 data
+      if (valuation.valuation.actual_2024) {
+        formattedValuation.actual2024 = {
+          revenue: parseFloat(valuation.valuation.actual_2024.revenue),
+          freeCashFlow: parseFloat(valuation.valuation.actual_2024.freeCashFlow),
+          fcf: parseFloat(valuation.valuation.actual_2024.freeCashFlow), // Also map to fcf for frontend compatibility
+          ebitda: parseFloat(valuation.valuation.actual_2024.ebitda),
+          netIncome: parseFloat(valuation.valuation.actual_2024.netIncome),
+          eps: parseFloat(valuation.valuation.actual_2024.eps),
+          capex: parseFloat(valuation.valuation.actual_2024.capex),
+          workingCapital: parseFloat(valuation.valuation.actual_2024.workingCapital)
+        };
+      }
       
       // Fallback: If projections is empty, add a dummy row
       if (!formattedValuation.projections || formattedValuation.projections.length === 0) {
