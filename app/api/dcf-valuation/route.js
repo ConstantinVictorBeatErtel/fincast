@@ -539,8 +539,8 @@ function generateExcelData(valuation) {
     const projectionHeaders = ['Year', 'Revenue (M)', 'Free Cash Flow (M)'];
     const projectionData = (valuationData.projections || []).map(p => [
       p.year,
-      (p.revenue / 1000).toFixed(1),
-      ((p.fcf || p.freeCashFlow) / 1000).toFixed(1)
+      (p.revenue / 1000000).toFixed(1),
+      ((p.fcf || p.freeCashFlow) / 1000000).toFixed(1)
     ]);
     
     // Add additional columns for exit-multiple method
@@ -549,8 +549,8 @@ function generateExcelData(valuation) {
       projectionData.forEach((row, index) => {
         const projection = valuationData.projections[index];
         row.push(
-          (projection.ebitda / 1000).toFixed(1),
-          (projection.netIncome / 1000).toFixed(1),
+          (projection.ebitda / 1000000).toFixed(1),
+          (projection.netIncome / 1000000).toFixed(1),
           projection.eps.toFixed(2)
         );
       });
@@ -560,9 +560,9 @@ function generateExcelData(valuation) {
       projectionData.forEach((row, index) => {
         const projection = valuationData.projections[index];
         row.push(
-          (projection.ebitda / 1000).toFixed(1),
-          (projection.capex / 1000).toFixed(1),
-          (projection.workingCapital / 1000).toFixed(1)
+          (projection.ebitda / 1000000).toFixed(1),
+          (projection.capex / 1000000).toFixed(1),
+          (projection.workingCapital / 1000000).toFixed(1)
         );
       });
     }
