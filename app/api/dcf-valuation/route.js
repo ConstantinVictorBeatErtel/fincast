@@ -469,7 +469,7 @@ function generateExcelData(valuation) {
         ...(method === 'exit-multiple' && valuationData.currentEV && 
             valuationData.assumptions?.exitMultipleType && 
             (valuationData.assumptions.exitMultipleType === 'EV/EBITDA' || valuationData.assumptions.exitMultipleType === 'EV/FCF') 
-            ? [['Current EV (M)', (valuationData.currentEV / 1000000).toFixed(1)]] : []),
+            ? [['Current EV (M)', (valuationData.currentEV / 1000).toFixed(1)]] : []),
         ['Upside', valuationData.upside || valuationData.upside_downside || valuationData.upside_potential || valuationData.gf_upside || 0],
         ['Confidence', valuationData.confidence || valuationData.recommendation || valuationData.analyst_consensus || 'Medium'],
         ['Method', valuationData.method || method],
@@ -608,8 +608,8 @@ const calculateExitMultipleValue = (projections, assumptions, currentPrice, curr
         const estimatedMarketCap = currentPrice * 1000000;
         upside = ((enterpriseValue - estimatedMarketCap) / estimatedMarketCap) * 100;
       }
-      // Display the EV in millions (divide by 1000000 for display)
-      fairValue = enterpriseValue / 1000000;
+      // Display the EV in millions (divide by 1000 for display)
+      fairValue = enterpriseValue / 1000;
       break;
     case 'EV/FCF':
       // Calculate Enterprise Value = FCF × multiple
@@ -621,8 +621,8 @@ const calculateExitMultipleValue = (projections, assumptions, currentPrice, curr
         const estimatedMarketCap = currentPrice * 1000000;
         upside = ((evFcf - estimatedMarketCap) / estimatedMarketCap) * 100;
       }
-      // Display the EV in millions (divide by 1000000 for display)
-      fairValue = evFcf / 1000000;
+      // Display the EV in millions (divide by 1000 for display)
+      fairValue = evFcf / 1000;
       break;
     default:
       // Default to P/E if type is unknown
@@ -827,10 +827,10 @@ export async function GET(request) {
       // Convert sensitivity values to EV-based for EV multiples
       if (formattedValuation.assumptions.exitMultipleType === 'EV/EBITDA' || 
           formattedValuation.assumptions.exitMultipleType === 'EV/FCF') {
-        // Convert sensitivity values from per-share to EV values (multiply by 1000000 for display)
-        formattedValuation.analysis.sensitivity.bullCase = formattedValuation.analysis.sensitivity.bullCase * 1000000;
-        formattedValuation.analysis.sensitivity.baseCase = formattedValuation.analysis.sensitivity.baseCase * 1000000;
-        formattedValuation.analysis.sensitivity.bearCase = formattedValuation.analysis.sensitivity.bearCase * 1000000;
+        // Convert sensitivity values from per-share to EV values (multiply by 1000 for display)
+        formattedValuation.analysis.sensitivity.bullCase = formattedValuation.analysis.sensitivity.bullCase * 1000;
+        formattedValuation.analysis.sensitivity.baseCase = formattedValuation.analysis.sensitivity.baseCase * 1000;
+        formattedValuation.analysis.sensitivity.bearCase = formattedValuation.analysis.sensitivity.bearCase * 1000;
       }
     }
 

@@ -168,7 +168,7 @@ export default function DCFValuation() {
   // Helper function to format values in millions
   const formatMillions = (value) => {
     if (typeof value !== 'number' || isNaN(value)) return 'N/A';
-    return `$${(value / 1000000).toFixed(1)}M`;
+    return `$${(value / 1000).toFixed(1)}M`;
   };
 
   // Helper function to format percentage values
