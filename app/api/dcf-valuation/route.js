@@ -464,12 +464,12 @@ function generateExcelData(valuation) {
       name: 'Valuation Summary',
       data: [
         ['Valuation Summary'],
-        ['Fair Value', (valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0) * 1000],
+        ['Fair Value', valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0],
         ['Current Price', valuationData.currentPrice || valuationData.current_price || 0],
         ...(method === 'exit-multiple' && valuationData.currentEV && 
             valuationData.assumptions?.exitMultipleType && 
             (valuationData.assumptions.exitMultipleType === 'EV/EBITDA' || valuationData.assumptions.exitMultipleType === 'EV/FCF') 
-            ? [['Current EV (M)', ((valuationData.currentEV * 1000) / 1000).toFixed(1)]] : []),
+            ? [['Current EV (M)', (valuationData.currentEV / 1000).toFixed(1)]] : []),
         ['Upside', valuationData.upside || valuationData.upside_downside || valuationData.upside_potential || valuationData.gf_upside || 0],
         ['Confidence', valuationData.confidence || valuationData.recommendation || valuationData.analyst_consensus || 'Medium'],
         ['Method', valuationData.method || method],
