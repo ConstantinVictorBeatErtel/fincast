@@ -608,8 +608,8 @@ const calculateExitMultipleValue = (projections, assumptions, currentPrice, curr
         const estimatedMarketCap = currentPrice * 1000000;
         upside = ((enterpriseValue - estimatedMarketCap) / estimatedMarketCap) * 100;
       }
-      // Display the EV as the raw calculated value
-      fairValue = enterpriseValue;
+      // Display the EV in millions (divide by 1000 for display)
+      fairValue = enterpriseValue / 1000;
       break;
     case 'EV/FCF':
       // Calculate Enterprise Value = FCF × multiple
