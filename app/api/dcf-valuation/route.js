@@ -495,11 +495,34 @@ function generateExcelData(valuation) {
                        valuationData.wacc ||
                        valuationData.discount_rate || 0]
     );
+    
+    // Add margin data if available
+    if (valuationData.margins) {
+      sheets[0].data.push(
+        [],
+        ['Key Metrics'],
+        ['YoY Revenue Growth', `${valuationData.margins.revenueGrowth.toFixed(1)}%`],
+        ['FCF Margin', `${valuationData.margins.fcfMargin.toFixed(1)}%`],
+        ['EBITDA Margin', `${valuationData.margins.ebitdaMargin.toFixed(1)}%`]
+      );
+    }
   } else if (method === 'exit-multiple') {
     sheets[0].data.push(
       ['Exit Multiple', valuationData.assumptions?.exitMultiple || 0],
       ['Exit Multiple Type', valuationData.assumptions?.exitMultipleType || 'N/A']
     );
+    
+    // Add margin data if available
+    if (valuationData.margins) {
+      sheets[0].data.push(
+        [],
+        ['Key Metrics'],
+        ['YoY Revenue Growth', `${valuationData.margins.revenueGrowth.toFixed(1)}%`],
+        ['FCF Margin', `${valuationData.margins.fcfMargin.toFixed(1)}%`],
+        ['EBITDA Margin', `${valuationData.margins.ebitdaMargin.toFixed(1)}%`],
+        ['Net Income Margin', `${valuationData.margins.netIncomeMargin.toFixed(1)}%`]
+      );
+    }
   }
 
   // Add sensitivity analysis
@@ -516,8 +539,8 @@ function generateExcelData(valuation) {
     const projectionHeaders = ['Year', 'Revenue (M)', 'Free Cash Flow (M)'];
     const projectionData = (valuationData.projections || []).map(p => [
       p.year,
-      (p.revenue / 1000000).toFixed(1),
-      ((p.fcf || p.freeCashFlow) / 1000000).toFixed(1)
+      (p.revenue / 1000).toFixed(1),
+      ((p.fcf || p.freeCashFlow) / 1000).toFixed(1)
     ]);
     
     // Add additional columns for exit-multiple method
@@ -526,8 +549,8 @@ function generateExcelData(valuation) {
       projectionData.forEach((row, index) => {
         const projection = valuationData.projections[index];
         row.push(
-          (projection.ebitda / 1000000).toFixed(1),
-          (projection.netIncome / 1000000).toFixed(1),
+          (projection.ebitda / 1000).toFixed(1),
+          (projection.netIncome / 1000).toFixed(1),
           projection.eps.toFixed(2)
         );
       });
@@ -537,9 +560,9 @@ function generateExcelData(valuation) {
       projectionData.forEach((row, index) => {
         const projection = valuationData.projections[index];
         row.push(
-          (projection.ebitda / 1000000).toFixed(1),
-          (projection.capex / 1000000).toFixed(1),
-          (projection.workingCapital / 1000000).toFixed(1)
+          (projection.ebitda / 1000).toFixed(1),
+          (projection.capex / 1000).toFixed(1),
+          (projection.workingCapital / 1000).toFixed(1)
         );
       });
     }
@@ -621,8 +644,8 @@ const calculateExitMultipleValue = (projections, assumptions, currentPrice, curr
         const estimatedMarketCap = currentPrice * 1000000;
         upside = ((evFcf - estimatedMarketCap) / estimatedMarketCap) * 100;
       }
-      // Display the EV as the raw calculated value
-      fairValue = evFcf;
+      // Display the EV in millions (divide by 1000 for display)
+      fairValue = evFcf / 1000;
       break;
     default:
       // Default to P/E if type is unknown
@@ -755,6 +778,18 @@ export async function GET(request) {
         }];
       }
       
+      // Calculate margins and growth rates
+      if (formattedValuation.projections.length >= 2) {
+        const currentYear = formattedValuation.projections[0];
+        const nextYear = formattedValuation.projections[1];
+        
+        formattedValuation.margins = {
+          revenueGrowth: ((nextYear.revenue - currentYear.revenue) / currentYear.revenue) * 100,
+          fcfMargin: (currentYear.freeCashFlow / currentYear.revenue) * 100,
+          ebitdaMargin: (currentYear.ebitda / currentYear.revenue) * 100
+        };
+      }
+      
       formattedValuation.assumptions = {
         revenueGrowthRate: parseFloat(valuation.valuation.assumptions?.revenueGrowthRate || 
                                     valuation.valuation.assumptions?.fcfGrowthRate5yr || 
@@ -806,6 +841,19 @@ export async function GET(request) {
         }];
       }
       
+      // Calculate margins and growth rates
+      if (formattedValuation.projections.length >= 2) {
+        const currentYear = formattedValuation.projections[0];
+        const nextYear = formattedValuation.projections[1];
+        
+        formattedValuation.margins = {
+          revenueGrowth: ((nextYear.revenue - currentYear.revenue) / currentYear.revenue) * 100,
+          fcfMargin: (currentYear.freeCashFlow / currentYear.revenue) * 100,
+          ebitdaMargin: (currentYear.ebitda / currentYear.revenue) * 100,
+          netIncomeMargin: (currentYear.netIncome / currentYear.revenue) * 100
+        };
+      }
+      
       formattedValuation.assumptions = {
         exitMultiple: parseFloat(valuation.valuation.assumptions?.exitMultiple || 0),
         exitMultipleType: valuation.valuation.assumptions?.exitMultipleType || 'N/A',
@@ -823,6 +871,11 @@ export async function GET(request) {
       // Override Claude's values with our calculated values
       formattedValuation.fairValue = fairValue;
       formattedValuation.upside = upside;
+      
+      // For P/E scenario, make base case equal to fair value
+      if (formattedValuation.assumptions.exitMultipleType === 'P/E') {
+        formattedValuation.analysis.sensitivity.baseCase = fairValue;
+      }
       
       // Convert sensitivity values to EV-based for EV multiples
       if (formattedValuation.assumptions.exitMultipleType === 'EV/EBITDA' || 

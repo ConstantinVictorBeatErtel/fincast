@@ -471,7 +471,7 @@ export default function DCFValuation() {
                               </p>
                             </div>
                             <div>
-                              <p className="text-sm text-gray-500">Exit Multiple Type</p>
+                              <p className="text-sm font-medium text-gray-500">Exit Multiple Type</p>
                               <p className="text-lg font-medium">
                                 {valuation.assumptions.exitMultipleType || 'N/A'}
                               </p>
@@ -480,6 +480,39 @@ export default function DCFValuation() {
                         )}
                       </div>
                     </div>
+                    {valuation.margins && (
+                      <div>
+                        <h3 className="text-lg font-medium mb-2">Key Metrics</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <p className="text-sm text-gray-500">YoY Revenue Growth</p>
+                            <p className="text-lg font-medium">
+                              {formatPercentage(valuation.margins.revenueGrowth)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">FCF Margin</p>
+                            <p className="text-lg font-medium">
+                              {formatPercentage(valuation.margins.fcfMargin)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">EBITDA Margin</p>
+                            <p className="text-lg font-medium">
+                              {formatPercentage(valuation.margins.ebitdaMargin)}
+                            </p>
+                          </div>
+                          {method === 'exit-multiple' && valuation.margins.netIncomeMargin && (
+                            <div>
+                              <p className="text-sm text-gray-500">Net Income Margin</p>
+                              <p className="text-lg font-medium">
+                                {formatPercentage(valuation.margins.netIncomeMargin)}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     <div>
                       <h3 className="text-lg font-medium mb-2">Sensitivity Analysis</h3>
                       <div className="grid grid-cols-3 gap-4">
