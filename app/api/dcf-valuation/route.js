@@ -480,13 +480,14 @@ function generateExcelData(valuation) {
       name: 'Valuation Summary',
       data: [
         ['Valuation Summary'],
-        ['Fair Value', (valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0) * 1000],
+        ['Fair Value', (valuationData.fairValue || valuationData.fair_value || valuationData.dcf_value || valuationData.dcf_fair_value || valuationData.fair_value_per_share || valuationData.target_price || valuationData.gf_value || valuationData.intrinsic_value_per_share || 0)],
         ['Current Price', valuationData.currentPrice || valuationData.current_price || 0],
         ...(method === 'exit-multiple' && valuationData.currentEV && 
             valuationData.assumptions?.exitMultipleType && 
             (valuationData.assumptions.exitMultipleType === 'EV/EBITDA' || valuationData.assumptions.exitMultipleType === 'EV/FCF') 
-            ? [['Current EV (M)', ((valuationData.currentEV * 1000) / 1000).toFixed(1)]] : []),
-        ['Upside', valuationData.upside || valuationData.upside_downside || valuationData.upside_potential || valuationData.gf_upside || 0],
+            ? [['Current EV (M)', (valuationData.currentEV).toFixed(1)]] : []),
+        ['Upside (2029)', valuationData.upside || valuationData.upside_downside || valuationData.upside_potential || valuationData.gf_upside || 0],
+        ['Upside CAGR', valuationData.cagr || 0],
         ['Confidence', valuationData.confidence || valuationData.recommendation || valuationData.analyst_consensus || 'Medium'],
         ['Method', valuationData.method || method],
         [],
@@ -539,8 +540,8 @@ function generateExcelData(valuation) {
     if (valuationData.actual2024) {
       projectionData.push([
         '2024 (Actual)',
-        ((valuationData.actual2024.revenue * 1000000) / 1000000).toFixed(1),
-        (((valuationData.actual2024.fcf || valuationData.actual2024.freeCashFlow) * 1000000) / 1000000).toFixed(1),
+        (valuationData.actual2024.revenue).toFixed(1),
+        ((valuationData.actual2024.fcf || valuationData.actual2024.freeCashFlow)).toFixed(1),
         valuationData.actual2024.revenue > 0 ? ((valuationData.actual2024.fcf || valuationData.actual2024.freeCashFlow) / valuationData.actual2024.revenue * 100).toFixed(1) : '0.0',
         valuationData.actual2024.revenue > 0 ? (valuationData.actual2024.ebitda / valuationData.actual2024.revenue * 100).toFixed(1) : '0.0'
       ]);
@@ -549,8 +550,8 @@ function generateExcelData(valuation) {
     // Add projected years
     const projectedData = (valuationData.projections || []).map(p => [
       p.year,
-      ((p.revenue * 1000000) / 1000000).toFixed(1),
-      (((p.fcf || p.freeCashFlow) * 1000000) / 1000000).toFixed(1),
+      (p.revenue).toFixed(1),
+      ((p.fcf || p.freeCashFlow)).toFixed(1),
       p.revenue > 0 ? ((p.fcf || p.freeCashFlow) / p.revenue * 100).toFixed(1) : '0.0',
       p.revenue > 0 ? (p.ebitda / p.revenue * 100).toFixed(1) : '0.0'
     ]);
@@ -564,8 +565,8 @@ function generateExcelData(valuation) {
       // Update actual 2024 row with additional columns
       if (valuationData.actual2024) {
         projectionData[0].push(
-          ((valuationData.actual2024.ebitda * 1000000) / 1000000).toFixed(1),
-          ((valuationData.actual2024.netIncome * 1000000) / 1000000).toFixed(1),
+          (valuationData.actual2024.ebitda).toFixed(1),
+          (valuationData.actual2024.netIncome).toFixed(1),
           valuationData.actual2024.eps.toFixed(2),
           valuationData.actual2024.revenue > 0 ? (valuationData.actual2024.netIncome / valuationData.actual2024.revenue * 100).toFixed(1) : '0.0'
         );
@@ -576,8 +577,8 @@ function generateExcelData(valuation) {
         if (index > 0 || !valuationData.actual2024) { // Skip actual 2024 row if it exists
           const projection = valuationData.projections[index - (valuationData.actual2024 ? 1 : 0)];
           row.push(
-            ((projection.ebitda * 1000000) / 1000000).toFixed(1),
-            ((projection.netIncome * 1000000) / 1000000).toFixed(1),
+            (projection.ebitda).toFixed(1),
+            (projection.netIncome).toFixed(1),
             projection.eps.toFixed(2),
             projection.revenue > 0 ? (projection.netIncome / projection.revenue * 100).toFixed(1) : '0.0'
           );
@@ -590,9 +591,9 @@ function generateExcelData(valuation) {
       // Update actual 2024 row with additional columns
       if (valuationData.actual2024) {
         projectionData[0].push(
-          ((valuationData.actual2024.ebitda * 1000000) / 1000000).toFixed(1),
-          (valuationData.actual2024.capex / 1000000).toFixed(1),
-          (valuationData.actual2024.workingCapital / 1000000).toFixed(1)
+          (valuationData.actual2024.ebitda).toFixed(1),
+          (valuationData.actual2024.capex).toFixed(1),
+          (valuationData.actual2024.workingCapital).toFixed(1)
         );
       }
       
@@ -601,9 +602,9 @@ function generateExcelData(valuation) {
         if (index > 0 || !valuationData.actual2024) { // Skip actual 2024 row if it exists
           const projection = valuationData.projections[index - (valuationData.actual2024 ? 1 : 0)];
           row.push(
-            ((projection.ebitda * 1000000) / 1000000).toFixed(1),
-            (projection.capex / 1000000).toFixed(1),
-            (projection.workingCapital / 1000000).toFixed(1)
+            (projection.ebitda).toFixed(1),
+            (projection.capex).toFixed(1),
+            (projection.workingCapital).toFixed(1)
           );
         }
       });
@@ -795,6 +796,14 @@ export async function GET(request) {
         }
       }
     };
+
+    // Calculate CAGR
+    const calculateCAGR = (currentPrice, fairValue, years = 5) => {
+      if (!currentPrice || !fairValue || currentPrice <= 0 || fairValue <= 0) return 0;
+      return (Math.pow(fairValue / currentPrice, 1 / years) - 1) * 100;
+    };
+
+    formattedValuation.cagr = calculateCAGR(formattedValuation.currentPrice, formattedValuation.fairValue, 5);
 
     // Add method-specific data
     if (method === 'dcf') {

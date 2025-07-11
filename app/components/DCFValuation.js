@@ -168,13 +168,19 @@ export default function DCFValuation() {
   // Helper function to format values in millions
   const formatMillions = (value) => {
     if (typeof value !== 'number' || isNaN(value)) return 'N/A';
-    return `$${(value / 1000).toFixed(1)}M`;
+    return `$${(value).toFixed(1)}M`;
   };
 
   // Helper function to format Fair EV values in millions (multiply by 1000 for dashboard display)
   const formatFairEVMillions = (value) => {
     if (typeof value !== 'number' || isNaN(value)) return 'N/A';
-    return `$${(value * 1000 / 1000).toFixed(1)}M`;
+    return `$${(value).toFixed(1)}M`;
+  };
+
+  // Helper function to calculate CAGR
+  const calculateCAGR = (currentPrice, fairValue, years = 5) => {
+    if (!currentPrice || !fairValue || currentPrice <= 0 || fairValue <= 0) return 0;
+    return (Math.pow(fairValue / currentPrice, 1 / years) - 1) * 100;
   };
 
   // Helper function to format percentage values
@@ -282,7 +288,7 @@ export default function DCFValuation() {
                     {shouldShowEVDisplay() ? 'Fair EV' : 'Fair Value'}
                   </h3>
                   <p className="text-2xl font-bold">
-                    {shouldShowEVDisplay() ? formatFairEVMillions(valuation.fairValue * 1000) : formatCurrency(valuation.fairValue)}
+                    {shouldShowEVDisplay() ? formatFairEVMillions(valuation.fairValue) : formatCurrency(valuation.fairValue)}
                   </p>
                 </div>
                 <div>
@@ -294,9 +300,15 @@ export default function DCFValuation() {
                   </p>
                 </div>
                 <div>
-                  <h3 className="text-sm font-medium text-gray-500">Upside</h3>
+                  <h3 className="text-sm font-medium text-gray-500">Upside (2029)</h3>
                   <p className="text-2xl font-bold">
                     {formatPercentage(valuation.upside)}
+                  </p>
+                </div>
+                <div>
+                  <h3 className="text-sm font-medium text-gray-500">Upside CAGR</h3>
+                  <p className="text-2xl font-bold">
+                    {formatPercentage(calculateCAGR(valuation.currentPrice, valuation.fairValue, 5))}
                   </p>
                 </div>
                 <div>
@@ -363,25 +375,25 @@ export default function DCFValuation() {
                         {valuation.actual2024 && (
                           <tr className="bg-gray-50 font-medium">
                             <td>2024 (Actual)</td>
-                            <td className="text-right">{formatMillions(valuation.actual2024.revenue * 1000)}</td>
+                            <td className="text-right">{formatMillions(valuation.actual2024.revenue)}</td>
                             <td className="text-right">N/A</td>
-                            <td className="text-right">{formatMillions((valuation.actual2024.fcf || valuation.actual2024.freeCashFlow) * 1000)}</td>
+                            <td className="text-right">{formatMillions((valuation.actual2024.fcf || valuation.actual2024.freeCashFlow))}</td>
                             <td className="text-right">{formatPercentage((valuation.actual2024.fcf || valuation.actual2024.freeCashFlow) / valuation.actual2024.revenue * 100)}</td>
-                            <td className="text-right">{formatMillions(valuation.actual2024.ebitda * 1000)}</td>
+                            <td className="text-right">{formatMillions(valuation.actual2024.ebitda)}</td>
                             <td className="text-right">{formatPercentage(valuation.actual2024.ebitda / valuation.actual2024.revenue * 100)}</td>
                             {method === 'dcf' ? (
                               <>
                                 {valuation.projections?.[0]?.capex && (
-                                  <td className="text-right">{formatMillions(valuation.actual2024.capex * 1000)}</td>
+                                  <td className="text-right">{formatMillions(valuation.actual2024.capex)}</td>
                                 )}
                                 {valuation.projections?.[0]?.workingCapital && (
-                                  <td className="text-right">{formatMillions(valuation.actual2024.workingCapital * 1000)}</td>
+                                  <td className="text-right">{formatMillions(valuation.actual2024.workingCapital)}</td>
                                 )}
                               </>
                             ) : (
                               <>
                                 {valuation.projections?.[0]?.netIncome && (
-                                  <td className="text-right">{formatMillions(valuation.actual2024.netIncome * 1000)}</td>
+                                  <td className="text-right">{formatMillions(valuation.actual2024.netIncome)}</td>
                                 )}
                                 {valuation.projections?.[0]?.netIncome && (
                                   <td className="text-right">{formatPercentage(valuation.actual2024.netIncome / valuation.actual2024.revenue * 100)}</td>
@@ -402,25 +414,25 @@ export default function DCFValuation() {
                           return (
                             <tr key={projection.year}>
                               <td>{projection.year}</td>
-                              <td className="text-right">{formatMillions(projection.revenue * 1000)}</td>
+                              <td className="text-right">{formatMillions(projection.revenue)}</td>
                               <td className="text-right">{index === 0 && !valuation.actual2024 ? 'N/A' : formatPercentage(revenueGrowth)}</td>
-                              <td className="text-right">{formatMillions((projection.fcf || projection.freeCashFlow) * 1000)}</td>
+                              <td className="text-right">{formatMillions((projection.fcf || projection.freeCashFlow))}</td>
                               <td className="text-right">{formatPercentage((projection.fcf || projection.freeCashFlow) / projection.revenue * 100)}</td>
-                              <td className="text-right">{formatMillions(projection.ebitda * 1000)}</td>
+                              <td className="text-right">{formatMillions(projection.ebitda)}</td>
                               <td className="text-right">{formatPercentage(projection.ebitda / projection.revenue * 100)}</td>
                               {method === 'dcf' ? (
                                 <>
                                   {valuation.projections?.[0]?.capex && (
-                                    <td className="text-right">{formatMillions(projection.capex * 1000)}</td>
+                                    <td className="text-right">{formatMillions(projection.capex)}</td>
                                   )}
                                   {valuation.projections?.[0]?.workingCapital && (
-                                    <td className="text-right">{formatMillions(projection.workingCapital * 1000)}</td>
+                                    <td className="text-right">{formatMillions(projection.workingCapital)}</td>
                                   )}
                                 </>
                               ) : (
                                 <>
                                   {valuation.projections?.[0]?.netIncome && (
-                                    <td className="text-right">{formatMillions(projection.netIncome * 1000)}</td>
+                                    <td className="text-right">{formatMillions(projection.netIncome)}</td>
                                   )}
                                   {valuation.projections?.[0]?.netIncome && (
                                     <td className="text-right">{formatPercentage(projection.netIncome / projection.revenue * 100)}</td>
