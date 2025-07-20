@@ -17,6 +17,9 @@ export default function DCFValuation() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [valuation, setValuation] = useState(null);
+  const [feedback, setFeedback] = useState('');
+  const [showFeedbackForm, setShowFeedbackForm] = useState(false);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
 
   // Debug effect to log valuation changes
   useEffect(() => {
@@ -75,47 +78,25 @@ export default function DCFValuation() {
 
       console.log('API Response:', data);
 
-      // Log the detailed structure of the valuation object
-      console.log('Valuation structure:', {
-        hasValuation: !!data.valuation,
-        hasFairValue: !!data.valuation?.fairValue,
-        hasCurrentPrice: !!data.valuation?.currentPrice,
-        hasAnalysis: !!data.valuation?.analysis,
-        hasProjections: !!data.valuation?.projections,
-        hasAssumptions: !!data.valuation?.assumptions,
-        analysisKeys: data.valuation?.analysis ? Object.keys(data.valuation.analysis) : [],
-        projectionsLength: data.valuation?.projections?.length,
-        assumptionsKeys: data.valuation?.assumptions ? Object.keys(data.valuation.assumptions) : []
+      // Log the detailed structure of the raw data
+      console.log('Raw data structure:', {
+        hasRawForecast: !!data.rawForecast,
+        hasFinancialAnalysis: !!data.rawFinancialAnalysis,
+        hasSections: !!data.sections,
+        sections: Object.keys(data.sections || {}),
+        companyName: data.companyName,
+        method: data.method,
+        fairValue: data.fairValue
       });
 
-      // Ensure we have the correct data structure
-      if (!data.valuation) {
-        console.error('Missing valuation object');
-        throw new Error('Invalid valuation data structure: Missing valuation object');
+      // Validate the raw data structure
+      if (!data.rawForecast) {
+        console.error('Missing raw forecast data');
+        throw new Error('Invalid data structure: Missing forecast data');
       }
 
-      const { valuation } = data;
-      
-      if (!valuation.fairValue || !valuation.currentPrice) {
-        console.error('Missing required valuation fields');
-        throw new Error('Invalid valuation data structure: Missing required valuation fields');
-      }
-
-      if (!valuation.analysis || !valuation.analysis.companyOverview || !valuation.analysis.keyDrivers || !valuation.analysis.risks) {
-        console.error('Missing required analysis fields');
-        throw new Error('Invalid valuation data structure: Missing required analysis fields');
-      }
-
-      // Method-specific projections validation
-      if (method === 'dcf' || method === 'exit-multiple') {
-        if (!valuation.projections || !Array.isArray(valuation.projections) || valuation.projections.length === 0) {
-          console.error('Missing or invalid projections');
-          throw new Error('Invalid valuation data structure: Missing or invalid projections');
-        }
-      }
-
-      // Set the valuation state with the correct structure
-      setValuation(valuation);
+      // Set the raw data directly
+      setValuation(data);
     } catch (err) {
       console.error('Error in handleSubmit:', err);
       setError(err.message);
@@ -124,22 +105,174 @@ export default function DCFValuation() {
     }
   };
 
-  const downloadExcel = () => {
-    if (!valuation?.excelData) {
-      console.error('No Excel data available');
+  const handleFeedbackSubmit = async (e) => {
+    e.preventDefault();
+    if (!feedback.trim()) {
+      setError('Please provide feedback');
       return;
     }
 
-    console.log('Generating Excel with data:', valuation.excelData);
+    setFeedbackLoading(true);
+    setError(null);
+
+    try {
+      console.log('Submitting feedback for:', { ticker, method, selectedMultiple, feedback });
+      const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ feedback }),
+      });
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (jsonError) {
+        throw new Error('Unable to process server response. Please try again later.');
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to regenerate valuation with feedback');
+      }
+
+      // Set the new valuation - handle both direct response and nested response
+      const newValuation = data.valuation || data;
+      setValuation(newValuation);
+      setFeedback('');
+      setShowFeedbackForm(false);
+    } catch (err) {
+      console.error('Error in handleFeedbackSubmit:', err);
+      setError(err.message);
+    } finally {
+      setFeedbackLoading(false);
+    }
+  };
+
+  const downloadExcel = () => {
+    if (!valuation) {
+      console.error('No valuation data available');
+      return;
+    }
+
+    console.log('Generating Excel with valuation data:', valuation);
 
     const workbook = XLSX.utils.book_new();
     
-    valuation.excelData.forEach(sheet => {
+    // Create Summary sheet
+    const summaryData = [
+      ['Valuation Summary'],
+      ['Company', valuation.companyName],
+      ['Method', valuation.method],
+      ['Fair Value', valuation.method === 'exit-multiple' 
+        ? `$${valuation.fairValue?.toFixed(2)} per share`
+        : `$${valuation.fairValue?.toLocaleString()} million`
+      ],
+      ['Upside', `${valuation.upside?.toFixed(1) || 0}%`],
+      ['Upside CAGR', `${valuation.cagr?.toFixed(1) || 0}%`],
+      ['Confidence', valuation.confidence || 'Medium'],
+      []
+    ];
+
+    // Add method-specific data
+    if (valuation.method === 'dcf') {
+      summaryData.push(
+        ['DCF Assumptions'],
+        ['Discount Rate', `${valuation.discountRate}%`],
+        ['Terminal Growth Rate', `${valuation.terminalGrowth}%`]
+      );
+    } else if (valuation.method === 'exit-multiple') {
+      summaryData.push(
+        ['Exit Multiple Assumptions'],
+        ['Exit Multiple Type', valuation.exitMultipleType],
+        ['Exit Multiple Value', `${valuation.exitMultipleValue}x`],
+        ['Current Share Price', `$${valuation.currentSharePrice?.toFixed(2)}`]
+      );
+    }
+
+    const sheets = [{
+      name: 'Summary',
+      data: summaryData
+    }];
+
+    // Create Projections sheet
+    if (valuation.tableData && valuation.tableData.length > 0) {
+      const projectionHeaders = ['Year', 'Revenue ($M)', 'Revenue Growth (%)', 'Gross Margin (%)', 'EBITDA Margin (%)', 'FCF Margin (%)', 'Net Income ($M)'];
+      
+      if (valuation.method === 'exit-multiple') {
+        projectionHeaders.push('EPS');
+      }
+      
+      const projectionData = valuation.tableData.map(row => {
+        const baseRow = [
+          row.year,
+          row.revenue?.toLocaleString(),
+          row.revenueGrowth?.toFixed(1),
+          row.grossMargin?.toFixed(1),
+          row.ebitdaMargin?.toFixed(1),
+          row.fcfMargin?.toFixed(1),
+          row.netIncome?.toLocaleString()
+        ];
+        
+        if (valuation.method === 'exit-multiple') {
+          baseRow.push(row.eps?.toFixed(2));
+        }
+        
+        return baseRow;
+      });
+
+      sheets.push({
+        name: 'Projections',
+        data: [projectionHeaders, ...projectionData]
+      });
+    }
+
+    // Create Analysis sheet
+    const analysisData = [];
+    
+    if (valuation.sections?.financialAnalysis) {
+      // Truncate financial analysis to first few lines
+      const truncatedAnalysis = valuation.sections.financialAnalysis
+        .split('\n')
+        .slice(0, 10) // Take first 10 lines
+        .join('\n');
+      
+      analysisData.push(
+        ['Financial Analysis'],
+        [truncatedAnalysis],
+        []
+      );
+    }
+    
+    if (valuation.sections?.assumptions) {
+      // Truncate assumptions to first few lines
+      const truncatedAssumptions = valuation.sections.assumptions
+        .split('\n')
+        .slice(0, 8) // Take first 8 lines
+        .join('\n');
+      
+      analysisData.push(
+        ['Assumptions and Justifications'],
+        [truncatedAssumptions]
+      );
+    }
+
+    if (analysisData.length > 0) {
+      sheets.push({
+        name: 'Analysis',
+        data: analysisData
+      });
+    }
+
+    // Create Excel file
+    sheets.forEach(sheet => {
       const worksheet = XLSX.utils.aoa_to_sheet(sheet.data);
       XLSX.utils.book_append_sheet(workbook, worksheet, sheet.name);
     });
 
-    XLSX.writeFile(workbook, `${ticker}_valuation.xlsx`);
+    // Download the file
+    const fileName = `${valuation.companyName}_Valuation_${new Date().toISOString().split('T')[0]}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
   };
 
   // Helper function to safely access nested values
@@ -173,6 +306,12 @@ export default function DCFValuation() {
 
   // Helper function to format Fair EV values in millions (multiply by 1000 for dashboard display)
   const formatFairEVMillions = (value) => {
+    if (typeof value !== 'number' || isNaN(value)) return 'N/A';
+    return `$${(value * 1000).toFixed(1)}M`;
+  };
+
+  // Helper function to format Current EV values in millions
+  const formatCurrentEVMillions = (value) => {
     if (typeof value !== 'number' || isNaN(value)) return 'N/A';
     return `$${(value).toFixed(1)}M`;
   };
@@ -279,323 +418,285 @@ export default function DCFValuation() {
         <div className="space-y-8">
           <Card>
             <CardHeader>
-              <CardTitle>Valuation Summary</CardTitle>
+              <CardTitle>Valuation Summary - {valuation.companyName}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-1 gap-8 md:grid-cols-4">
                 <div>
-                  <h3 className="text-sm font-medium text-gray-500">
-                    {shouldShowEVDisplay() ? 'Fair EV' : 'Fair Value'}
-                  </h3>
+                  <h3 className="text-sm font-medium text-gray-500">Fair Value</h3>
                   <p className="text-2xl font-bold">
-                    {shouldShowEVDisplay() ? formatFairEVMillions(valuation.fairValue) : formatCurrency(valuation.fairValue)}
+                    {valuation.method === 'exit-multiple' 
+                      ? `$${valuation.fairValue?.toFixed(2)} per share`
+                      : `$${valuation.fairValue?.toLocaleString()} million`
+                    }
                   </p>
                 </div>
                 <div>
-                  <h3 className="text-sm font-medium text-gray-500">
-                    {shouldShowEVDisplay() ? 'Current EV' : 'Current Price'}
-                  </h3>
-                  <p className="text-2xl font-bold">
-                    {shouldShowEVDisplay() ? formatFairEVMillions(valuation.currentEV) : formatCurrency(valuation.currentPrice)}
-                  </p>
-                </div>
-                <div>
-                  <h3 className="text-sm font-medium text-gray-500">Upside (2029)</h3>
-                  <p className="text-2xl font-bold">
-                    {formatPercentage(valuation.upside)}
-                  </p>
-                </div>
-                <div>
-                  <h3 className="text-sm font-medium text-gray-500">Upside CAGR</h3>
-                  <p className="text-2xl font-bold">
-                    {formatPercentage(calculateCAGR(valuation.currentPrice, valuation.fairValue, 5))}
-                  </p>
-                </div>
-                <div>
-                  <h3 className="text-sm font-medium text-gray-500">Confidence</h3>
+                  <h3 className="text-sm font-medium text-gray-500">Method</h3>
                   <p className="text-2xl font-bold capitalize">
-                    {valuation.confidence}
+                    {valuation.method}
                   </p>
+                </div>
+                {valuation.method === 'dcf' && (
+                  <>
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-500">Discount Rate</h3>
+                      <p className="text-2xl font-bold">
+                        {valuation.discountRate}%
+                      </p>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-500">Terminal Growth</h3>
+                      <p className="text-2xl font-bold">
+                        {valuation.terminalGrowth}%
+                      </p>
+                    </div>
+                  </>
+                )}
+                {valuation.method === 'exit-multiple' && (
+                  <>
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-500">Exit Multiple</h3>
+                      <p className="text-2xl font-bold">
+                        {valuation.exitMultipleValue}x {valuation.exitMultipleType}
+                      </p>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-500">Current Price</h3>
+                      <p className="text-2xl font-bold text-gray-600">
+                        ${valuation.currentSharePrice?.toFixed(2)}
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+              
+              {/* Add CAGR display */}
+              <div className="mt-6 pt-6 border-t">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-500">Upside CAGR</h3>
+                    <p className="text-xl font-bold text-blue-600">
+                      {valuation.cagr?.toFixed(1) || 0}%
+                    </p>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-500">Confidence</h3>
+                    <p className="text-xl font-bold">
+                      {valuation.confidence || 'Medium'}
+                    </p>
+                  </div>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Tabs defaultValue="projections">
+          <Tabs defaultValue="forecast">
             <TabsList>
-              <TabsTrigger value="projections">Projections</TabsTrigger>
-              <TabsTrigger value="analysis">Analysis</TabsTrigger>
-              <TabsTrigger value="assumptions">Assumptions</TabsTrigger>
+              <TabsTrigger value="forecast">Forecast</TabsTrigger>
+              <TabsTrigger value="analysis">Financial Analysis</TabsTrigger>
             </TabsList>
-            <TabsContent value="projections">
+            
+            <TabsContent value="forecast">
               <Card>
                 <CardHeader>
-                  <CardTitle>
-                    Financial Projections
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr>
-                          <th className="text-left">Year</th>
-                          <th className="text-right">Revenue</th>
-                          <th className="text-right">Revenue Growth</th>
-                          <th className="text-right">Free Cash Flow</th>
-                          <th className="text-right">FCF Margin</th>
-                          <th className="text-right">EBITDA</th>
-                          <th className="text-right">EBITDA Margin</th>
-                          {method === 'dcf' ? (
-                            <>
-                              {valuation.projections?.[0]?.capex && (
-                                <th className="text-right">Capex</th>
-                              )}
-                              {valuation.projections?.[0]?.workingCapital && (
-                                <th className="text-right">Working Capital</th>
-                              )}
-                            </>
-                          ) : (
-                            <>
-                              {valuation.projections?.[0]?.netIncome && (
-                                <th className="text-right">Net Income</th>
-                              )}
-                              {valuation.projections?.[0]?.netIncome && (
-                                <th className="text-right">Net Income Margin</th>
-                              )}
-                              {valuation.projections?.[0]?.eps && (
-                                <th className="text-right">EPS</th>
-                              )}
-                            </>
-                          )}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {/* Show actual 2024 data if available */}
-                        {valuation.actual2024 && (
-                          <tr className="bg-gray-50 font-medium">
-                            <td>2024 (Actual)</td>
-                            <td className="text-right">{formatMillions(valuation.actual2024.revenue)}</td>
-                            <td className="text-right">N/A</td>
-                            <td className="text-right">{formatMillions((valuation.actual2024.fcf || valuation.actual2024.freeCashFlow))}</td>
-                            <td className="text-right">{formatPercentage((valuation.actual2024.fcf || valuation.actual2024.freeCashFlow) / valuation.actual2024.revenue * 100)}</td>
-                            <td className="text-right">{formatMillions(valuation.actual2024.ebitda)}</td>
-                            <td className="text-right">{formatPercentage(valuation.actual2024.ebitda / valuation.actual2024.revenue * 100)}</td>
-                            {method === 'dcf' ? (
-                              <>
-                                {valuation.projections?.[0]?.capex && (
-                                  <td className="text-right">{formatMillions(valuation.actual2024.capex)}</td>
-                                )}
-                                {valuation.projections?.[0]?.workingCapital && (
-                                  <td className="text-right">{formatMillions(valuation.actual2024.workingCapital)}</td>
-                                )}
-                              </>
-                            ) : (
-                              <>
-                                {valuation.projections?.[0]?.netIncome && (
-                                  <td className="text-right">{formatMillions(valuation.actual2024.netIncome)}</td>
-                                )}
-                                {valuation.projections?.[0]?.netIncome && (
-                                  <td className="text-right">{formatPercentage(valuation.actual2024.netIncome / valuation.actual2024.revenue * 100)}</td>
-                                )}
-                                {valuation.projections?.[0]?.eps && (
-                                  <td className="text-right">${valuation.actual2024.eps?.toFixed(2) || 'N/A'}</td>
-                                )}
-                              </>
-                            )}
-                          </tr>
-                        )}
-                        {valuation.projections?.map((projection, index) => {
-                          const prevProjection = index > 0 ? valuation.projections[index - 1] : (valuation.actual2024 || valuation.projections[0]);
-                          const revenueGrowth = prevProjection && prevProjection.revenue > 0 
-                            ? ((projection.revenue - prevProjection.revenue) / prevProjection.revenue) * 100 
-                            : 0;
-                          
-                          return (
-                            <tr key={projection.year}>
-                              <td>{projection.year}</td>
-                              <td className="text-right">{formatMillions(projection.revenue)}</td>
-                              <td className="text-right">{index === 0 && !valuation.actual2024 ? 'N/A' : formatPercentage(revenueGrowth)}</td>
-                              <td className="text-right">{formatMillions((projection.fcf || projection.freeCashFlow))}</td>
-                              <td className="text-right">{formatPercentage((projection.fcf || projection.freeCashFlow) / projection.revenue * 100)}</td>
-                              <td className="text-right">{formatMillions(projection.ebitda)}</td>
-                              <td className="text-right">{formatPercentage(projection.ebitda / projection.revenue * 100)}</td>
-                              {method === 'dcf' ? (
-                                <>
-                                  {valuation.projections?.[0]?.capex && (
-                                    <td className="text-right">{formatMillions(projection.capex)}</td>
-                                  )}
-                                  {valuation.projections?.[0]?.workingCapital && (
-                                    <td className="text-right">{formatMillions(projection.workingCapital)}</td>
-                                  )}
-                                </>
-                              ) : (
-                                <>
-                                  {valuation.projections?.[0]?.netIncome && (
-                                    <td className="text-right">{formatMillions(projection.netIncome)}</td>
-                                  )}
-                                  {valuation.projections?.[0]?.netIncome && (
-                                    <td className="text-right">{formatPercentage(projection.netIncome / projection.revenue * 100)}</td>
-                                  )}
-                                  {valuation.projections?.[0]?.eps && (
-                                    <td className="text-right">${projection.eps?.toFixed(2) || 'N/A'}</td>
-                                  )}
-                                </>
-                              )}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-            <TabsContent value="analysis">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Company Analysis</CardTitle>
+                  <CardTitle>Financial Forecast</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-6">
-                    <div>
-                      <h3 className="text-lg font-medium mb-2">Overview</h3>
-                      <p className="text-gray-600">{valuation.analysis.companyOverview}</p>
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-medium mb-2">Key Drivers</h3>
-                      <ul className="list-disc list-inside space-y-1">
-                        {valuation.analysis.keyDrivers?.map((driver, index) => (
-                          <li key={index} className="text-gray-600">{driver}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-medium mb-2">Risks</h3>
-                      <ul className="list-disc list-inside space-y-1">
-                        {valuation.analysis.risks?.map((risk, index) => (
-                          <li key={index} className="text-gray-600">{risk}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    {method !== 'exit-multiple' || !valuation.assumptions?.exitMultipleType || 
-                     (valuation.assumptions.exitMultipleType !== 'EV/EBITDA' && valuation.assumptions.exitMultipleType !== 'EV/FCF') ? (
+                    {valuation.sections?.forecastTable && (
                       <div>
-                        <h3 className="text-lg font-medium mb-2">Sensitivity Analysis</h3>
-                        <div className="grid grid-cols-3 gap-4">
-                          <div>
-                            <p className="text-sm text-gray-500">Bull Case</p>
-                            <p className="text-lg font-medium">
-                              {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
-                               (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
-                               ? formatMillions(valuation.analysis.sensitivity?.bullCase || 0) 
-                               : formatCurrency(valuation.analysis.sensitivity?.bullCase || 0)}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-sm text-gray-500">Base Case</p>
-                            <p className="text-lg font-medium">
-                              {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
-                               (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
-                               ? formatMillions(valuation.analysis.sensitivity?.baseCase || 0) 
-                               : formatCurrency(valuation.analysis.sensitivity?.baseCase || 0)}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-sm text-gray-500">Bear Case</p>
-                            <p className="text-lg font-medium">
-                              {method === 'exit-multiple' && valuation.assumptions?.exitMultipleType && 
-                               (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || valuation.assumptions.exitMultipleType === 'EV/FCF') 
-                               ? formatMillions(valuation.analysis.sensitivity?.bearCase || 0) 
-                               : formatCurrency(valuation.analysis.sensitivity?.bearCase || 0)}
-                            </p>
+                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Financial Projections</h3>
+                        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead className="bg-gray-50">
+                                <tr>
+                                  <th className="px-4 py-3 text-left font-medium text-gray-700">Year</th>
+                                  <th className="px-4 py-3 text-right font-medium text-gray-700">Revenue ($M)</th>
+                                  <th className="px-4 py-3 text-right font-medium text-gray-700">Growth (%)</th>
+                                  <th className="px-4 py-3 text-right font-medium text-gray-700">Gross Margin (%)</th>
+                                  <th className="px-4 py-3 text-right font-medium text-gray-700">EBITDA Margin (%)</th>
+                                  <th className="px-4 py-3 text-right font-medium text-gray-700">FCF Margin (%)</th>
+                                  <th className="px-4 py-3 text-right font-medium text-gray-700">Net Income ($M)</th>
+                                  {valuation.method === 'exit-multiple' && (
+                                    <th className="px-4 py-3 text-right font-medium text-gray-700">EPS</th>
+                                  )}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200">
+                                {valuation.tableData?.map((row, index) => (
+                                  <tr key={index} className="hover:bg-gray-50">
+                                    <td className="px-4 py-3 text-left font-medium text-gray-900">{row.year}</td>
+                                    <td className="px-4 py-3 text-right text-gray-900">{row.revenue?.toLocaleString()}</td>
+                                    <td className="px-4 py-3 text-right text-gray-600">{row.revenueGrowth?.toFixed(1)}</td>
+                                    <td className="px-4 py-3 text-right text-gray-600">{row.grossMargin?.toFixed(1)}</td>
+                                    <td className="px-4 py-3 text-right text-gray-600">{row.ebitdaMargin?.toFixed(1)}</td>
+                                    <td className="px-4 py-3 text-right text-gray-600">{row.fcfMargin?.toFixed(1)}</td>
+                                    <td className="px-4 py-3 text-right text-gray-900">{row.netIncome?.toLocaleString()}</td>
+                                    {valuation.method === 'exit-multiple' && (
+                                      <td className="px-4 py-3 text-right text-gray-900">${row.eps?.toFixed(2)}</td>
+                                    )}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
                           </div>
                         </div>
                       </div>
-                    ) : null}
-                    {method === 'exit-multiple' && valuation.analysis.multipleExplanation && (
+                    )}
+                    
+                    {valuation.sections?.fairValueCalculation && valuation.method === 'dcf' && (
                       <div>
-                        <h3 className="text-lg font-medium mb-2">Multiple Selection Reasoning</h3>
-                        <p className="text-gray-600 whitespace-pre-wrap">
-                          {valuation.analysis.multipleExplanation}
-                        </p>
+                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Fair Value Calculation</h3>
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                          <div className="prose prose-sm max-w-none">
+                            <div className="whitespace-pre-line text-gray-700">
+                              {valuation.sections.fairValueCalculation}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {valuation.sections?.exitMultipleValuation && valuation.method === 'exit-multiple' && (
+                      <div>
+                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Exit Multiple Valuation</h3>
+                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                          <div className="prose prose-sm max-w-none">
+                            <div className="whitespace-pre-line text-gray-700">
+                              {valuation.sections.exitMultipleValuation}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {valuation.sections?.assumptions && (
+                      <div>
+                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Assumptions and Justifications</h3>
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                          <div className="prose prose-sm max-w-none">
+                            <div className="text-gray-700 leading-relaxed">
+                              {valuation.sections.assumptions.split('\n').map((line, index) => {
+                                if (line.trim() === '') {
+                                  return <div key={index} className="h-3"></div>;
+                                } else {
+                                  return (
+                                    <div key={index} className="mb-2">
+                                      {line}
+                                    </div>
+                                  );
+                                }
+                              })}
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>
                 </CardContent>
               </Card>
             </TabsContent>
-            <TabsContent value="assumptions">
+            
+            <TabsContent value="analysis">
               <Card>
                 <CardHeader>
-                  <CardTitle>Valuation Assumptions</CardTitle>
+                  <CardTitle>Financial Analysis</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-6">
-                    <div>
-                      <h3 className="text-lg font-medium mb-2">Key Assumptions</h3>
-                      <div className="grid grid-cols-2 gap-4">
-                        {method === 'dcf' && (
-                          <>
-                            <div>
-                              <p className="text-sm text-gray-500">Revenue Growth Rate</p>
-                              <p className="text-lg font-medium">
-                                {formatDCFPercentage(valuation.assumptions.revenueGrowthRate || 
-                                                valuation.assumptions.fcfGrowthRate5yr ||
-                                                (Array.isArray(valuation.assumptions.revenueGrowth) ? 
-                                                 valuation.assumptions.revenueGrowth[0] : null))}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">Terminal Growth Rate</p>
-                              <p className="text-lg font-medium">
-                                {formatDCFPercentage(valuation.assumptions.terminalGrowthRate)}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">Discount Rate</p>
-                              <p className="text-lg font-medium">
-                                {formatDCFPercentage(valuation.assumptions.discountRate || valuation.assumptions.wacc)}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">FCF Margin</p>
-                              <p className="text-lg font-medium">
-                                {formatDCFPercentage(valuation.assumptions.fcfMargin)}
-                              </p>
-                            </div>
-                          </>
-                        )}
-                        {method === 'exit-multiple' && (
-                          <>
-                            <div>
-                              <p className="text-sm text-gray-500">Exit Multiple</p>
-                              <p className="text-lg font-medium">
-                                {formatMultiple(valuation.assumptions.exitMultiple)}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-sm font-medium text-gray-500">Exit Multiple Type</p>
-                              <p className="text-lg font-medium">
-                                {valuation.assumptions.exitMultipleType || 'N/A'}
-                              </p>
-                            </div>
-                          </>
-                        )}
+                    {valuation.sections?.financialAnalysis && (
+                      <div>
+                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Historical Analysis & Projections</h3>
+                        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                          <div className="prose prose-sm max-w-none">
+                            {valuation.sections.financialAnalysis.split('\n').map((line, index) => {
+                              if (line.startsWith('**') && line.endsWith('**')) {
+                                // This is a header - make it bold and add spacing
+                                return (
+                                  <div key={index} className="mt-4 mb-2">
+                                    <h4 className="font-semibold text-purple-800 text-base">
+                                      {line.replace(/\*\*/g, '')}
+                                    </h4>
+                                  </div>
+                                );
+                              } else if (line.trim() === '') {
+                                // Empty line - add spacing
+                                return <div key={index} className="h-2"></div>;
+                              } else {
+                                // Regular text
+                                return (
+                                  <div key={index} className="text-gray-700 mb-1">
+                                    {line}
+                                  </div>
+                                );
+                              }
+                            })}
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
             </TabsContent>
           </Tabs>
 
-          {valuation && (
-            <div className="flex justify-end">
-              <Button onClick={downloadExcel}>
-                Download Excel Model
-              </Button>
-            </div>
+          <div className="flex gap-4">
+            <Button onClick={downloadExcel} disabled={!valuation}>
+              Download Excel
+            </Button>
+            <Button 
+              variant="outline" 
+              onClick={() => setShowFeedbackForm(!showFeedbackForm)}
+              disabled={!valuation}
+            >
+              Provide Feedback
+            </Button>
+          </div>
+
+          {showFeedbackForm && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Provide Feedback</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleFeedbackSubmit} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">
+                      Feedback (e.g., adjust growth rates, margins, assumptions)
+                    </label>
+                    <textarea
+                      value={feedback}
+                      onChange={(e) => setFeedback(e.target.value)}
+                      className="w-full p-3 border rounded-lg"
+                      rows={4}
+                      placeholder="Enter your feedback here..."
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="submit" disabled={feedbackLoading}>
+                      {feedbackLoading ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Regenerating...
+                        </>
+                      ) : (
+                        'Regenerate Valuation'
+                      )}
+                    </Button>
+                    <Button 
+                      type="button" 
+                      variant="outline" 
+                      onClick={() => setShowFeedbackForm(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
           )}
         </div>
       )}
