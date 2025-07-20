@@ -55,3 +55,4 @@ ENV/
 *.swp
 *.swo
  
+/lib/generated/prisma
