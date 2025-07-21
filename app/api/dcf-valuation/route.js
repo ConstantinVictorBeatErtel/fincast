@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge';
+// export const runtime = 'edge';
 
 const generateValuation = async (ticker, method, selectedMultiple = 'auto', feedback = null) => {
   try {
