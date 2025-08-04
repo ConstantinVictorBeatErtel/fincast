@@ -115,6 +115,8 @@ ${feedback ? `USER FEEDBACK: ${feedback}
 
 Please incorporate this feedback into your analysis and adjust the assumptions/projections accordingly.` : ''}
 
+${multipleTypeInstruction}
+
 To complete this task, follow these steps:
 
 1. Research and analyze the company's historical financial data. Look for past growth rates, margins, and any notable trends or patterns.
@@ -300,6 +302,17 @@ Return ONLY the <forecast> section as specified above, without any additional co
       const analysisMatch = valuationText.match(/<financial_analysis>([\s\S]*?)<\/financial_analysis>/i);
       if (analysisMatch) {
         financialAnalysisText = analysisMatch[1];
+        console.log('Financial analysis extracted successfully, length:', financialAnalysisText.length);
+      } else {
+        console.log('No financial analysis tags found, trying fallback extraction...');
+        // Fallback: look for financial analysis content without tags
+        const fallbackMatch = valuationText.match(/(\*\*Financial.*?)(?=<forecast>|$)/s);
+        if (fallbackMatch) {
+          financialAnalysisText = fallbackMatch[1];
+          console.log('Financial analysis extracted via fallback, length:', financialAnalysisText.length);
+        } else {
+          console.log('No financial analysis found in response');
+        }
       }
 
       console.log('Forecast text:', forecastText);
@@ -582,6 +595,8 @@ The company you will be analyzing is: ${ticker}
 ${feedback ? `USER FEEDBACK: ${feedback}
 
 Please incorporate this feedback into your analysis and adjust the assumptions/projections accordingly.` : ''}
+
+${multipleTypeInstruction}
 
 To complete this task, follow these steps:
 
@@ -913,38 +928,35 @@ function generateExcelData(valuation) {
   const analysis = valuationData.analysis || {};
   const method = valuationData.method || 'dcf';
 
+  // Helper function to safely process strings
+  const safeString = (val) => {
+    if (typeof val !== 'string') return 'No data available';
+    return val.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim();
+  };
+
+  // Helper function to safely process arrays
+  const safeArray = (val) => {
+    if (!Array.isArray(val)) return [];
+    return val.map(item => typeof item === 'string' ? safeString(item) : item);
+  };
+
   // Normalize field names for analysis
   const normalizedAnalysis = {
-    companyOverview: (analysis.companyOverview || analysis.company_overview || 'No overview available')
-      .replace(/<cite[^>]*>.*?<\/cite>/g, '') // Remove citation tags
-      .replace(/\s+/g, ' ') // Normalize whitespace
-      .trim(),
-    keyDrivers: (analysis.keyDrivers || analysis.key_drivers || [])
-      .map(driver => typeof driver === 'string' ? 
-        driver.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim() : driver),
-    risks: Array.isArray(analysis.risks) ? 
-           analysis.risks.map(risk => typeof risk === 'string' ? 
-             risk.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim() : risk) :
-           (typeof analysis.risks === 'object' && analysis.risks !== null) ? 
-           Object.keys(analysis.risks).map(key => `${key}: ${analysis.risks[key]}`.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim()) : [],
+    companyOverview: safeString(analysis.companyOverview || analysis.company_overview || 'No overview available'),
+    keyDrivers: safeArray(analysis.keyDrivers || analysis.key_drivers || []),
+    risks: safeArray(analysis.risks || []),
     sensitivity: {
       bullCase: parseFloat(analysis.sensitivity?.bullCase || analysis.sensitivity?.bull_case || 0),
       baseCase: parseFloat(analysis.sensitivity?.baseCase || analysis.sensitivity?.base_case || 0),
       bearCase: parseFloat(analysis.sensitivity?.bearCase || analysis.sensitivity?.bear_case || 0)
     },
-    multipleExplanation: method === 'exit-multiple' ? analysis.multipleExplanation || 'No explanation provided' : null,
+    multipleExplanation: method === 'exit-multiple' ? safeString(analysis.multipleExplanation || 'No explanation provided') : null,
     // Add new financial analysis fields
-    historicalFinancialSummary: (analysis.historicalFinancialSummary || 'No historical data available')
-      .replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim(),
-    industryTrends: (analysis.industryTrends || [])
-      .map(trend => typeof trend === 'string' ? 
-        trend.replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim() : trend),
-    revenueGrowthAnalysis: (analysis.revenueGrowthAnalysis || 'No revenue growth analysis available')
-      .replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim(),
-    marginAnalysis: (analysis.marginAnalysis || 'No margin analysis available')
-      .replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim(),
-    exitMultipleRationale: (analysis.exitMultipleRationale || 'No exit multiple rationale available')
-      .replace(/<cite[^>]*>.*?<\/cite>/g, '').replace(/\s+/g, ' ').trim()
+    historicalFinancialSummary: safeString(analysis.historicalFinancialSummary || 'No historical data available'),
+    industryTrends: safeArray(analysis.industryTrends || []),
+    revenueGrowthAnalysis: safeString(analysis.revenueGrowthAnalysis || 'No revenue growth analysis available'),
+    marginAnalysis: safeString(analysis.marginAnalysis || 'No margin analysis available'),
+    exitMultipleRationale: safeString(analysis.exitMultipleRationale || 'No exit multiple rationale available')
   };
 
   // Get fair value and determine if it's EPS-based
@@ -1114,19 +1126,19 @@ function generateExcelData(valuation) {
       [normalizedAnalysis.companyOverview],
       [],
       ['Historical Financial Summary'],
-      [normalizedAnalysis.historicalFinancialSummary || 'No historical data available'],
+      [normalizedAnalysis.historicalFinancialSummary],
       [],
       ['Industry Trends'],
       ...(normalizedAnalysis.industryTrends || []).map(t => [t]),
       [],
       ['Revenue Growth Analysis'],
-      [normalizedAnalysis.revenueGrowthAnalysis || 'No revenue growth analysis available'],
+      [normalizedAnalysis.revenueGrowthAnalysis],
       [],
       ['Margin Analysis'],
-      [normalizedAnalysis.marginAnalysis || 'No margin analysis available'],
+      [normalizedAnalysis.marginAnalysis],
       [],
       ['Exit Multiple Rationale'],
-      [normalizedAnalysis.exitMultipleRationale || 'No exit multiple rationale available'],
+      [normalizedAnalysis.exitMultipleRationale],
       [],
       ['Key Drivers'],
       ...(normalizedAnalysis.keyDrivers || []).map(d => [d]),

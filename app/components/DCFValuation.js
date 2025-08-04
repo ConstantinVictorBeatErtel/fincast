@@ -20,6 +20,8 @@ export default function DCFValuation() {
   const [feedback, setFeedback] = useState('');
   const [showFeedbackForm, setShowFeedbackForm] = useState(false);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [hasRetried, setHasRetried] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   // Debug effect to log valuation changes
   useEffect(() => {
@@ -34,12 +36,22 @@ export default function DCFValuation() {
     }
   }, [valuation]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  // Helper to check if critical info is missing
+  const isValuationIncomplete = (data) => {
+    // You can add more fields if needed
+    return (
+      !data ||
+      !data.currentSharePrice || data.currentSharePrice === 0 ||
+      !data.fairValue || data.fairValue === 0
+    );
+  };
+
+  const handleSubmit = async (e, isRetry = false) => {
+    if (e) e.preventDefault();
     setLoading(true);
     setError(null);
     setValuation(null);
-
+    if (!isRetry) setHasRetried(false);
     if (!ticker) {
       setError('Please enter a ticker symbol');
       setLoading(false);
@@ -95,11 +107,23 @@ export default function DCFValuation() {
         throw new Error('Invalid data structure: Missing forecast data');
       }
 
+      // Check for missing critical info and retry once if needed
+      if (isValuationIncomplete(data) && !hasRetried) {
+        setRetrying(true);
+        setHasRetried(true);
+        setTimeout(() => {
+          handleSubmit(undefined, true); // retry without event
+        }, 500); // short delay to avoid race
+        return;
+      }
+
       // Set the raw data directly
       setValuation(data);
+      setRetrying(false);
     } catch (err) {
       console.error('Error in handleSubmit:', err);
       setError(err.message);
+      setRetrying(false);
     } finally {
       setLoading(false);
     }
@@ -380,7 +404,7 @@ export default function DCFValuation() {
                 <SelectValue placeholder="Select multiple type" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto">AI Decision (Standard)</SelectItem>
+                <SelectItem value="auto">AI Chooses Multiple Type</SelectItem>
                 <SelectItem value="P/E">P/E Multiple</SelectItem>
                 <SelectItem value="EV/EBITDA">EV/EBITDA Multiple</SelectItem>
                 <SelectItem value="EV/FCF">EV/FCF Multiple</SelectItem>
@@ -412,6 +436,15 @@ export default function DCFValuation() {
         <div className="flex justify-center items-center py-8">
           <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
         </div>
+      )}
+
+      {retrying && (
+        <Alert className="mt-4" variant="warning">
+          <AlertTitle>Retrying...</AlertTitle>
+          <AlertDescription>
+            Some key information was missing. Retrying the valuation fetch one more time.
+          </AlertDescription>
+        </Alert>
       )}
 
       {valuation && (
