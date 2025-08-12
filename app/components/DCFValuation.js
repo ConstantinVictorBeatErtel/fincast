@@ -31,8 +31,14 @@ export default function DCFValuation() {
         analysis: valuation.analysis,
         projections: valuation.projections,
         assumptions: valuation.assumptions,
-        hasExcelData: !!valuation.excelData
+        hasExcelData: !!valuation.excelData,
+        fairValue: valuation.fairValue,
+        currentSharePrice: valuation.currentSharePrice,
+        sections: valuation.sections,
+        hasFinancialAnalysis: !!valuation.sections?.financialAnalysis
       });
+    } else {
+      console.log('Valuation state cleared');
     }
   }, [valuation]);
 
@@ -152,16 +158,41 @@ export default function DCFValuation() {
       let data;
       try {
         data = await response.json();
+        console.log('Feedback response data:', data);
       } catch (jsonError) {
+        console.error('Failed to parse feedback response:', jsonError);
         throw new Error('Unable to process server response. Please try again later.');
       }
 
       if (!response.ok) {
+        console.error('Feedback request failed:', response.status, data);
         throw new Error(data.error || 'Failed to regenerate valuation with feedback');
       }
 
       // Set the new valuation - handle both direct response and nested response
       const newValuation = data.valuation || data;
+      console.log('Setting new valuation:', newValuation);
+
+      // Guard: only replace current valuation if feedback response is usable
+      const hasUsableForecast = !!newValuation?.rawForecast &&
+        (
+          newValuation.rawForecast.includes('Year | Revenue') ||
+          Array.isArray(newValuation.tableData) && newValuation.tableData.length > 0 ||
+          (newValuation.sections && (
+            !!newValuation.sections.forecastTable ||
+            !!newValuation.sections.fairValueCalculation ||
+            !!newValuation.sections.exitMultipleValuation ||
+            !!newValuation.sections.assumptions ||
+            !!newValuation.sections.financialAnalysis
+          ))
+        );
+
+      if (!hasUsableForecast) {
+        console.warn('Feedback response missing usable forecast. Keeping existing results.');
+        setError('Feedback applied, but the response was incomplete. Keeping previous results. Try again or refine feedback.');
+        return; // Do not clear existing valuation
+      }
+
       setValuation(newValuation);
       setFeedback('');
       setShowFeedbackForm(false);
@@ -193,6 +224,10 @@ export default function DCFValuation() {
         : `$${valuation.fairValue?.toLocaleString()} million`
       ],
       ['Upside', `${valuation.upside?.toFixed(1) || 0}%`],
+      ['2029 Upside', valuation.currentSharePrice && valuation.fairValue 
+        ? `${((valuation.fairValue - valuation.currentSharePrice) / valuation.currentSharePrice * 100).toFixed(1)}%`
+        : '0%'
+      ],
       ['Upside CAGR', `${valuation.cagr?.toFixed(1) || 0}%`],
       ['Confidence', valuation.confidence || 'Medium'],
       []
@@ -253,6 +288,14 @@ export default function DCFValuation() {
 
     // Create Analysis sheet
     const analysisData = [];
+    
+    console.log('Checking financial analysis:', {
+      hasSections: !!valuation.sections,
+      sectionsKeys: Object.keys(valuation.sections || {}),
+      hasFinancialAnalysis: !!valuation.sections?.financialAnalysis,
+      financialAnalysisLength: valuation.sections?.financialAnalysis?.length || 0,
+      financialAnalysisPreview: valuation.sections?.financialAnalysis?.substring(0, 100)
+    });
     
     if (valuation.sections?.financialAnalysis) {
       // Truncate financial analysis to first few lines
@@ -506,11 +549,19 @@ export default function DCFValuation() {
               
               {/* Add CAGR display */}
               <div className="mt-6 pt-6 border-t">
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <div>
                     <h3 className="text-sm font-medium text-gray-500">Upside CAGR</h3>
                     <p className="text-xl font-bold text-blue-600">
                       {valuation.cagr?.toFixed(1) || 0}%
+                    </p>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-500">2029 Upside</h3>
+                    <p className="text-xl font-bold text-green-600">
+                      {valuation.currentSharePrice && valuation.fairValue 
+                        ? ((valuation.fairValue - valuation.currentSharePrice) / valuation.currentSharePrice * 100).toFixed(1)
+                        : 0}%
                     </p>
                   </div>
                   <div>

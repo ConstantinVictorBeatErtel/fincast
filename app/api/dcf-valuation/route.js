@@ -214,7 +214,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1200,
+        max_tokens: 2000,
         system: `Return ONLY JSON. NO text. NO explanations. Get CURRENT data. Use actual 2024 financial results and current market data. Search for the most recent quarterly/annual reports and current stock prices. Search for analyst estimates, industry trends, and company guidance to ensure projections are based on current market expectations.`,
         messages: [
           {
@@ -284,6 +284,9 @@ Return ONLY the <forecast> section as specified above, without any additional co
     }
 
     console.log('Raw valuation text:', valuationText);
+    console.log('Raw valuation text length:', valuationText.length);
+    console.log('Raw valuation text preview (first 500 chars):', valuationText.substring(0, 500));
+    console.log('Raw valuation text preview (last 500 chars):', valuationText.substring(valuationText.length - 500));
 
     // Parse the new structured forecast format - handle full Claude response
     try {
@@ -311,12 +314,46 @@ Return ONLY the <forecast> section as specified above, without any additional co
           financialAnalysisText = fallbackMatch[1];
           console.log('Financial analysis extracted via fallback, length:', financialAnalysisText.length);
         } else {
-          console.log('No financial analysis found in response');
+          // Second fallback: look for any content before the forecast section
+          const beforeForecastMatch = valuationText.match(/(.*?)(?=<forecast>)/s);
+          if (beforeForecastMatch && beforeForecastMatch[1].trim()) {
+            financialAnalysisText = beforeForecastMatch[1].trim();
+            console.log('Financial analysis extracted from content before forecast, length:', financialAnalysisText.length);
+          } else {
+            // Third fallback: look for any analysis content in the response
+            const anyAnalysisMatch = valuationText.match(/(.*?)(?=Financial Forecast|Year \| Revenue)/s);
+            if (anyAnalysisMatch && anyAnalysisMatch[1].trim()) {
+              financialAnalysisText = anyAnalysisMatch[1].trim();
+              console.log('Financial analysis extracted from general content, length:', financialAnalysisText.length);
+            } else {
+              console.log('No financial analysis found in response');
+            }
+          }
         }
       }
 
-      console.log('Forecast text:', forecastText);
-      console.log('Financial analysis text:', financialAnalysisText);
+      console.log('Forecast text length:', forecastText.length);
+      console.log('Financial analysis text length:', financialAnalysisText.length);
+      console.log('Financial analysis preview:', financialAnalysisText.substring(0, 200));
+
+      // Validate that we have a proper forecast structure
+      const hasForecastTable = forecastText.includes('Year | Revenue') || forecastText.includes('Financial Forecast');
+      const hasFairValue = forecastText.includes('Fair Value:');
+      const hasCurrentPrice = forecastText.includes('Current Share Price:');
+      
+      console.log('Forecast validation:', {
+        hasForecastTable,
+        hasFairValue,
+        hasCurrentPrice,
+        forecastLength: forecastText.length
+      });
+
+      // Only require the forecast table to be present
+      // Fair value and current price will be handled by retry logic if missing
+      if (!hasForecastTable) {
+        console.error('Malformed forecast response - missing forecast table');
+        throw new Error('Invalid forecast response from Claude API - missing forecast table');
+      }
 
       // Parse the forecast table to extract financial data for basic structure
       const lines = forecastText.split('\n').filter(line => line.trim());
@@ -378,7 +415,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
         // For exit-multiple method, also check for per-share format
         if (method === 'exit-multiple') {
           console.log('Looking for per-share fair value in:', forecastText.substring(0, 500));
-          const perShareMatch = forecastText.match(/Fair Value:\s*\$([\d,]+(?:\.\d+)?)\s*per\s*share/i);
+          const perShareMatch = forecastText.match(/Fair Value:\s*[€$]([\d,]+(?:\.\d+)?)\s*per\s*share/i);
           console.log('Per-share regex match:', perShareMatch);
           if (perShareMatch) {
             // For per-share values, store the per-share value directly
@@ -394,9 +431,9 @@ Return ONLY the <forecast> section as specified above, without any additional co
 
       // Extract current share price
       let currentSharePrice = 0;
-      const currentPriceMatch = forecastText.match(/Current Share Price:\s*\$([\d.]+)/i);
+      const currentPriceMatch = forecastText.match(/Current Share Price:\s*[€$]([\d,]+(?:\.\d+)?)/i);
       if (currentPriceMatch) {
-        currentSharePrice = parseFloat(currentPriceMatch[1]);
+        currentSharePrice = parseFloat(currentPriceMatch[1].replace(/,/g, ''));
         console.log('Extracted current share price:', currentSharePrice);
       }
 
@@ -696,7 +733,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1200,
+        max_tokens: 2000,
         system: `Return ONLY JSON. NO text. NO explanations. Get CURRENT data. Use actual 2024 financial results and current market data. Search for the most recent quarterly/annual reports and current stock prices. Incorporate user feedback into your analysis.`,
         messages: [
           {
@@ -779,6 +816,35 @@ Return ONLY the <forecast> section as specified above, without any additional co
         forecastText = valuationText;
       }
 
+      // Extract the financial analysis section (mirror GET path)
+      let financialAnalysisText = '';
+      const analysisMatch = valuationText.match(/<financial_analysis>([\s\S]*?)<\/financial_analysis>/i);
+      if (analysisMatch) {
+        financialAnalysisText = analysisMatch[1];
+        console.log('Financial analysis (feedback) extracted successfully, length:', financialAnalysisText.length);
+      } else {
+        console.log('No financial analysis tags found in feedback, trying fallback extraction...');
+        const fallbackMatch = valuationText.match(/(\*\*Financial.*?)(?=<forecast>|$)/s);
+        if (fallbackMatch) {
+          financialAnalysisText = fallbackMatch[1];
+          console.log('Financial analysis (feedback) extracted via fallback, length:', financialAnalysisText.length);
+        } else {
+          const beforeForecastMatch = valuationText.match(/(.*?)(?=<forecast>)/s);
+          if (beforeForecastMatch && beforeForecastMatch[1].trim()) {
+            financialAnalysisText = beforeForecastMatch[1].trim();
+            console.log('Financial analysis (feedback) extracted from content before forecast, length:', financialAnalysisText.length);
+          } else {
+            const anyAnalysisMatch = valuationText.match(/(.*?)(?=Financial Forecast|Year \| Revenue)/s);
+            if (anyAnalysisMatch && anyAnalysisMatch[1].trim()) {
+              financialAnalysisText = anyAnalysisMatch[1].trim();
+              console.log('Financial analysis (feedback) extracted from general content, length:', financialAnalysisText.length);
+            } else {
+              console.log('No financial analysis found in feedback response');
+            }
+          }
+        }
+      }
+
       console.log('Forecast text:', forecastText);
 
       // Parse the forecast table to extract financial data for basic structure
@@ -803,12 +869,12 @@ Return ONLY the <forecast> section as specified above, without any additional co
           if (columns.length >= 6) {
             tableData.push({
               year: columns[0],
-              revenue: parseFloat(columns[1]) || 0,
+              revenue: parseFloat(columns[1].replace(/,/g, '')) || 0,
               revenueGrowth: parseFloat(columns[2]) || 0,
               grossMargin: parseFloat(columns[3]) || 0,
               ebitdaMargin: parseFloat(columns[4]) || 0,
               fcfMargin: parseFloat(columns[5]) || 0,
-              netIncome: parseFloat(columns[6]) || 0,
+              netIncome: parseFloat(columns[6]?.replace?.(/,/g, '') || columns[6]) || 0,
               eps: parseFloat(columns[7]) || 0
             });
           }
@@ -833,34 +899,34 @@ Return ONLY the <forecast> section as specified above, without any additional co
 
       // Extract basic values for compatibility
       let fairValue = 0;
-      const fairValueMatch = forecastText.match(/Fair Value:\s*\$([\d,]+)\s*million/i);
+      const fairValueMatch = forecastText.match(/Fair Value:\s*[€$]([\d,]+)\s*million/i);
       if (fairValueMatch) {
         fairValue = parseFloat(fairValueMatch[1].replace(/,/g, ''));
-        console.log('Extracted million fair value:', fairValue);
+        console.log('Extracted million fair value (feedback):', fairValue);
       } else {
         // For exit-multiple method, also check for per-share format
         if (method === 'exit-multiple') {
-          console.log('Looking for per-share fair value in:', forecastText.substring(0, 500));
-          const perShareMatch = forecastText.match(/Fair Value:\s*\$([\d,]+(?:\.\d+)?)\s*per\s*share/i);
-          console.log('Per-share regex match:', perShareMatch);
+          console.log('Looking for per-share fair value in (feedback):', forecastText.substring(0, 500));
+          const perShareMatch = forecastText.match(/Fair Value:\s*[€$]([\d,]+(?:\.\d+)?)\s*per\s*share/i);
+          console.log('Per-share regex match (feedback):', perShareMatch);
           if (perShareMatch) {
             // For per-share values, store the per-share value directly
             fairValue = parseFloat(perShareMatch[1].replace(/,/g, ''));
-            console.log('Extracted per-share fair value:', fairValue);
+            console.log('Extracted per-share fair value (feedback):', fairValue);
           } else {
-            console.log('No per-share match found. Looking for pattern in text...');
+            console.log('No per-share match found in feedback. Looking for pattern in text...');
             const fairValueLine = forecastText.match(/Fair Value:.*per share/i);
-            console.log('Fair value line found:', fairValueLine);
+            console.log('Fair value line found (feedback):', fairValueLine);
           }
         }
       }
 
       // Extract current share price
       let currentSharePrice = 0;
-      const currentPriceMatch = forecastText.match(/Current Share Price:\s*\$([\d.]+)/i);
+      const currentPriceMatch = forecastText.match(/Current Share Price:\s*[€$]([\d,]+(?:\.\d+)?)/i);
       if (currentPriceMatch) {
-        currentSharePrice = parseFloat(currentPriceMatch[1]);
-        console.log('Extracted current share price:', currentSharePrice);
+        currentSharePrice = parseFloat(currentPriceMatch[1].replace(/,/g, ''));
+        console.log('Extracted current share price (feedback):', currentSharePrice);
       }
 
       const discountRateMatch = forecastText.match(/Discount Rate:\s*([\d.]+)%/i);
@@ -872,6 +938,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
       // Return the raw data structure with minimal parsing
       const result = {
         rawForecast: forecastText,
+        rawFinancialAnalysis: financialAnalysisText,
+        fullResponse: valuationText,
         companyName: companyName,
         method: method,
         // Basic parsed values for compatibility
@@ -888,12 +956,14 @@ Return ONLY the <forecast> section as specified above, without any additional co
           forecastTable: extractForecastTable(forecastText),
           fairValueCalculation: extractFairValueCalculation(forecastText),
           exitMultipleValuation: extractExitMultipleValuation(forecastText),
-          assumptions: extractAssumptions(forecastText)
+          assumptions: extractAssumptions(forecastText),
+          financialAnalysis: financialAnalysisText
         }
       };
 
       console.log('Raw forecast result:', {
         hasRawForecast: !!result.rawForecast,
+        hasFinancialAnalysis: !!result.rawFinancialAnalysis,
         companyName: result.companyName,
         method: result.method,
         fairValue: result.fairValue,
@@ -1297,39 +1367,54 @@ export async function GET(request) {
     };
 
     // Calculate upside and CAGR based on method
-    if (method === 'exit-multiple') {
-      // For all exit multiple methods, calculate upside based on current price vs fair value per share
-      const currentPrice = rawValuation.currentSharePrice || 150; // Use extracted current price or fallback
-      const fairValuePerShare = rawValuation.fairValue; // This is already per-share for all exit multiples
-      if (currentPrice > 0 && fairValuePerShare > 0) {
-        result.upside = ((fairValuePerShare - currentPrice) / currentPrice) * 100;
-        result.cagr = (Math.pow(fairValuePerShare / currentPrice, 1 / 5) - 1) * 100;
-      }
-    } else if (method === 'dcf') {
-      // For DCF, calculate upside based on current market cap vs fair value
-      // We need to get current market cap from current share price
-      const currentPrice = rawValuation.currentSharePrice;
-      const fairValueInMillions = rawValuation.fairValue; // This is already in millions
-      
-      if (currentPrice && fairValueInMillions) {
-        // For DCF, we need to estimate current market cap
-        // We'll use a reasonable assumption of shares outstanding (could be improved with real data)
-        const estimatedSharesOutstanding = 1000000000; // 1 billion shares as default
-        const currentMarketCap = currentPrice * estimatedSharesOutstanding;
-        const fairValueInDollars = fairValueInMillions * 1000000; // Convert millions to dollars
-        
-        // For AAPL specifically, let's use the actual shares outstanding from the analysis
-        if (rawValuation.companyName === 'AAPL') {
-          const actualSharesOutstanding = 14940000000; // 14.94B shares from the analysis
-          const actualCurrentMarketCap = currentPrice * actualSharesOutstanding;
-          
-          result.upside = ((fairValueInDollars - actualCurrentMarketCap) / actualCurrentMarketCap) * 100;
-          result.cagr = (Math.pow(fairValueInDollars / actualCurrentMarketCap, 1 / 5) - 1) * 100;
+    try {
+      if (method === 'exit-multiple') {
+        // For all exit multiple methods, calculate upside based on current price vs fair value per share
+        const currentPrice = rawValuation.currentSharePrice || 150; // Use extracted current price or fallback
+        const fairValuePerShare = rawValuation.fairValue; // This is already per-share for all exit multiples
+        console.log('Calculating exit-multiple upside:', { currentPrice, fairValuePerShare });
+        if (currentPrice > 0 && fairValuePerShare > 0) {
+          result.upside = ((fairValuePerShare - currentPrice) / currentPrice) * 100;
+          result.cagr = (Math.pow(fairValuePerShare / currentPrice, 1 / 5) - 1) * 100;
+          console.log('Calculated upside/CAGR:', { upside: result.upside, cagr: result.cagr });
         } else {
-          result.upside = ((fairValueInDollars - currentMarketCap) / currentMarketCap) * 100;
-          result.cagr = (Math.pow(fairValueInDollars / currentMarketCap, 1 / 5) - 1) * 100;
+          console.log('Skipping upside calculation - invalid prices:', { currentPrice, fairValuePerShare });
+        }
+      } else if (method === 'dcf') {
+        // For DCF, calculate upside based on current market cap vs fair value
+        // We need to get current market cap from current share price
+        const currentPrice = rawValuation.currentSharePrice;
+        const fairValueInMillions = rawValuation.fairValue; // This is already in millions
+        
+        console.log('Calculating DCF upside:', { currentPrice, fairValueInMillions });
+        if (currentPrice && fairValueInMillions) {
+          // For DCF, we need to estimate current market cap
+          // We'll use a reasonable assumption of shares outstanding (could be improved with real data)
+          const estimatedSharesOutstanding = 1000000000; // 1 billion shares as default
+          const currentMarketCap = currentPrice * estimatedSharesOutstanding;
+          const fairValueInDollars = fairValueInMillions * 1000000; // Convert millions to dollars
+          
+          // For AAPL specifically, let's use the actual shares outstanding from the analysis
+          if (rawValuation.companyName === 'AAPL') {
+            const actualSharesOutstanding = 14940000000; // 14.94B shares from the analysis
+            const actualCurrentMarketCap = currentPrice * actualSharesOutstanding;
+            
+            result.upside = ((fairValueInDollars - actualCurrentMarketCap) / actualCurrentMarketCap) * 100;
+            result.cagr = (Math.pow(fairValueInDollars / actualCurrentMarketCap, 1 / 5) - 1) * 100;
+          } else {
+            result.upside = ((fairValueInDollars - currentMarketCap) / currentMarketCap) * 100;
+            result.cagr = (Math.pow(fairValueInDollars / currentMarketCap, 1 / 5) - 1) * 100;
+          }
+          console.log('Calculated DCF upside/CAGR:', { upside: result.upside, cagr: result.cagr });
+        } else {
+          console.log('Skipping DCF upside calculation - invalid prices:', { currentPrice, fairValueInMillions });
         }
       }
+    } catch (calcError) {
+      console.error('Error calculating upside/CAGR:', calcError);
+      // Don't fail the entire request, just set defaults
+      result.upside = 0;
+      result.cagr = 0;
     }
 
     console.log('Returning raw forecast result:', {
@@ -1340,7 +1425,23 @@ export async function GET(request) {
       sections: Object.keys(result.sections)
     });
 
-    return NextResponse.json(result);
+    console.log('About to return response with result structure:', {
+      hasRawForecast: !!result.rawForecast,
+      hasFinancialAnalysis: !!result.rawFinancialAnalysis,
+      companyName: result.companyName,
+      method: result.method,
+      fairValue: result.fairValue,
+      currentSharePrice: result.currentSharePrice,
+      upside: result.upside,
+      cagr: result.cagr
+    });
+
+    try {
+      return NextResponse.json(result);
+    } catch (returnError) {
+      console.error('Error returning response:', returnError);
+      throw returnError;
+    }
   } catch (error) {
     console.error('Error generating valuation:', error);
 
@@ -1371,6 +1472,8 @@ export async function POST(request) {
   const ticker = searchParams.get('ticker');
   const method = searchParams.get('method') || 'dcf';
   const selectedMultiple = searchParams.get('multiple') || 'auto';
+
+  console.log('POST request received:', { ticker, method, selectedMultiple });
 
   // Validate required parameters
   if (!ticker) {
@@ -1403,8 +1506,34 @@ export async function POST(request) {
     console.log('Regenerating valuation with feedback:', { ticker, method, selectedMultiple, feedback });
 
     // Generate valuation with feedback
-    const valuation = await generateValuationWithFeedback(ticker, method, selectedMultiple, feedback);
+    let valuation = await generateValuationWithFeedback(ticker, method, selectedMultiple, feedback);
     
+    console.log('Feedback valuation result:', {
+      hasRawForecast: !!valuation?.rawForecast,
+      companyName: valuation?.companyName,
+      method: valuation?.method,
+      fairValue: valuation?.fairValue,
+      currentSharePrice: valuation?.currentSharePrice
+    });
+
+    // If response looks incomplete, retry once with stricter guidance
+    const looksIncomplete = !valuation?.rawForecast?.includes('Year | Revenue') || (!valuation?.fairValue && !valuation?.currentSharePrice);
+    if (looksIncomplete) {
+      console.warn('Feedback valuation incomplete. Retrying once with stricter guidance...');
+      const stricterFeedback = `${feedback}\n\nIMPORTANT: Ensure the <forecast> section includes exact lines:\n- Fair Value: <currency><space><value> per share\n- Current Share Price: <currency><space><value>\nAnd include the full 7-column forecast table starting with: Year | Revenue ($M) | Revenue Growth (%) | ...`;
+      try {
+        const secondAttempt = await generateValuation(ticker, method, selectedMultiple, stricterFeedback);
+        if (secondAttempt?.rawForecast?.includes('Year | Revenue') && (secondAttempt?.fairValue || secondAttempt?.currentSharePrice)) {
+          console.log('Retry with stricter guidance succeeded. Using second attempt.');
+          valuation = secondAttempt;
+        } else {
+          console.warn('Retry with stricter guidance did not yield complete data. Keeping first attempt.');
+        }
+      } catch (retryErr) {
+        console.error('Retry with stricter guidance failed:', retryErr);
+      }
+    }
+
     // Use the same formatting logic as GET request
     if (!valuation || !valuation.rawForecast) {
       console.error('Invalid valuation structure:', valuation);
@@ -1439,38 +1568,53 @@ export async function POST(request) {
     };
 
     // Calculate upside and CAGR based on method
-    if (method === 'exit-multiple') {
-      // For all exit multiple methods, calculate upside based on current price vs fair value per share
-      const currentPrice = valuation.currentSharePrice || 150; // Use extracted current price or fallback
-      const fairValuePerShare = valuation.fairValue; // This is already per-share for all exit multiples
-      if (currentPrice > 0 && fairValuePerShare > 0) {
-        result.upside = ((fairValuePerShare - currentPrice) / currentPrice) * 100;
-        result.cagr = (Math.pow(fairValuePerShare / currentPrice, 1 / 5) - 1) * 100;
-      }
-    } else if (method === 'dcf') {
-      // For DCF, calculate upside based on current market cap vs fair value
-      const currentPrice = valuation.currentSharePrice;
-      const fairValueInMillions = valuation.fairValue; // This is in millions
-      
-      if (currentPrice && fairValueInMillions) {
-        // For DCF, we need to estimate current market cap
-        // We'll use a reasonable assumption of shares outstanding (could be improved with real data)
-        const estimatedSharesOutstanding = 1000000000; // 1 billion shares as default
-        const currentMarketCap = currentPrice * estimatedSharesOutstanding;
-        const fairValueInDollars = fairValueInMillions * 1000000; // Convert millions to dollars
-        
-        // For AAPL specifically, let's use the actual shares outstanding from the analysis
-        if (valuation.companyName === 'AAPL') {
-          const actualSharesOutstanding = 14940000000; // 14.94B shares from the analysis
-          const actualCurrentMarketCap = currentPrice * actualSharesOutstanding;
-          
-          result.upside = ((fairValueInDollars - actualCurrentMarketCap) / actualCurrentMarketCap) * 100;
-          result.cagr = (Math.pow(fairValueInDollars / actualCurrentMarketCap, 1 / 5) - 1) * 100;
+    try {
+      if (method === 'exit-multiple') {
+        // For all exit multiple methods, calculate upside based on current price vs fair value per share
+        const currentPrice = valuation.currentSharePrice || 150; // Use extracted current price or fallback
+        const fairValuePerShare = valuation.fairValue; // This is already per-share for all exit multiples
+        console.log('Calculating exit-multiple upside:', { currentPrice, fairValuePerShare });
+        if (currentPrice > 0 && fairValuePerShare > 0) {
+          result.upside = ((fairValuePerShare - currentPrice) / currentPrice) * 100;
+          result.cagr = (Math.pow(fairValuePerShare / currentPrice, 1 / 5) - 1) * 100;
+          console.log('Calculated upside/CAGR:', { upside: result.upside, cagr: result.cagr });
         } else {
-          result.upside = ((fairValueInDollars - currentMarketCap) / currentMarketCap) * 100;
-          result.cagr = (Math.pow(fairValueInDollars / currentMarketCap, 1 / 5) - 1) * 100;
+          console.log('Skipping upside calculation - invalid prices:', { currentPrice, fairValuePerShare });
+        }
+      } else if (method === 'dcf') {
+        // For DCF, calculate upside based on current market cap vs fair value
+        const currentPrice = valuation.currentSharePrice;
+        const fairValueInMillions = valuation.fairValue; // This is in millions
+        
+        console.log('Calculating DCF upside:', { currentPrice, fairValueInMillions });
+        if (currentPrice && fairValueInMillions) {
+          // For DCF, we need to estimate current market cap
+          // We'll use a reasonable assumption of shares outstanding (could be improved with real data)
+          const estimatedSharesOutstanding = 1000000000; // 1 billion shares as default
+          const currentMarketCap = currentPrice * estimatedSharesOutstanding;
+          const fairValueInDollars = fairValueInMillions * 1000000; // Convert millions to dollars
+          
+          // For AAPL specifically, let's use the actual shares outstanding from the analysis
+          if (valuation.companyName === 'AAPL') {
+            const actualSharesOutstanding = 14940000000; // 14.94B shares from the analysis
+            const actualCurrentMarketCap = currentPrice * actualSharesOutstanding;
+            
+            result.upside = ((fairValueInDollars - actualCurrentMarketCap) / actualCurrentMarketCap) * 100;
+            result.cagr = (Math.pow(fairValueInDollars / actualCurrentMarketCap, 1 / 5) - 1) * 100;
+          } else {
+            result.upside = ((fairValueInDollars - currentMarketCap) / currentMarketCap) * 100;
+            result.cagr = (Math.pow(fairValueInDollars / currentMarketCap, 1 / 5) - 1) * 100;
+          }
+          console.log('Calculated DCF upside/CAGR:', { upside: result.upside, cagr: result.cagr });
+        } else {
+          console.log('Skipping DCF upside calculation - invalid prices:', { currentPrice, fairValueInMillions });
         }
       }
+    } catch (calcError) {
+      console.error('Error calculating upside/CAGR:', calcError);
+      // Don't fail the entire request, just set defaults
+      result.upside = 0;
+      result.cagr = 0;
     }
 
     console.log('Returning feedback valuation result:', {
@@ -1481,7 +1625,23 @@ export async function POST(request) {
       sections: Object.keys(result.sections)
     });
 
-    return NextResponse.json(result);
+    console.log('About to return response with result structure:', {
+      hasRawForecast: !!result.rawForecast,
+      hasFinancialAnalysis: !!result.rawFinancialAnalysis,
+      companyName: result.companyName,
+      method: result.method,
+      fairValue: result.fairValue,
+      currentSharePrice: result.currentSharePrice,
+      upside: result.upside,
+      cagr: result.cagr
+    });
+
+    try {
+      return NextResponse.json(result);
+    } catch (returnError) {
+      console.error('Error returning response:', returnError);
+      throw returnError;
+    }
   } catch (error) {
     console.error('Error generating valuation with feedback:', error);
     return NextResponse.json(
