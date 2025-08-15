@@ -2,30 +2,309 @@ import { NextResponse } from 'next/server';
 
 // export const runtime = 'edge';
 
+// Helper functions for extracting forecast sections
+function extractForecastTable(text) {
+  const tableMatch = text.match(/(Year \| Revenue.*?)(?=Fair Value Calculation:|Exit Multiple Valuation:|$)/s);
+  return tableMatch ? tableMatch[1].trim() : '';
+}
+
+function extractFairValueCalculation(text) {
+  const calcMatch = text.match(/(Fair Value Calculation:.*?)(?=Assumptions and Justifications:|$)/s);
+  return calcMatch ? calcMatch[1].trim() : '';
+}
+
+function extractExitMultipleValuation(text) {
+  const exitMatch = text.match(/(Exit Multiple Valuation:.*?)(?=Assumptions and Justifications:|$)/s);
+  return exitMatch ? exitMatch[1].trim() : '';
+}
+
+function extractAssumptions(text) {
+  const assumptionsMatch = text.match(/(Assumptions and Justifications:.*?)(?=$)/s);
+  return assumptionsMatch ? assumptionsMatch[1].trim() : '';
+}
+
+// New helper function to parse forecast table into structured data
+function parseForecastTable(text) {
+  const tableMatch = text.match(/(Year \| Revenue.*?)(?=Fair Value Calculation:|Exit Multiple Valuation:|$)/s);
+  if (!tableMatch) return [];
+  
+  const tableText = tableMatch[1];
+  const lines = tableText.split('\n').filter(line => line.trim() && !line.includes('----'));
+  
+  return lines.map(line => {
+    const parts = line.split('|').map(part => part.trim());
+    if (parts.length < 7) return null;
+    
+    return {
+      year: parts[0],
+      revenue: parseFloat(parts[1].replace(/[^\d.-]/g, '')) || 0,
+      revenueGrowth: parseFloat(parts[2].replace(/[^\d.-]/g, '')) || 0,
+      grossMargin: parseFloat(parts[3].replace(/[^\d.-]/g, '')) || 0,
+      ebitdaMargin: parseFloat(parts[4].replace(/[^\d.-]/g, '')) || 0,
+      fcfMargin: parseFloat(parts[5].replace(/[^\d.-]/g, '')) || 0,
+      netIncome: parseFloat(parts[6].replace(/[^\d.-]/g, '')) || 0,
+      eps: parts[7] ? parseFloat(parts[7].replace(/[^\d.-]/g, '')) || 0 : null
+    };
+  }).filter(Boolean);
+}
+
+// New helper function to extract clean sections
+function extractSections(text, method) {
+  return {
+    forecastTable: extractForecastTable(text),
+    fairValueCalculation: method === 'dcf' ? extractFairValueCalculation(text) : '',
+    exitMultipleValuation: method === 'exit-multiple' ? extractExitMultipleValuation(text) : '',
+    assumptions: extractAssumptions(text)
+  };
+}
+
+// Function to fetch financial data from yfinance via Python script
+async function fetchFinancialsWithYfinance(ticker) {
+  try {
+    console.log('Fetching yfinance data for:', ticker);
+    
+    // Call the Python script to get yfinance data
+    const { spawn } = require('child_process');
+    const path = require('path');
+    
+    return new Promise((resolve, reject) => {
+      // Use path from project root since __dirname might not work in ES modules
+      const scriptPath = path.join(process.cwd(), 'scripts', 'fetch_yfinance.py');
+      console.log('Python script path:', scriptPath);
+      console.log('Current working directory:', process.cwd());
+      console.log('Script exists:', require('fs').existsSync(scriptPath));
+      
+      // Force arm64 architecture for Python to match installed NumPy wheels
+      const pythonProcess = spawn('/usr/bin/arch', ['-arm64', '/usr/local/bin/python3', scriptPath, ticker]);
+      
+      let dataString = '';
+      let errorString = '';
+      
+      pythonProcess.stdout.on('data', (data) => {
+        dataString += data.toString();
+        console.log('Python stdout:', data.toString());
+      });
+      
+      pythonProcess.stderr.on('data', (data) => {
+        errorString += data.toString();
+        console.log('Python stderr:', data.toString());
+      });
+      
+      pythonProcess.on('close', (code) => {
+        console.log('Python process closed with code:', code);
+        console.log('Python stdout final:', dataString);
+        console.log('Python stderr final:', errorString);
+        
+        if (code !== 0) {
+          console.error('Python script error:', errorString);
+          reject(new Error(`Python script failed with code ${code}`));
+          return;
+        }
+        
+        try {
+          const result = JSON.parse(dataString);
+          console.log('Real yfinance data from Python:', result);
+          resolve(result);
+        } catch (parseError) {
+          console.error('Error parsing Python output:', parseError);
+          reject(new Error('Failed to parse Python script output'));
+        }
+      });
+      
+      pythonProcess.on('error', (error) => {
+        console.error('Error spawning Python process:', error);
+        reject(error);
+      });
+    });
+    
+  } catch (error) {
+    console.error('Error fetching yfinance data:', error);
+    // Return default values if yfinance fails
+    return {
+      fy24_financials: {
+        revenue: 0,
+        gross_margin_pct: 0,
+        ebitda: 0,
+        net_income: 0,
+        eps: 0,
+        shares_outstanding: 1000000000
+      },
+      market_data: {
+        current_price: 0,
+        market_cap: 0,
+        enterprise_value: 0,
+        pe_ratio: 0
+      }
+    };
+  }
+}
+
+// Function to fetch latest data from Sonar
+async function fetchLatestWithSonar(ticker) {
+  try {
+    console.log('Fetching Sonar data for:', ticker);
+    
+    // Use OpenRouter API to call Perplexity Sonar
+    const sonarMessages = [
+      {
+        role: "system", 
+        content: "Return ONLY JSON. Be concise. Use official IR and SEC sources."
+      },
+      {
+        role: "user", 
+        content: `Find the most recently reported quarter for ${ticker} (as filed or disclosed by the company) and provide financials and qualitative insights for that same quarter only. Do NOT assume a specific quarter label (e.g., Q2 2025). Use the last reported quarter from official sources. Return EXACTLY this JSON:
+
+JSON:
+\`\`\`json
+{
+  "as_of_date": "YYYY-MM-DD",
+  "latest_quarter": float,
+  "latest_quarter_revenue": float,
+  "latest_quarter_gross_margin_pct": float,
+  "latest_quarter_ebitda_margin_pct": float,
+  "latest_quarter_net_income": float,
+  "guidance_summary": "string",
+  "mgmt_summary": "1-3 sentences on key trends and outlook",
+  "recent_developments": "string on major news/events",
+  "links": { "ir_url": "string", "sec_url": "string" }
+}
+\`\`\`
+
+Instructions: Focus ONLY on the latest reported quarterly results, management commentary, guidance, and recent developments. Do NOT infer or project future quarters. Do NOT hardcode a quarter label like Q2 2025—use the company's exact last reported quarter label. Do NOT include annual (FY) figures. Use only company IR and SEC sources.`
+      }
+    ];
+    
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'http://localhost:3000',
+        'X-Title': 'Finbase Valuation App'
+      },
+      body: JSON.stringify({
+        model: 'perplexity/sonar',
+        messages: sonarMessages,
+        plugins: [{"id": "web", "max_results": 5}],
+        temperature: 0.3,
+        max_tokens: 1000
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Sonar API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content || '';
+    
+    // Parse JSON response
+    let sonarData = {};
+    try {
+      // Try to extract JSON from the response
+      const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+      if (jsonMatch) {
+        sonarData = JSON.parse(jsonMatch[1]);
+      } else {
+        // Fallback: try to find any JSON in the text
+        const braceMatch = text.match(/\{[\s\S]*\}/);
+        if (braceMatch) {
+          sonarData = JSON.parse(braceMatch[0]);
+        }
+      }
+    } catch (parseError) {
+      console.error('Error parsing Sonar JSON response:', parseError);
+      // Return a structured fallback
+      sonarData = {
+        as_of_date: new Date().toISOString().split('T')[0],
+        latest_quarter: 'N/A',
+        latest_quarter_gross_margin_pct: 0,
+        latest_quarter_ebitda_margin_pct: 0,
+        latest_quarter_net_income: 0,
+        guidance_summary: 'No guidance available',
+        mgmt_summary: 'No management commentary available',
+        recent_developments: 'No recent developments available',
+        links: { ir_url: '', sec_url: '' }
+      };
+    }
+    
+    // Create the full_response field for compatibility
+    const fullResponse = `Latest quarterly data for ${ticker}:
+- Management: ${sonarData.mgmt_summary || 'No commentary available'}
+- Guidance: ${sonarData.guidance_summary || 'No guidance available'}
+- Recent Developments: ${sonarData.recent_developments || 'None available'}`;
+    
+    const result = {
+      ...sonarData,
+      full_response: fullResponse
+    };
+    
+    console.log('Real Sonar data:', result);
+    return result;
+    
+  } catch (error) {
+    console.error('Error fetching Sonar data:', error);
+    // Return default values if Sonar fails
+    return {
+      full_response: `No recent data available for ${ticker}`,
+      latest_quarter: 'N/A',
+      latest_quarter_revenue: 0,
+      latest_quarter_gross_margin_pct: 0,
+      mgmt_summary: 'No management commentary available',
+      guidance_summary: 'No guidance available',
+      recent_developments: 'No recent developments available'
+    };
+  }
+}
+
 const generateValuation = async (ticker, method, selectedMultiple = 'auto', feedback = null) => {
   try {
     console.log('Generating valuation for:', { ticker, method, selectedMultiple, feedback });
+    
+    // Fetch the actual data from yfinance and Sonar
+    const yf_data = await fetchFinancialsWithYfinance(ticker);
+    const sonar_data = await fetchLatestWithSonar(ticker);
+    
+    console.log('Fetched data:', { yf_data, sonar_data });
     
     let prompt;
     
     if (method === 'dcf') {
       prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, and net income, ultimately leading to a fair value calculation for the company.
 
-The company you will be analyzing is: ${ticker}
+The company you will be analyzing is: ${(yf_data?.company_name) || ticker}
 
 ${feedback ? `USER FEEDBACK: ${feedback}
 
 Please incorporate this feedback into your analysis and adjust the assumptions/projections accordingly.` : ''}
 
 To complete this task, follow these steps:
+IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
 
-1. Research and analyze the company's historical financial data. Look for past growth rates, margins, and any notable trends or patterns.
+Use the FY2024 actuals as your starting point and project forward based on:
+1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
+2. The yfinance data below(which provides the most current financial metrics)
+3. Your financial analysis expertise to interpret trends and project future performance
 
-2. Investigate current industry trends and company-specific factors that may impact future performance.
+1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
+- Revenue: ${yf_data.fy24_financials.revenue.toLocaleString()}M
+- Gross Margin: ${yf_data.fy24_financials.gross_margin_pct.toFixed(1)}%
+- EBITDA: ${yf_data.fy24_financials.ebitda.toLocaleString()}M
+- Net Income: ${yf_data.fy24_financials.net_income.toLocaleString()}M
+- EPS: ${yf_data.fy24_financials.eps.toFixed(2)}
+- Shares Outstanding: ${yf_data.fy24_financials.shares_outstanding.toLocaleString()}M
 
-3. Find the current share price for ${ticker} and include it in your analysis.
+2. Investigate current industry trends and company-specific factors that may impact future performance. Find some market data below to help you.
+MARKET DATA (from yfinance - most updated):
+- Current Price: $${yf_data.market_data.current_price.toFixed(2)}
+- Market Cap: ${yf_data.market_data.market_cap.toLocaleString()}M
+- Enterprise Value: ${yf_data.market_data.enterprise_value ? yf_data.market_data.enterprise_value.toLocaleString() + 'M' : 'N/A'}
+- P/E Ratio: ${yf_data.market_data.pe_ratio ? yf_data.market_data.pe_ratio.toFixed(2) : 'N/A'}
 
-4. Project revenue growth:
+FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
+${sonar_data.full_response || 'No Sonar data available'}
+
+4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
    - Analyze historical revenue growth rates
    - Consider industry trends and market conditions
    - Estimate year-over-year revenue growth rates until 2029
@@ -67,7 +346,7 @@ For each step, use <financial_analysis> tags to show your thought process and ca
 After completing all steps, present your final forecast in the following format:
 
 <forecast>
-Company Name: ${ticker}
+Company Name: ${(yf_data?.company_name) || ticker}
 
 Financial Forecast 2024-2029:
 
@@ -85,10 +364,10 @@ Discount Rate: [Value]%
 Terminal Growth Rate: [Value]%
 Fair Value: $[Value] million
 
-Current Share Price: $[Value]
+Current Share Price: $${yf_data.market_data.current_price.toFixed(2)}
 
 Assumptions and Justifications:
-[Provide a brief explanation of key assumptions and justifications for your projections]
+[Provide a detailed, company-specific explanation of key assumptions. Reference concrete figures from the Sonar insights (latest quarter trends, guidance) and yfinance actuals (FY2024 metrics, current price/market cap). Include at least 6-10 bullet points covering growth drivers, product/segment dynamics, margin levers, capital intensity, competitive landscape, and risks.]
 </forecast>
 
 Return ONLY the <forecast> section as specified above, without any additional commentary or explanations outside of the designated areas within the forecast.`;
@@ -109,7 +388,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       
       prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
 
-The company you will be analyzing is: ${ticker}
+The company you will be analyzing is: ${(yf_data?.company_name) || ticker}
 
 ${feedback ? `USER FEEDBACK: ${feedback}
 
@@ -118,14 +397,32 @@ Please incorporate this feedback into your analysis and adjust the assumptions/p
 ${multipleTypeInstruction}
 
 To complete this task, follow these steps:
+IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
 
-1. Research and analyze the company's historical financial data. Look for past growth rates, margins, and any notable trends or patterns.
+Use the FY2024 actuals as your starting point and project forward based on:
+1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
+2. The yfinance data below(which provides the most current financial metrics)
+3. Your financial analysis expertise to interpret trends and project future performance
 
-2. Investigate current industry trends and company-specific factors that may impact future performance.
+1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
+- Revenue: ${yf_data.fy24_financials.revenue.toLocaleString()}M
+- Gross Margin: ${yf_data.fy24_financials.gross_margin_pct.toFixed(1)}%
+- EBITDA: ${yf_data.fy24_financials.ebitda.toLocaleString()}M
+- Net Income: ${yf_data.fy24_financials.net_income.toLocaleString()}M
+- EPS: ${yf_data.fy24_financials.eps.toFixed(2)}
+- Shares Outstanding: ${yf_data.fy24_financials.shares_outstanding.toLocaleString()}M
 
-3. Find the current share price for ${ticker} and include it in your analysis.
+2. Investigate current industry trends and company-specific factors that may impact future performance. Find some market data below to help you.
+MARKET DATA (from yfinance - most updated):
+- Current Price: $${yf_data.market_data.current_price.toFixed(2)}
+- Market Cap: ${yf_data.market_data.market_cap.toLocaleString()}M
+- Enterprise Value: ${yf_data.market_data.enterprise_value ? yf_data.market_data.enterprise_value.toLocaleString() + 'M' : 'N/A'}
+- P/E Ratio: ${yf_data.market_data.pe_ratio ? yf_data.market_data.pe_ratio.toFixed(2) : 'N/A'}
 
-4. Project revenue growth:
+FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
+${sonar_data.full_response || 'No Sonar data available'}
+
+4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
    - Analyze historical revenue growth rates
    - Consider industry trends and market conditions
    - Estimate year-over-year revenue growth rates until 2029
@@ -175,7 +472,7 @@ For each step, use <financial_analysis> tags to show your thought process and ca
 After completing all steps, present your final forecast in the following format:
 
 <forecast>
-Company Name: ${ticker}
+Company Name: ${(yf_data?.company_name) || ticker}
 
 Financial Forecast 2024-2029:
 
@@ -194,10 +491,11 @@ Exit Multiple Value: [Value]
 2029 Metric Value: [Value]
 Fair Value: $[Value] per share
 
-Current Share Price: $[Value]
+Current Share Price: $${yf_data.market_data.current_price.toFixed(2)}
 
 Assumptions and Justifications:
-[Provide a brief explanation of key assumptions and justifications for your projections]
+[Provide a detailed, company-specific explanation of key assumptions. Reference concrete figures from the Sonar insights (latest quarter trends, guidance) and yfinance actuals (FY2024 metrics, current price/market cap). Include at least 6-10 bullet points covering growth drivers, product/segment dynamics, margin levers, capital intensity, competitive landscape, and risks.]
+
 </forecast>
 
 Return ONLY the <forecast> section as specified above, without any additional commentary or explanations outside of the designated areas within the forecast.`;
@@ -205,42 +503,34 @@ Return ONLY the <forecast> section as specified above, without any additional co
       throw new Error(`Unsupported valuation method: ${method}`);
     }
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'http://localhost:3000',
+        'X-Title': 'Finbase Valuation App'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        system: `Return ONLY JSON. NO text. NO explanations. Get CURRENT data. Use actual 2024 financial results and current market data. Search for the most recent quarterly/annual reports and current stock prices. Search for analyst estimates, industry trends, and company guidance to ensure projections are based on current market expectations.`,
+        model: 'meta-llama/llama-4-maverick',
         messages: [
+          {
+            role: 'system',
+            content: 'You are a skilled financial analyst. You MUST return your response in the EXACT format specified in the user prompt. The response MUST start with <forecast> and end with </forecast>. Do not include any text outside these tags.'
+          },
           {
             role: 'user',
             content: prompt,
           },
         ],
         temperature: 0.3,
-        tools: [
-          {
-            type: "web_search_20250305",
-            name: "web_search",
-            max_uses: 2,
-            user_location: {
-              type: "approximate",
-              country: "US",
-              timezone: "America/New_York"
-            }
-          }
-        ]
+        max_tokens: 2000
       }),
     });
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: { message: 'Failed to parse error response' } }));
-      console.error('Claude API error:', error);
+      console.error('OpenRouter API error:', error);
       
       if (response.status === 404) {
         throw new Error(`Unable to find data for ${ticker}. Please verify the ticker symbol.`);
@@ -250,37 +540,24 @@ Return ONLY the <forecast> section as specified above, without any additional co
     }
 
     const data = await response.json();
-    console.log('Claude API response structure:', {
-      contentLength: data.content?.length,
-      contentTypes: data.content?.map(c => c.type),
-      hasText: data.content?.some(c => c.type === 'text')
+    console.log('OpenRouter API response structure:', {
+      choices: data.choices?.length,
+      hasMessage: !!data.choices?.[0]?.message,
+      messageContent: data.choices?.[0]?.message?.content?.substring(0, 100)
     });
 
-    // Extract the text content from the response
+    // Extract the text content from the OpenRouter response
     let valuationText;
-    const textContent = data.content?.reverse().find(c => c.type === 'text');
-    
-    if (textContent?.text) {
-      valuationText = textContent.text;
+    if (data.choices?.[0]?.message?.content) {
+      valuationText = data.choices[0].message.content;
     } else {
-      const anyTextContent = data.content?.find(c => c.text);
-      if (anyTextContent?.text) {
-        valuationText = anyTextContent.text;
-      } else {
-        console.error('Response structure:', {
-          content: data.content?.map(c => ({
-            type: c.type,
-            hasText: !!c.text,
-            textLength: c.text?.length
-          }))
-        });
-        throw new Error('Invalid response from Claude API: No text content found');
-      }
+      console.error('Response structure:', data);
+      throw new Error('Invalid response from OpenRouter API: No content found');
     }
 
     if (!valuationText) {
       console.error('Empty valuation text');
-      throw new Error('Invalid response from Claude API: Empty text content');
+      throw new Error('Invalid response from OpenRouter API: Empty text content');
     }
 
     console.log('Raw valuation text:', valuationText);
@@ -288,7 +565,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
     console.log('Raw valuation text preview (first 500 chars):', valuationText.substring(0, 500));
     console.log('Raw valuation text preview (last 500 chars):', valuationText.substring(valuationText.length - 500));
 
-    // Parse the new structured forecast format - handle full Claude response
+    // Parse the new structured forecast format - handle full OpenRouter response
     try {
       // Extract the forecast section
       let forecastText;
@@ -352,7 +629,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       // Fair value and current price will be handled by retry logic if missing
       if (!hasForecastTable) {
         console.error('Malformed forecast response - missing forecast table');
-        throw new Error('Invalid forecast response from Claude API - missing forecast table');
+        throw new Error('Invalid forecast response from OpenRouter API - missing forecast table');
       }
 
       // Parse the forecast table to extract financial data for basic structure
@@ -371,23 +648,32 @@ Return ONLY the <forecast> section as specified above, without any additional co
           inTable = true;
           continue;
         }
-        
+
         if (inTable && line.trim() && !line.includes('----')) {
           const columns = line.split('|').map(col => col.trim());
-          if (columns.length >= 6) {
+          if (columns.length >= 2) {
+            const year = columns[0];
+            const revenue = columns[1] ? parseFloat(columns[1].replace(/,/g, '')) : 0;
+            const revenueGrowth = columns[2] ? parseFloat(String(columns[2]).replace('%', '')) : 0;
+            const grossMargin = columns[3] ? parseFloat(String(columns[3]).replace('%', '')) : 0;
+            const ebitdaMargin = columns[4] ? parseFloat(String(columns[4]).replace('%', '')) : 0;
+            const fcfMargin = columns[5] ? parseFloat(String(columns[5]).replace('%', '')) : 0;
+            const netIncome = columns[6] ? parseFloat(columns[6].replace(/,/g, '')) : 0;
+            const eps = columns[7] ? parseFloat(columns[7]) : 0;
+
             tableData.push({
-              year: columns[0],
-              revenue: parseFloat(columns[1].replace(/,/g, '')) || 0,
-              revenueGrowth: parseFloat(columns[2]) || 0,
-              grossMargin: parseFloat(columns[3]) || 0,
-              ebitdaMargin: parseFloat(columns[4]) || 0,
-              fcfMargin: parseFloat(columns[5]) || 0,
-              netIncome: parseFloat(columns[6].replace(/,/g, '')) || 0,
-              eps: parseFloat(columns[7]) || 0
+              year,
+              revenue: isNaN(revenue) ? 0 : revenue,
+              revenueGrowth: isNaN(revenueGrowth) ? 0 : revenueGrowth,
+              grossMargin: isNaN(grossMargin) ? 0 : grossMargin,
+              ebitdaMargin: isNaN(ebitdaMargin) ? 0 : ebitdaMargin,
+              fcfMargin: isNaN(fcfMargin) ? 0 : fcfMargin,
+              netIncome: isNaN(netIncome) ? 0 : netIncome,
+              eps: isNaN(eps) ? 0 : eps
             });
           }
         }
-        
+
         if (inTable && line.includes('Fair Value Calculation:')) {
           break;
         }
@@ -407,7 +693,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
 
       // Extract basic values for compatibility
       let fairValue = 0;
-      const fairValueMatch = forecastText.match(/Fair Value:\s*\$([\d,]+)\s*million/i);
+      const fairValueMatch = forecastText.match(/Fair Value:\s*[€$]([\d,]+(?:\.[\d]+)?)\s*million/i);
       if (fairValueMatch) {
         fairValue = parseFloat(fairValueMatch[1].replace(/,/g, ''));
         console.log('Extracted million fair value:', fairValue);
@@ -465,9 +751,134 @@ Return ONLY the <forecast> section as specified above, without any additional co
           fairValueCalculation: extractFairValueCalculation(forecastText),
           exitMultipleValuation: extractExitMultipleValuation(forecastText),
           assumptions: extractAssumptions(forecastText),
-          financialAnalysis: financialAnalysisText
+          financialAnalysis: financialAnalysisText,
+          latestDevelopments: (typeof sonar_data !== 'undefined' && sonar_data?.full_response) ? sonar_data.full_response : ''
         }
       };
+
+      // Enrich with source metrics for correct upside/CAGR and frontend display
+      try {
+        // Attach yfinance and sonar summaries captured earlier in this scope
+        if (typeof yf_data !== 'undefined' && yf_data && yf_data.fy24_financials && yf_data.market_data) {
+          result.sourceMetrics = {
+            currentPrice: yf_data.market_data.current_price || 0,
+            marketCap: yf_data.market_data.market_cap || 0, // USD
+            sharesOutstanding: yf_data.fy24_financials.shares_outstanding || 0, // in millions
+            // Normalize EV to millions so it matches projection units
+            enterpriseValue: (yf_data.market_data.enterprise_value || 0) / 1_000_000
+          };
+          // Actual 2024 data for historical row
+          result.actual2024 = {
+            revenue: (yf_data.fy24_financials.revenue || 0) / 1_000_000, // normalize to M
+            grossProfit: (yf_data.fy24_financials.gross_profit || 0) / 1_000_000,
+            ebitda: (yf_data.fy24_financials.ebitda || 0) / 1_000_000,
+            netIncome: (yf_data.fy24_financials.net_income || 0) / 1_000_000,
+            eps: yf_data.fy24_financials.eps || 0,
+            capex: 0,
+            workingCapital: 0,
+            fcf: 0
+          };
+          
+          // Add currency information
+          if (yf_data.currency_info) {
+            result.currencyInfo = yf_data.currency_info;
+            console.log('Currency conversion info:', yf_data.currency_info);
+          }
+          
+          // Add historical financials
+          if (yf_data.historical_financials) {
+            result.historicalFinancials = yf_data.historical_financials;
+            result.testHistoricalField = "TEST_DATA";
+            console.log('Historical financials:', yf_data.historical_financials);
+            console.log('Historical financials count:', yf_data.historical_financials.length);
+            console.log('Result object after adding historical financials:', Object.keys(result));
+            console.log('TEST: result.historicalFinancials should be:', result.historicalFinancials);
+            console.log('TEST: result.testHistoricalField should be:', result.testHistoricalField);
+            console.log('TEST: result.historicalFinancials should be:', result.historicalFinancials);
+            console.log('TEST: result.testHistoricalField should be:', result.testHistoricalField);
+          }
+        }
+        if (typeof sonar_data !== 'undefined' && sonar_data) {
+          result.latestDevelopments = sonar_data.full_response || '';
+          result.sonar = sonar_data;
+        }
+
+        // Compute projections array from tableData so frontend/exports have structured values
+        if (Array.isArray(tableData) && tableData.length > 0) {
+          result.projections = tableData.map((row) => {
+            const revenueM = row.revenue || 0;
+            const netIncome = row.netIncome || 0;
+            const fcf = revenueM * (row.fcfMargin || 0) / 100;
+
+            // Override 2024 with yfinance actuals when available
+            if (row.year === '2024' && typeof yf_data !== 'undefined' && yf_data && yf_data.fy24_financials) {
+              const fy = yf_data.fy24_financials;
+              const revM = (fy.revenue || 0) / 1_000_000;
+              const gpM = typeof fy.gross_profit === 'number' ? (fy.gross_profit || 0) / 1_000_000 : revM * ((fy.gross_margin_pct || 0) / 100);
+              const ebitdaM = (fy.ebitda || 0) / 1_000_000;
+              const fcfM = typeof fy.fcf === 'number' ? (fy.fcf || 0) / 1_000_000 : revM * ((fy.fcf_margin_pct || row.fcfMargin || 0) / 100);
+              const fcfMarginPct = (fy.fcf_margin_pct != null) ? fy.fcf_margin_pct : (revM > 0 ? (fcfM / revM) * 100 : 0);
+              const netIncomeM = (fy.net_income || 0) / 1_000_000;
+              const netIncomeMarginPct = revM > 0 ? (netIncomeM / revM) * 100 : 0;
+              return {
+                year: row.year,
+                revenue: revM,
+                revenueGrowth: row.revenueGrowth || 0,
+                grossProfit: gpM,
+                grossMargin: fy.gross_margin_pct || row.grossMargin || 0,
+                ebitda: ebitdaM,
+                ebitdaMargin: fy.ebitda_margin_pct || row.ebitdaMargin || 0,
+                freeCashFlow: fcfM,
+                fcf: fcfM,
+                fcfMargin: fcfMarginPct,
+                netIncome: netIncomeM,
+                netIncomeMargin: netIncomeMarginPct,
+                eps: fy.eps || row.eps || 0
+              };
+            }
+
+            return {
+              year: row.year,
+              revenue: revenueM,
+              revenueGrowth: row.revenueGrowth || 0,
+              grossProfit: revenueM * (row.grossMargin || 0) / 100,
+              grossMargin: row.grossMargin || 0,
+              ebitda: revenueM * (row.ebitdaMargin || 0) / 100,
+              ebitdaMargin: row.ebitdaMargin || 0,
+              freeCashFlow: fcf,
+              fcf: fcf,
+              fcfMargin: row.fcfMargin || 0,
+              netIncome: netIncome,
+              netIncomeMargin: revenueM > 0 ? (netIncome / revenueM) * 100 : 0,
+              eps: row.eps || 0
+            };
+          });
+
+          // Recompute first-year forecast revenueGrowth using last historical year when available
+          try {
+            if (Array.isArray(result.projections) && result.projections.length > 0 && Array.isArray(yf_data.historical_financials) && yf_data.historical_financials.length > 0) {
+              const first = result.projections[0];
+              const parseYear = (y) => {
+                const s = String(y || '').trim();
+                if (s.startsWith('FY')) { const n = parseInt(s.slice(2), 10); return isNaN(n) ? null : 2000 + n; }
+                const m = s.match(/\d{4}/); return m ? parseInt(m[0], 10) : null;
+              };
+              const firstYear = parseYear(first.year);
+              // Find best matching historical year directly preceding first forecast
+              let prevRev = null; let bestYear = -Infinity;
+              for (const h of yf_data.historical_financials) {
+                const hy = parseYear(h.year);
+                if (hy != null && firstYear != null && hy < firstYear && hy > bestYear) { bestYear = hy; prevRev = h.revenue; }
+              }
+              if (prevRev && prevRev > 0 && first.revenue > 0) {
+                first.revenueGrowth = ((first.revenue - prevRev) / prevRev) * 100;
+              }
+            }
+          } catch (_) { /* no-op */ }
+        }
+      } catch (enrichErr) {
+        console.warn('Non-fatal: failed to enrich valuation with source metrics/projections:', enrichErr?.message);
+      }
 
       console.log('Raw forecast result:', {
         hasRawForecast: !!result.rawForecast,
@@ -499,51 +910,54 @@ Return ONLY the <forecast> section as specified above, without any additional co
   }
 };
 
-// Helper functions to extract sections from raw text
-function extractForecastTable(text) {
-  const tableMatch = text.match(/(Year\s*\|.*?\n(?:----.*?\n)?(?:\d{4}\s*\|.*?\n)*)/s);
-  return tableMatch ? tableMatch[1].trim() : '';
-}
-
-function extractFairValueCalculation(text) {
-  const match = text.match(/(Fair Value Calculation:.*?)(?=\n\s*\n|$)/s);
-  return match ? match[1].trim() : '';
-}
-
-function extractExitMultipleValuation(text) {
-  const match = text.match(/(Exit Multiple Valuation:.*?)(?=\n\s*\n|$)/s);
-  return match ? match[1].trim() : '';
-}
-
-function extractAssumptions(text) {
-  const match = text.match(/(Assumptions and Justifications:.*?)(?=\n\s*\n|$)/s);
-  return match ? match[1].trim() : '';
-}
-
 const generateValuationWithFeedback = async (ticker, method, selectedMultiple = 'auto', feedback) => {
   try {
     console.log('Generating valuation with feedback for:', { ticker, method, selectedMultiple, feedback });
+    
+    // Fetch the actual data from yfinance and Sonar
+    const yf_data = await fetchFinancialsWithYfinance(ticker);
+    const sonar_data = await fetchLatestWithSonar(ticker);
+    
+    console.log('Fetched data:', { yf_data, sonar_data });
     
     let prompt;
     
     if (method === 'dcf') {
       prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, and net income, ultimately leading to a fair value calculation for the company.
 
-The company you will be analyzing is: ${ticker}
+The company you will be analyzing is: ${(yf_data?.company_name) || ticker}
 
 ${feedback ? `USER FEEDBACK: ${feedback}
 
 Please incorporate this feedback into your analysis and adjust the assumptions/projections accordingly.` : ''}
 
 To complete this task, follow these steps:
+IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
 
-1. Research and analyze the company's historical financial data. Look for past growth rates, margins, and any notable trends or patterns.
+Use the FY2024 actuals as your starting point and project forward based on:
+1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
+2. The yfinance data below(which provides the most current financial metrics)
+3. Your financial analysis expertise to interpret trends and project future performance
 
-2. Investigate current industry trends and company-specific factors that may impact future performance.
+1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
+- Revenue: ${yf_data.fy24_financials.revenue.toLocaleString()}M
+- Gross Margin: ${yf_data.fy24_financials.gross_margin_pct.toFixed(1)}%
+- EBITDA: ${yf_data.fy24_financials.ebitda.toLocaleString()}M
+- Net Income: ${yf_data.fy24_financials.net_income.toLocaleString()}M
+- EPS: ${yf_data.fy24_financials.eps.toFixed(2)}
+- Shares Outstanding: ${yf_data.fy24_financials.shares_outstanding.toLocaleString()}M
 
-3. Find the current share price for ${ticker} and include it in your analysis.
+2. Investigate current industry trends and company-specific factors that may impact future performance. Find some market data below to help you.
+MARKET DATA (from yfinance - most updated):
+- Current Price: $${yf_data.market_data.current_price.toFixed(2)}
+- Market Cap: ${yf_data.market_data.market_cap.toLocaleString()}M
+- Enterprise Value: ${yf_data.market_data.enterprise_value ? yf_data.market_data.enterprise_value.toLocaleString() + 'M' : 'N/A'}
+- P/E Ratio: ${yf_data.market_data.pe_ratio ? yf_data.market_data.pe_ratio.toFixed(2) : 'N/A'}
 
-4. Project revenue growth:
+FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
+${sonar_data.full_response || 'No Sonar data available'}
+
+4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
    - Analyze historical revenue growth rates
    - Consider industry trends and market conditions
    - Estimate year-over-year revenue growth rates until 2029
@@ -583,9 +997,8 @@ For each step, use <financial_analysis> tags to show your thought process and ca
 5. Break down the DCF calculation steps, including the determination of discount rate and terminal growth rate.
 
 After completing all steps, present your final forecast in the following format:
-
 <forecast>
-Company Name: ${ticker}
+Company Name: ${(yf_data?.company_name) || ticker}
 
 Financial Forecast 2024-2029:
 
@@ -603,10 +1016,11 @@ Discount Rate: [Value]%
 Terminal Growth Rate: [Value]%
 Fair Value: $[Value] million
 
-Current Share Price: $[Value]
+Current Share Price: $${yf_data.market_data.current_price.toFixed(2)}
 
 Assumptions and Justifications:
-[Provide a brief explanation of key assumptions and justifications for your projections]
+[Provide a detailed, company-specific explanation of key assumptions. Reference concrete figures from the Sonar insights (latest quarter trends, guidance) and yfinance actuals (FY2024 metrics, current price/market cap). Include at least 6-10 bullet points covering growth drivers, product/segment dynamics, margin levers, capital intensity, competitive landscape, and risks.]
+
 </forecast>
 
 Return ONLY the <forecast> section as specified above, without any additional commentary or explanations outside of the designated areas within the forecast.`;
@@ -627,7 +1041,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       
       prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
 
-The company you will be analyzing is: ${ticker}
+The company you will be analyzing is: ${(yf_data?.company_name) || ticker}
 
 ${feedback ? `USER FEEDBACK: ${feedback}
 
@@ -636,14 +1050,32 @@ Please incorporate this feedback into your analysis and adjust the assumptions/p
 ${multipleTypeInstruction}
 
 To complete this task, follow these steps:
+IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
 
-1. Research and analyze the company's historical financial data. Look for past growth rates, margins, and any notable trends or patterns.
+Use the FY2024 actuals as your starting point and project forward based on:
+1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
+2. The yfinance data below(which provides the most current financial metrics)
+3. Your financial analysis expertise to interpret trends and project future performance
 
-2. Investigate current industry trends and company-specific factors that may impact future performance.
+1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
+- Revenue: ${yf_data.fy24_financials.revenue.toLocaleString()}M
+- Gross Margin: ${yf_data.fy24_financials.gross_margin_pct.toFixed(1)}%
+- EBITDA: ${yf_data.fy24_financials.ebitda.toLocaleString()}M
+- Net Income: ${yf_data.fy24_financials.net_income.toLocaleString()}M
+- EPS: ${yf_data.fy24_financials.eps.toFixed(2)}
+- Shares Outstanding: ${yf_data.fy24_financials.shares_outstanding.toLocaleString()}M
 
-3. Find the current share price for ${ticker} and include it in your analysis.
+2. Investigate current industry trends and company-specific factors that may impact future performance. Find some market data below to help you.
+MARKET DATA (from yfinance - most updated):
+- Current Price: $${yf_data.market_data.current_price.toFixed(2)}
+- Market Cap: ${yf_data.market_data.market_cap.toLocaleString()}M
+- Enterprise Value: ${yf_data.market_data.enterprise_value ? yf_data.market_data.enterprise_value.toLocaleString() + 'M' : 'N/A'}
+- P/E Ratio: ${yf_data.market_data.pe_ratio ? yf_data.market_data.pe_ratio.toFixed(2) : 'N/A'}
 
-4. Project revenue growth:
+FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
+${sonar_data.full_response || 'No Sonar data available'}
+
+4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
    - Analyze historical revenue growth rates
    - Consider industry trends and market conditions
    - Estimate year-over-year revenue growth rates until 2029
@@ -693,7 +1125,7 @@ For each step, use <financial_analysis> tags to show your thought process and ca
 After completing all steps, present your final forecast in the following format:
 
 <forecast>
-Company Name: ${ticker}
+Company Name: ${(yf_data?.company_name) || ticker}
 
 Financial Forecast 2024-2029:
 
@@ -712,10 +1144,11 @@ Exit Multiple Value: [Value]
 2029 Metric Value: [Value]
 Fair Value: $[Value] per share
 
-Current Share Price: $[Value]
+Current Share Price: $${yf_data.market_data.current_price.toFixed(2)}
 
 Assumptions and Justifications:
-[Provide a brief explanation of key assumptions and justifications for your projections]
+[Provide a detailed, company-specific explanation of key assumptions. Reference concrete figures from the Sonar insights (latest quarter trends, guidance) and yfinance actuals (FY2024 metrics, current price/market cap). Include at least 6-10 bullet points covering growth drivers, product/segment dynamics, margin levers, capital intensity, competitive landscape, and risks.]
+
 </forecast>
 
 Return ONLY the <forecast> section as specified above, without any additional commentary or explanations outside of the designated areas within the forecast.`;
@@ -724,42 +1157,34 @@ Return ONLY the <forecast> section as specified above, without any additional co
       throw new Error(`Unsupported valuation method: ${method}`);
     }
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'http://localhost:3000',
+        'X-Title': 'Finbase Valuation App'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        system: `Return ONLY JSON. NO text. NO explanations. Get CURRENT data. Use actual 2024 financial results and current market data. Search for the most recent quarterly/annual reports and current stock prices. Incorporate user feedback into your analysis.`,
+        model: 'meta-llama/llama-4-maverick',
         messages: [
+          {
+            role: 'system',
+            content: 'You are a skilled financial analyst. You MUST return your response in the EXACT format specified in the user prompt. The response MUST start with <forecast> and end with </forecast>. Do not include any text outside these tags.'
+          },
           {
             role: 'user',
             content: prompt,
           },
         ],
         temperature: 0.3,
-        tools: [
-          {
-            type: "web_search_20250305",
-            name: "web_search",
-            max_uses: 2,
-            user_location: {
-              type: "approximate",
-              country: "US",
-              timezone: "America/New_York"
-            }
-          }
-        ]
+        max_tokens: 2000
       }),
     });
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: { message: 'Failed to parse error response' } }));
-      console.error('Claude API error:', error);
+      console.error('OpenRouter API error:', error);
       
       if (response.status === 404) {
         throw new Error(`Unable to find data for ${ticker}. Please verify the ticker symbol.`);
@@ -769,37 +1194,24 @@ Return ONLY the <forecast> section as specified above, without any additional co
     }
 
     const data = await response.json();
-    console.log('Claude API response structure:', {
-      contentLength: data.content?.length,
-      contentTypes: data.content?.map(c => c.type),
-      hasText: data.content?.some(c => c.type === 'text')
+    console.log('OpenRouter API response structure:', {
+      choices: data.choices?.length,
+      hasMessage: !!data.choices?.[0]?.message,
+      messageContent: data.choices?.[0]?.message?.content?.substring(0, 100)
     });
 
-    // Extract the text content from the response
+    // Extract the text content from the OpenRouter response
     let valuationText;
-    const textContent = data.content?.reverse().find(c => c.type === 'text');
-    
-    if (textContent?.text) {
-      valuationText = textContent.text;
+    if (data.choices?.[0]?.message?.content) {
+      valuationText = data.choices[0].message.content;
     } else {
-      const anyTextContent = data.content?.find(c => c.text);
-      if (anyTextContent?.text) {
-        valuationText = anyTextContent.text;
-      } else {
-        console.error('Response structure:', {
-          content: data.content?.map(c => ({
-            type: c.type,
-            hasText: !!c.text,
-            textLength: c.text?.length
-          }))
-        });
-        throw new Error('Invalid response from Claude API: No text content found');
-      }
+      console.error('Response structure:', data);
+      throw new Error('Invalid response from OpenRouter API: No content found');
     }
 
     if (!valuationText) {
       console.error('Empty valuation text');
-      throw new Error('Invalid response from Claude API: Empty text content');
+      throw new Error('Invalid response from OpenRouter API: Empty text content');
     }
 
     console.log('Raw valuation text:', valuationText);
@@ -863,23 +1275,32 @@ Return ONLY the <forecast> section as specified above, without any additional co
           inTable = true;
           continue;
         }
-        
+
         if (inTable && line.trim() && !line.includes('----')) {
           const columns = line.split('|').map(col => col.trim());
-          if (columns.length >= 6) {
+          if (columns.length >= 2) {
+            const year = columns[0];
+            const revenue = columns[1] ? parseFloat(columns[1].replace(/,/g, '')) : 0;
+            const revenueGrowth = columns[2] ? parseFloat(String(columns[2]).replace('%', '')) : 0;
+            const grossMargin = columns[3] ? parseFloat(String(columns[3]).replace('%', '')) : 0;
+            const ebitdaMargin = columns[4] ? parseFloat(String(columns[4]).replace('%', '')) : 0;
+            const fcfMargin = columns[5] ? parseFloat(String(columns[5]).replace('%', '')) : 0;
+            const netIncome = columns[6] ? parseFloat(columns[6].replace(/,/g, '')) : 0;
+            const eps = columns[7] ? parseFloat(columns[7]) : 0;
+
             tableData.push({
-              year: columns[0],
-              revenue: parseFloat(columns[1].replace(/,/g, '')) || 0,
-              revenueGrowth: parseFloat(columns[2]) || 0,
-              grossMargin: parseFloat(columns[3]) || 0,
-              ebitdaMargin: parseFloat(columns[4]) || 0,
-              fcfMargin: parseFloat(columns[5]) || 0,
-              netIncome: parseFloat(columns[6]?.replace?.(/,/g, '') || columns[6]) || 0,
-              eps: parseFloat(columns[7]) || 0
+              year,
+              revenue: isNaN(revenue) ? 0 : revenue,
+              revenueGrowth: isNaN(revenueGrowth) ? 0 : revenueGrowth,
+              grossMargin: isNaN(grossMargin) ? 0 : grossMargin,
+              ebitdaMargin: isNaN(ebitdaMargin) ? 0 : ebitdaMargin,
+              fcfMargin: isNaN(fcfMargin) ? 0 : fcfMargin,
+              netIncome: isNaN(netIncome) ? 0 : netIncome,
+              eps: isNaN(eps) ? 0 : eps
             });
           }
         }
-        
+
         if (inTable && line.includes('Fair Value Calculation:')) {
           break;
         }
@@ -899,7 +1320,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
 
       // Extract basic values for compatibility
       let fairValue = 0;
-      const fairValueMatch = forecastText.match(/Fair Value:\s*[€$]([\d,]+)\s*million/i);
+      const fairValueMatch = forecastText.match(/Fair Value:\s*[€$]([\d,]+(?:\.[\d]+)?)\s*million/i);
       if (fairValueMatch) {
         fairValue = parseFloat(fairValueMatch[1].replace(/,/g, ''));
         console.log('Extracted million fair value (feedback):', fairValue);
@@ -957,9 +1378,105 @@ Return ONLY the <forecast> section as specified above, without any additional co
           fairValueCalculation: extractFairValueCalculation(forecastText),
           exitMultipleValuation: extractExitMultipleValuation(forecastText),
           assumptions: extractAssumptions(forecastText),
-          financialAnalysis: financialAnalysisText
+          financialAnalysis: financialAnalysisText,
+          latestDevelopments: (typeof sonar_data !== 'undefined' && sonar_data?.full_response) ? sonar_data.full_response : ''
         }
       };
+
+      // Enrich with source metrics for correct upside/CAGR and frontend display
+      try {
+        // Attach yfinance and sonar summaries captured earlier in this scope
+        if (typeof yf_data !== 'undefined' && yf_data && yf_data.fy24_financials && yf_data.market_data) {
+          result.sourceMetrics = {
+            currentPrice: yf_data.market_data.current_price || 0,
+            marketCap: yf_data.market_data.market_cap || 0, // USD
+            sharesOutstanding: yf_data.fy24_financials.shares_outstanding || 0, // in millions
+            // Normalize EV to millions so it matches projection units
+            enterpriseValue: (yf_data.market_data.enterprise_value || 0) / 1_000_000
+          };
+          // Actual 2024 data for historical row
+          result.actual2024 = {
+            revenue: (yf_data.fy24_financials.revenue || 0) / 1_000_000, // normalize to M
+            grossProfit: (yf_data.fy24_financials.gross_profit || 0) / 1_000_000,
+            ebitda: (yf_data.fy24_financials.ebitda || 0) / 1_000_000,
+            netIncome: (yf_data.fy24_financials.net_income || 0) / 1_000_000,
+            eps: yf_data.fy24_financials.eps || 0,
+            capex: 0,
+            workingCapital: 0,
+            fcf: 0
+          };
+          
+          // Add currency information
+          if (yf_data.currency_info) {
+            result.currencyInfo = yf_data.currency_info;
+            console.log('Currency conversion info (feedback):', yf_data.currency_info);
+          }
+          
+          // Add historical financials
+          if (yf_data.historical_financials) {
+            result.historicalFinancials = yf_data.historical_financials;
+            console.log('Historical financials (feedback):', yf_data.historical_financials);
+          }
+        }
+        if (typeof sonar_data !== 'undefined' && sonar_data) {
+          result.latestDevelopments = sonar_data.full_response || '';
+          result.sonar = sonar_data;
+        }
+
+        // Compute projections array from tableData so frontend/exports have structured values
+        if (Array.isArray(tableData) && tableData.length > 0) {
+          result.projections = tableData.map((row) => {
+            const revenueM = row.revenue || 0;
+            const netIncome = row.netIncome || 0;
+            const fcf = revenueM * (row.fcfMargin || 0) / 100;
+
+            // Override 2024 with yfinance actuals when available
+            if (row.year === '2024' && typeof yf_data !== 'undefined' && yf_data && yf_data.fy24_financials) {
+              const fy = yf_data.fy24_financials;
+              const revM = (fy.revenue || 0) / 1_000_000;
+              const gpM = typeof fy.gross_profit === 'number' ? (fy.gross_profit || 0) / 1_000_000 : revM * ((fy.gross_margin_pct || 0) / 100);
+              const ebitdaM = (fy.ebitda || 0) / 1_000_000;
+              const fcfM = typeof fy.fcf === 'number' ? (fy.fcf || 0) / 1_000_000 : revM * ((fy.fcf_margin_pct || row.fcfMargin || 0) / 100);
+              const fcfMarginPct = (fy.fcf_margin_pct != null) ? fy.fcf_margin_pct : (revM > 0 ? (fcfM / revM) * 100 : 0);
+              const netIncomeM = (fy.net_income || 0) / 1_000_000;
+              const netIncomeMarginPct = revM > 0 ? (netIncomeM / revM) * 100 : 0;
+              return {
+                year: row.year,
+                revenue: revM,
+                revenueGrowth: row.revenueGrowth || 0,
+                grossProfit: gpM,
+                grossMargin: fy.gross_margin_pct || row.grossMargin || 0,
+                ebitda: ebitdaM,
+                ebitdaMargin: fy.ebitda_margin_pct || row.ebitdaMargin || 0,
+                freeCashFlow: fcfM,
+                fcf: fcfM,
+                fcfMargin: fcfMarginPct,
+                netIncome: netIncomeM,
+                netIncomeMargin: netIncomeMarginPct,
+                eps: fy.eps || row.eps || 0
+              };
+            }
+
+            return {
+              year: row.year,
+              revenue: revenueM,
+              revenueGrowth: row.revenueGrowth || 0,
+              grossProfit: revenueM * (row.grossMargin || 0) / 100,
+              grossMargin: row.grossMargin || 0,
+              ebitda: revenueM * (row.ebitdaMargin || 0) / 100,
+              ebitdaMargin: row.ebitdaMargin || 0,
+              freeCashFlow: fcf,
+              fcf: fcf,
+              fcfMargin: row.fcfMargin || 0,
+              netIncome: netIncome,
+              netIncomeMargin: revenueM > 0 ? (netIncome / revenueM) * 100 : 0,
+              eps: row.eps || 0
+            };
+          });
+        }
+      } catch (enrichErr) {
+        console.warn('Non-fatal: failed to enrich valuation with source metrics/projections:', enrichErr?.message);
+      }
 
       console.log('Raw forecast result:', {
         hasRawForecast: !!result.rawForecast,
@@ -1313,8 +1830,8 @@ export async function GET(request) {
   }
 
   // Check API key
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error('ANTHROPIC_API_KEY is not configured');
+  if (!process.env.OPENROUTER_API_KEY) {
+    console.error('OPENROUTER_API_KEY is not configured');
     return NextResponse.json(
       { error: 'API configuration error' },
       { status: 500 }
@@ -1360,54 +1877,178 @@ export async function GET(request) {
       sections: rawValuation.sections,
       // Table data for basic structure
       tableData: rawValuation.tableData,
+      // Source data for frontend and accurate upside
+      sourceMetrics: rawValuation.sourceMetrics || null,
+      latestDevelopments: rawValuation.latestDevelopments || null,
+      sonar: rawValuation.sonar || null,
+      actual2024: rawValuation.actual2024 || null,
+      historicalFinancials: rawValuation.historicalFinancials || null,
+      projections: rawValuation.projections || null,
       // Calculate upside and CAGR
       upside: 0, // Will be calculated based on method
       cagr: 0, // Will be calculated based on method
-      confidence: 'Medium'
+      confidence: 'Medium',
+      upside2029: 0,
+      cagr2029: 0
     };
 
     // Calculate upside and CAGR based on method
     try {
       if (method === 'exit-multiple') {
-        // For all exit multiple methods, calculate upside based on current price vs fair value per share
-        const currentPrice = rawValuation.currentSharePrice || 150; // Use extracted current price or fallback
-        const fairValuePerShare = rawValuation.fairValue; // This is already per-share for all exit multiples
-        console.log('Calculating exit-multiple upside:', { currentPrice, fairValuePerShare });
-        if (currentPrice > 0 && fairValuePerShare > 0) {
-          result.upside = ((fairValuePerShare - currentPrice) / currentPrice) * 100;
-          result.cagr = (Math.pow(fairValuePerShare / currentPrice, 1 / 5) - 1) * 100;
-          console.log('Calculated upside/CAGR:', { upside: result.upside, cagr: result.cagr });
+        // For exit multiple methods, calculate upside manually using LLM projections and yfinance data
+        const currentPrice = (rawValuation?.sourceMetrics?.currentPrice) || rawValuation.currentSharePrice || 0;
+        const currentEV = (rawValuation?.sourceMetrics?.enterpriseValue) || 0;
+        
+        // Get the 2029 projection from LLM
+        const projections = rawValuation.projections || [];
+        const finalYearProjection = projections.find(p => p.year === '2029') || projections[projections.length - 1];
+        
+        if (finalYearProjection && rawValuation.exitMultipleValue && rawValuation.exitMultipleType) {
+          let calculatedFairValue = 0;
+          let calculatedUpside = 0;
+          let calculationDetails = '';
+          
+          // Log the projection data for debugging
+          console.log('Using projection for calculation:', {
+            year: finalYearProjection.year,
+            revenue: finalYearProjection.revenue,
+            ebitda: finalYearProjection.ebitda,
+            freeCashFlow: finalYearProjection.freeCashFlow,
+            eps: finalYearProjection.eps,
+            allProjections: projections,
+            rawValuationProjections: rawValuation.projections
+          });
+          
+          // Also log the raw forecast data for comparison
+          console.log('Raw forecast data for 2029:', {
+            rawForecast: rawValuation.rawForecast?.substring(0, 500),
+            hasRawForecast: !!rawValuation.rawForecast
+          });
+          
+          switch (rawValuation.exitMultipleType) {
+            case 'P/E':
+              // P/E: Fair Value = 2029 EPS × P/E Multiple
+              const eps2029 = finalYearProjection.eps || 0;
+              calculatedFairValue = eps2029 * rawValuation.exitMultipleValue;
+              calculatedUpside = ((calculatedFairValue - currentPrice) / currentPrice) * 100;
+              
+              calculationDetails = `Fair Value Calculation:
+2029 EPS: $${eps2029.toFixed(2)}
+P/E Multiple: ${rawValuation.exitMultipleValue}x
+Fair Value per Share: $${eps2029.toFixed(2)} × ${rawValuation.exitMultipleValue} = $${calculatedFairValue.toFixed(2)}
+Current Price: $${currentPrice.toFixed(2)}
+Upside: ($${calculatedFairValue.toFixed(2)} - $${currentPrice.toFixed(2)}) / $${currentPrice.toFixed(2)} × 100 = ${calculatedUpside.toFixed(1)}%`;
+              break;
+              
+            case 'EV/EBITDA':
+              // EV/EBITDA: Fair EV = 2029 EBITDA × EV/EBITDA Multiple
+              const ebitda2029 = finalYearProjection.ebitda || 0;
+              const fairEV = ebitda2029 * rawValuation.exitMultipleValue;
+              calculatedFairValue = fairEV / 1000; // Convert to millions for display
+              calculatedUpside = currentEV > 0 ? ((fairEV - currentEV) / currentEV) * 100 : 0;
+              
+              calculationDetails = `Fair Value Calculation:
+2029 EBITDA: $${ebitda2029.toFixed(1)}M
+EV/EBITDA Multiple: ${rawValuation.exitMultipleValue}x
+Fair Enterprise Value: $${ebitda2029.toFixed(1)}M × ${rawValuation.exitMultipleValue} = $${fairEV.toFixed(1)}M
+Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
+Upside: ($${fairEV.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
+              break;
+              
+            case 'EV/FCF':
+              // EV/FCF: Fair EV = 2029 FCF × EV/FCF Multiple
+              const fcf2029 = finalYearProjection.freeCashFlow || 0;
+              const fairEVFCF = fcf2029 * rawValuation.exitMultipleValue;
+              calculatedFairValue = fairEVFCF / 1000; // Convert to millions for display
+              calculatedUpside = currentEV > 0 ? ((fairEVFCF - currentEV) / currentEV) * 100 : 0;
+              
+              // Debug the calculation values
+              console.log('EV/FCF Calculation Debug:', {
+                fcf2029,
+                multiple: rawValuation.exitMultipleValue,
+                fairEVFCF,
+                currentEV,
+                calculatedUpside,
+                calculation: `(${fairEVFCF} - ${currentEV}) / ${currentEV} * 100 = ${calculatedUpside}`,
+                finalYearProjection: finalYearProjection,
+                projections: projections
+              });
+              
+              calculationDetails = `Fair Value Calculation:
+2029 Free Cash Flow: $${fcf2029.toFixed(1)}M
+EV/FCF Multiple: ${rawValuation.exitMultipleValue}x
+Fair Enterprise Value: $${fcf2029.toFixed(1)}M × ${rawValuation.exitMultipleValue} = $${fairEVFCF.toFixed(1)}M
+Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
+Upside: ($${fairEVFCF.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
+              break;
+              
+            case 'EV/Sales':
+              // EV/Sales: Fair EV = 2029 Revenue × EV/Sales Multiple
+              const revenue2029 = finalYearProjection.revenue || 0;
+              const fairEVSales = revenue2029 * rawValuation.exitMultipleValue;
+              calculatedFairValue = fairEVSales / 1000; // Convert to millions for display
+              calculatedUpside = currentEV > 0 ? ((fairEVSales - currentEV) / currentEV) * 100 : 0;
+              
+              calculationDetails = `Fair Value Calculation:
+2029 Revenue: $${revenue2029.toFixed(1)}M
+EV/Sales Multiple: ${rawValuation.exitMultipleValue}x
+Fair Enterprise Value: $${revenue2029.toFixed(1)}M × ${rawValuation.exitMultipleValue} = $${fairEVSales.toFixed(1)}M
+Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
+Upside: ($${fairEVSales.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
+              break;
+              
+            default:
+              calculatedUpside = 0;
+              calculationDetails = 'Unknown exit multiple type';
+          }
+          
+          // Calculate CAGR based on the upside
+          result.upside = calculatedUpside;
+          result.cagr = (Math.pow(1 + (calculatedUpside / 100), 1 / 5) - 1) * 100;
+          
+          // Store calculation details for frontend display
+          result.exitMultipleCalculation = {
+            type: rawValuation.exitMultipleType,
+            multiple: rawValuation.exitMultipleValue,
+            fairValue: calculatedFairValue,
+            calculationDetails: calculationDetails
+          };
+          
+          console.log('Exit multiple calculation:', {
+            type: rawValuation.exitMultipleType,
+            multiple: rawValuation.exitMultipleValue,
+            calculatedUpside,
+            calculatedCAGR: result.cagr,
+            calculationDetails
+          });
         } else {
-          console.log('Skipping upside calculation - invalid prices:', { currentPrice, fairValuePerShare });
+          console.log('Missing data for exit multiple calculation:', {
+            hasProjections: !!projections.length,
+            hasMultiple: !!rawValuation.exitMultipleValue,
+            hasType: !!rawValuation.exitMultipleType
+          });
+          result.upside = 0;
+          result.cagr = 0;
         }
       } else if (method === 'dcf') {
-        // For DCF, calculate upside based on current market cap vs fair value
-        // We need to get current market cap from current share price
-        const currentPrice = rawValuation.currentSharePrice;
-        const fairValueInMillions = rawValuation.fairValue; // This is already in millions
-        
-        console.log('Calculating DCF upside:', { currentPrice, fairValueInMillions });
-        if (currentPrice && fairValueInMillions) {
-          // For DCF, we need to estimate current market cap
-          // We'll use a reasonable assumption of shares outstanding (could be improved with real data)
-          const estimatedSharesOutstanding = 1000000000; // 1 billion shares as default
-          const currentMarketCap = currentPrice * estimatedSharesOutstanding;
-          const fairValueInDollars = fairValueInMillions * 1000000; // Convert millions to dollars
-          
-          // For AAPL specifically, let's use the actual shares outstanding from the analysis
-          if (rawValuation.companyName === 'AAPL') {
-            const actualSharesOutstanding = 14940000000; // 14.94B shares from the analysis
-            const actualCurrentMarketCap = currentPrice * actualSharesOutstanding;
-            
-            result.upside = ((fairValueInDollars - actualCurrentMarketCap) / actualCurrentMarketCap) * 100;
-            result.cagr = (Math.pow(fairValueInDollars / actualCurrentMarketCap, 1 / 5) - 1) * 100;
-          } else {
-            result.upside = ((fairValueInDollars - currentMarketCap) / currentMarketCap) * 100;
-            result.cagr = (Math.pow(fairValueInDollars / currentMarketCap, 1 / 5) - 1) * 100;
-          }
+        // For DCF, calculate upside based on current market cap vs fair value (both in $)
+        const fairValueInMillions = rawValuation.fairValue; // in $M
+        const fairValueInDollars = (fairValueInMillions || 0) * 1_000_000;
+        const yfm = rawValuation?.sourceMetrics || {};
+        const currentPrice = yfm.currentPrice || rawValuation.currentSharePrice || 0;
+        let currentMarketCap = 0;
+        if (yfm.marketCap && yfm.marketCap > 0) {
+          currentMarketCap = yfm.marketCap; // already in $
+        } else if (currentPrice > 0 && yfm.sharesOutstanding && yfm.sharesOutstanding > 0) {
+          currentMarketCap = currentPrice * yfm.sharesOutstanding;
+        }
+        console.log('Calculating DCF upside:', { currentPrice, fairValueInMillions, marketCap: currentMarketCap });
+        if (currentMarketCap > 0 && fairValueInDollars > 0) {
+          result.upside = ((fairValueInDollars - currentMarketCap) / currentMarketCap) * 100;
+          result.cagr = (Math.pow(fairValueInDollars / currentMarketCap, 1 / 5) - 1) * 100;
           console.log('Calculated DCF upside/CAGR:', { upside: result.upside, cagr: result.cagr });
         } else {
-          console.log('Skipping DCF upside calculation - invalid prices:', { currentPrice, fairValueInMillions });
+          console.log('Skipping DCF upside calculation - invalid market cap or fair value');
         }
       }
     } catch (calcError) {
@@ -1484,8 +2125,8 @@ export async function POST(request) {
   }
 
   // Check API key
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error('ANTHROPIC_API_KEY is not configured');
+  if (!process.env.OPENROUTER_API_KEY) {
+    console.error('OPENROUTER_API_KEY is not configured');
     return NextResponse.json(
       { error: 'API configuration error' },
       { status: 500 }
@@ -1561,53 +2202,149 @@ export async function POST(request) {
       sections: valuation.sections,
       // Table data for basic structure
       tableData: valuation.tableData,
+      // Source data for frontend and accurate upside
+      sourceMetrics: valuation.sourceMetrics || null,
+      latestDevelopments: valuation.latestDevelopments || null,
+      sonar: valuation.sonar || null,
+      actual2024: valuation.actual2024 || null,
+      historicalFinancials: valuation.historicalFinancials || null,
+      projections: valuation.projections || null,
       // Calculate upside and CAGR
       upside: 0, // Will be calculated based on method
       cagr: 0, // Will be calculated based on method
-      confidence: 'Medium'
+      confidence: 'Medium',
+      upside2029: 0,
+      cagr2029: 0
     };
 
     // Calculate upside and CAGR based on method
     try {
       if (method === 'exit-multiple') {
         // For all exit multiple methods, calculate upside based on current price vs fair value per share
-        const currentPrice = valuation.currentSharePrice || 150; // Use extracted current price or fallback
-        const fairValuePerShare = valuation.fairValue; // This is already per-share for all exit multiples
-        console.log('Calculating exit-multiple upside:', { currentPrice, fairValuePerShare });
-        if (currentPrice > 0 && fairValuePerShare > 0) {
-          result.upside = ((fairValuePerShare - currentPrice) / currentPrice) * 100;
-          result.cagr = (Math.pow(fairValuePerShare / currentPrice, 1 / 5) - 1) * 100;
-          console.log('Calculated upside/CAGR:', { upside: result.upside, cagr: result.cagr });
+        const currentPrice = (valuation?.sourceMetrics?.currentPrice) || valuation.currentSharePrice || 0;
+        const currentEV = (valuation?.sourceMetrics?.enterpriseValue) || 0;
+        
+        // Get the 2029 projection from LLM
+        const projections = valuation.projections || [];
+        const finalYearProjection = projections.find(p => p.year === '2029') || projections[projections.length - 1];
+        
+        if (finalYearProjection && valuation.exitMultipleValue && valuation.exitMultipleType) {
+          let calculatedFairValue = 0;
+          let calculatedUpside = 0;
+          let calculationDetails = '';
+          
+          switch (valuation.exitMultipleType) {
+            case 'P/E':
+              // P/E: Fair Value = 2029 EPS × P/E Multiple
+              const eps2029 = finalYearProjection.eps || 0;
+              calculatedFairValue = eps2029 * valuation.exitMultipleValue;
+              calculatedUpside = ((calculatedFairValue - currentPrice) / currentPrice) * 100;
+              
+              calculationDetails = `Fair Value Calculation:
+2029 EPS: $${eps2029.toFixed(2)}
+P/E Multiple: ${valuation.exitMultipleValue}x
+Fair Value per Share: $${eps2029.toFixed(2)} × ${valuation.exitMultipleValue} = $${calculatedFairValue.toFixed(2)}
+Current Price: $${currentPrice.toFixed(2)}
+Upside: ($${calculatedFairValue.toFixed(2)} - $${currentPrice.toFixed(2)}) / $${currentPrice.toFixed(2)} × 100 = ${calculatedUpside.toFixed(1)}%`;
+              break;
+              
+            case 'EV/EBITDA':
+              // EV/EBITDA: Fair EV = 2029 EBITDA × EV/EBITDA Multiple
+              const ebitda2029 = finalYearProjection.ebitda || 0;
+              const fairEV = ebitda2029 * valuation.exitMultipleValue;
+              calculatedFairValue = fairEV / 1000; // Convert to millions for display
+              calculatedUpside = currentEV > 0 ? ((fairEV - currentEV) / currentEV) * 100 : 0;
+              
+              calculationDetails = `Fair Value Calculation:
+2029 EBITDA: $${ebitda2029.toFixed(1)}M
+EV/EBITDA Multiple: ${valuation.exitMultipleValue}x
+Fair Enterprise Value: $${ebitda2029.toFixed(1)}M × ${valuation.exitMultipleValue} = $${fairEV.toFixed(1)}M
+Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
+Upside: ($${fairEV.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
+              break;
+              
+            case 'EV/FCF':
+              // EV/FCF: Fair EV = 2029 FCF × EV/FCF Multiple
+              const fcf2029 = finalYearProjection.freeCashFlow || 0;
+              const fairEVFCF = fcf2029 * valuation.exitMultipleValue;
+              calculatedFairValue = fairEVFCF / 1000; // Convert to millions for display
+              calculatedUpside = currentEV > 0 ? ((fairEVFCF - currentEV) / currentEV) * 100 : 0;
+              
+              calculationDetails = `Fair Value Calculation:
+2029 Free Cash Flow: $${fcf2029.toFixed(1)}M
+EV/FCF Multiple: ${valuation.exitMultipleValue}x
+Fair Enterprise Value: $${fcf2029.toFixed(1)}M × ${valuation.exitMultipleValue} = $${fairEVFCF.toFixed(1)}M
+Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
+Upside: ($${fairEVFCF.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
+              break;
+              
+            case 'EV/Sales':
+              // EV/Sales: Fair EV = 2029 Revenue × EV/Sales Multiple
+              const revenue2029 = finalYearProjection.revenue || 0;
+              const fairEVSales = revenue2029 * valuation.exitMultipleValue;
+              calculatedFairValue = fairEVSales / 1000; // Convert to millions for display
+              calculatedUpside = currentEV > 0 ? ((fairEVSales - currentEV) / currentEV) * 100 : 0;
+              
+              calculationDetails = `Fair Value Calculation:
+2029 Revenue: $${revenue2029.toFixed(1)}M
+EV/Sales Multiple: ${valuation.exitMultipleValue}x
+Fair Enterprise Value: $${revenue2029.toFixed(1)}M × ${valuation.exitMultipleValue} = $${fairEVSales.toFixed(1)}M
+Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
+Upside: ($${fairEVSales.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
+              break;
+              
+            default:
+              calculatedUpside = 0;
+              calculationDetails = 'Unknown exit multiple type';
+          }
+          
+          // Calculate CAGR based on the upside
+          result.upside = calculatedUpside;
+          result.cagr = (Math.pow(1 + (calculatedUpside / 100), 1 / 5) - 1) * 100;
+          
+          // Store calculation details for frontend display
+          result.exitMultipleCalculation = {
+            type: valuation.exitMultipleType,
+            multiple: valuation.exitMultipleValue,
+            fairValue: calculatedFairValue,
+            calculationDetails: calculationDetails
+          };
+          
+          console.log('Exit multiple calculation (feedback):', {
+            type: valuation.exitMultipleType,
+            multiple: valuation.exitMultipleValue,
+            calculatedUpside,
+            calculatedCAGR: result.cagr,
+            calculationDetails
+          });
         } else {
-          console.log('Skipping upside calculation - invalid prices:', { currentPrice, fairValuePerShare });
+          console.log('Missing data for exit multiple calculation (feedback):', {
+            hasProjections: !!projections.length,
+            hasMultiple: !!valuation.exitMultipleValue,
+            hasType: !!valuation.exitMultipleType
+          });
+          result.upside = 0;
+          result.cagr = 0;
         }
       } else if (method === 'dcf') {
-        // For DCF, calculate upside based on current market cap vs fair value
-        const currentPrice = valuation.currentSharePrice;
-        const fairValueInMillions = valuation.fairValue; // This is in millions
-        
-        console.log('Calculating DCF upside:', { currentPrice, fairValueInMillions });
-        if (currentPrice && fairValueInMillions) {
-          // For DCF, we need to estimate current market cap
-          // We'll use a reasonable assumption of shares outstanding (could be improved with real data)
-          const estimatedSharesOutstanding = 1000000000; // 1 billion shares as default
-          const currentMarketCap = currentPrice * estimatedSharesOutstanding;
-          const fairValueInDollars = fairValueInMillions * 1000000; // Convert millions to dollars
-          
-          // For AAPL specifically, let's use the actual shares outstanding from the analysis
-          if (valuation.companyName === 'AAPL') {
-            const actualSharesOutstanding = 14940000000; // 14.94B shares from the analysis
-            const actualCurrentMarketCap = currentPrice * actualSharesOutstanding;
-            
-            result.upside = ((fairValueInDollars - actualCurrentMarketCap) / actualCurrentMarketCap) * 100;
-            result.cagr = (Math.pow(fairValueInDollars / actualCurrentMarketCap, 1 / 5) - 1) * 100;
-          } else {
-            result.upside = ((fairValueInDollars - currentMarketCap) / currentMarketCap) * 100;
-            result.cagr = (Math.pow(fairValueInDollars / currentMarketCap, 1 / 5) - 1) * 100;
-          }
+        // For DCF, calculate upside based on current market cap vs fair value (both in $)
+        const fairValueInMillions = valuation.fairValue; // in $M
+        const fairValueInDollars = (fairValueInMillions || 0) * 1_000_000;
+        const yfm = valuation?.sourceMetrics || {};
+        const currentPrice = yfm.currentPrice || valuation.currentSharePrice || 0;
+        let currentMarketCap = 0;
+        if (yfm.marketCap && yfm.marketCap > 0) {
+          currentMarketCap = yfm.marketCap; // already in $
+        } else if (currentPrice > 0 && yfm.sharesOutstanding && yfm.sharesOutstanding > 0) {
+          currentMarketCap = currentPrice * yfm.sharesOutstanding;
+        }
+        console.log('Calculating DCF upside:', { currentPrice, fairValueInMillions, marketCap: currentMarketCap });
+        if (currentMarketCap > 0 && fairValueInDollars > 0) {
+          result.upside = ((fairValueInDollars - currentMarketCap) / currentMarketCap) * 100;
+          result.cagr = (Math.pow(fairValueInDollars / currentMarketCap, 1 / 5) - 1) * 100;
           console.log('Calculated DCF upside/CAGR:', { upside: result.upside, cagr: result.cagr });
         } else {
-          console.log('Skipping DCF upside calculation - invalid prices:', { currentPrice, fairValueInMillions });
+          console.log('Skipping DCF upside calculation - invalid market cap or fair value');
         }
       }
     } catch (calcError) {

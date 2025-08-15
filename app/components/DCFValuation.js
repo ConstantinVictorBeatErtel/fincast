@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Bar } from 'recharts';
 
 export default function DCFValuation() {
   const [ticker, setTicker] = useState('');
@@ -65,13 +66,11 @@ export default function DCFValuation() {
     }
 
     try {
-      console.log('Fetching valuation for:', { ticker, method, selectedMultiple });
       const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}`);
       let data;
       
       try {
         data = await response.json();
-        console.log('Raw API Response:', data);
       } catch (jsonError) {
         console.error('Failed to parse JSON response:', jsonError);
         throw new Error('Unable to process server response. Please try again later.');
@@ -93,8 +92,6 @@ export default function DCFValuation() {
           throw new Error(data.error || 'Failed to generate valuation. Please try again.');
         }
       }
-
-      console.log('API Response:', data);
 
       // Log the detailed structure of the raw data
       console.log('Raw data structure:', {
@@ -146,7 +143,6 @@ export default function DCFValuation() {
     setError(null);
 
     try {
-      console.log('Submitting feedback for:', { ticker, method, selectedMultiple, feedback });
       const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}`, {
         method: 'POST',
         headers: {
@@ -158,7 +154,6 @@ export default function DCFValuation() {
       let data;
       try {
         data = await response.json();
-        console.log('Feedback response data:', data);
       } catch (jsonError) {
         console.error('Failed to parse feedback response:', jsonError);
         throw new Error('Unable to process server response. Please try again later.');
@@ -171,7 +166,6 @@ export default function DCFValuation() {
 
       // Set the new valuation - handle both direct response and nested response
       const newValuation = data.valuation || data;
-      console.log('Setting new valuation:', newValuation);
 
       // Guard: only replace current valuation if feedback response is usable
       const hasUsableForecast = !!newValuation?.rawForecast &&
@@ -210,24 +204,24 @@ export default function DCFValuation() {
       return;
     }
 
-    console.log('Generating Excel with valuation data:', valuation);
-
     const workbook = XLSX.utils.book_new();
     
     // Create Summary sheet
+    // Compute implied fair share price for exit multiple using backend upside
+    const impliedFairSharePrice = (valuation.method === 'exit-multiple' && typeof valuation.currentSharePrice === 'number' && typeof valuation.upside === 'number')
+      ? valuation.currentSharePrice * (1 + (valuation.upside / 100))
+      : null;
+
     const summaryData = [
       ['Valuation Summary'],
       ['Company', valuation.companyName],
       ['Method', valuation.method],
-      ['Fair Value', valuation.method === 'exit-multiple' 
-        ? `$${valuation.fairValue?.toFixed(2)} per share`
+      ['Fair Value', valuation.method === 'exit-multiple'
+        ? (impliedFairSharePrice ? `$${impliedFairSharePrice.toFixed(2)} per share` : 'N/A')
         : `$${valuation.fairValue?.toLocaleString()} million`
       ],
       ['Upside', `${valuation.upside?.toFixed(1) || 0}%`],
-      ['2029 Upside', valuation.currentSharePrice && valuation.fairValue 
-        ? `${((valuation.fairValue - valuation.currentSharePrice) / valuation.currentSharePrice * 100).toFixed(1)}%`
-        : '0%'
-      ],
+      ['2029 Upside', `${valuation.upside?.toFixed(1) || 0}%`],
       ['Upside CAGR', `${valuation.cagr?.toFixed(1) || 0}%`],
       ['Confidence', valuation.confidence || 'Medium'],
       []
@@ -254,48 +248,57 @@ export default function DCFValuation() {
       data: summaryData
     }];
 
-    // Create Projections sheet
-    if (valuation.tableData && valuation.tableData.length > 0) {
-      const projectionHeaders = ['Year', 'Revenue ($M)', 'Revenue Growth (%)', 'Gross Margin (%)', 'EBITDA Margin (%)', 'FCF Margin (%)', 'Net Income ($M)'];
-      
-      if (valuation.method === 'exit-multiple') {
-        projectionHeaders.push('EPS');
-      }
-      
-      const projectionData = valuation.tableData.map(row => {
-        const baseRow = [
-          row.year,
-          row.revenue?.toLocaleString(),
-          row.revenueGrowth?.toFixed(1),
-          row.grossMargin?.toFixed(1),
-          row.ebitdaMargin?.toFixed(1),
-          row.fcfMargin?.toFixed(1),
-          row.netIncome?.toLocaleString()
-        ];
-        
-        if (valuation.method === 'exit-multiple') {
-          baseRow.push(row.eps?.toFixed(2));
-        }
-        
-        return baseRow;
+    // Combined Performance sheet (Historical + Forecast) similar to frontend
+    try {
+      const hist = Array.isArray(valuation.historicalFinancials) ? [...valuation.historicalFinancials] : [];
+      // Sort historical ascending by year label (FYxx or YYYY)
+      hist.sort((a, b) => {
+        const ay = String(a.year || '').replace(/^FY/, '');
+        const by = String(b.year || '').replace(/^FY/, '');
+        return parseInt(ay, 10) - parseInt(by, 10);
       });
+      const proj = Array.isArray(valuation.projections) ? valuation.projections : [];
+
+      const headers = ['Metric', ...hist.map(h => h.year), ...proj.map(p => p.year)];
+
+      const fmt1 = (v) => (typeof v === 'number' ? v.toFixed(1) : '');
+      const fmt2 = (v) => (typeof v === 'number' ? v.toFixed(2) : '');
+
+      const rowRevenue = ['Revenue ($M)', ...hist.map(h => fmt1(h.revenue)), ...proj.map(p => fmt1(p.revenue))];
+      const rowRevGrowth = ['Revenue Growth (%)', ...hist.map((h, i) => (i === 0 ? '/' : fmt1(h.revenueGrowth))), ...proj.map(p => fmt1(p.revenueGrowth))];
+      const rowGP = ['Gross Profit ($M)', ...hist.map(h => fmt1(h.grossProfit)), ...proj.map(p => fmt1(p.grossProfit))];
+      const rowGM = ['Gross Margin (%)', ...hist.map(h => fmt1(h.grossMargin)), ...proj.map(p => fmt1(p.grossMargin))];
+      const rowEBITDA = ['EBITDA ($M)', ...hist.map(h => fmt1(h.ebitda)), ...proj.map(p => fmt1(p.ebitda))];
+      const rowEBITDAM = ['EBITDA Margin (%)', ...hist.map(h => fmt1(h.ebitdaMargin)), ...proj.map(p => fmt1(p.ebitdaMargin))];
+      const rowNI = ['Net Income ($M)', ...hist.map(h => fmt1(h.netIncome)), ...proj.map(p => fmt1(p.netIncome))];
+      const rowNIM = ['Net Income Margin (%)', ...hist.map(h => fmt1(h.netIncomeMargin)), ...proj.map(p => fmt1(p.netIncomeMargin))];
+      const rowEPS = ['EPS ($)', ...hist.map(h => fmt2(h.eps)), ...proj.map(p => fmt2(p.eps))];
+      const rowFCF = ['FCF ($M)', ...hist.map(h => fmt1(h.fcf)), ...proj.map(p => fmt1(p.fcf))];
+      const rowFCFM = ['FCF Margin (%)', ...hist.map(h => fmt1(h.fcfMargin)), ...proj.map(p => fmt1(p.fcfMargin))];
 
       sheets.push({
-        name: 'Projections',
-        data: [projectionHeaders, ...projectionData]
+        name: 'Performance',
+        data: [
+          headers,
+          rowRevenue,
+          rowRevGrowth,
+          rowGP,
+          rowGM,
+          rowEBITDA,
+          rowEBITDAM,
+          rowNI,
+          rowNIM,
+          rowEPS,
+          rowFCF,
+          rowFCFM,
+        ]
       });
+    } catch (e) {
+      console.warn('Failed to build Performance sheet:', e);
     }
 
     // Create Analysis sheet
     const analysisData = [];
-    
-    console.log('Checking financial analysis:', {
-      hasSections: !!valuation.sections,
-      sectionsKeys: Object.keys(valuation.sections || {}),
-      hasFinancialAnalysis: !!valuation.sections?.financialAnalysis,
-      financialAnalysisLength: valuation.sections?.financialAnalysis?.length || 0,
-      financialAnalysisPreview: valuation.sections?.financialAnalysis?.substring(0, 100)
-    });
     
     if (valuation.sections?.financialAnalysis) {
       // Truncate financial analysis to first few lines
@@ -413,12 +416,51 @@ export default function DCFValuation() {
     return `${value.toFixed(1)}x`;
   };
 
+  // Helper: format one-decimal numbers for axes/tooltips
+  const formatOneDecimal = (value) => {
+    const num = Number(value);
+    if (Number.isNaN(num)) return '0.0';
+    return num.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  };
+
+  // Helper: sort historical by FY label or year ascending
+  const getSortedHistorical = (arr) => {
+    if (!Array.isArray(arr)) return [];
+    const toYearNum = (y) => {
+      const s = String(y || '').trim();
+      if (s.startsWith('FY')) return parseInt(s.slice(2), 10) || 0;
+      const m = s.match(/\d{4}/);
+      if (m) return parseInt(m[0].slice(2), 10) || 0;
+      return 0;
+    };
+    return [...arr].sort((a, b) => toYearNum(a.year) - toYearNum(b.year));
+  };
+
   // Helper function to determine if we should show EV-based display
   const shouldShowEVDisplay = () => {
     return method === 'exit-multiple' && 
-           valuation?.assumptions?.exitMultipleType && 
-           (valuation.assumptions.exitMultipleType === 'EV/EBITDA' || 
-            valuation.assumptions.exitMultipleType === 'EV/FCF');
+           valuation?.exitMultipleType && 
+           (valuation.exitMultipleType === 'EV/EBITDA' || 
+            valuation.exitMultipleType === 'EV/FCF');
+  };
+
+  // Helper to filter out unwanted sections from latestDevelopments
+  const filterLatestDevelopments = (text) => {
+    if (!text || typeof text !== 'string') return '';
+    
+    // Remove the unwanted sections completely
+    let filtered = text;
+    
+    // Remove Historical Analysis & Projections section
+    filtered = filtered.replace(/Historical\s+Analysis\s*&\s*Projections[\s\S]*?(?=\n\n|\n\*|\n$)/gi, '');
+    
+    // Remove Assumptions and Justifications section  
+    filtered = filtered.replace(/Assumptions\s+and\s+Justifications[\s\S]*?(?=\n\n|\n\*|\n$)/gi, '');
+    
+    // Clean up any double newlines that might result
+    filtered = filtered.replace(/\n\n\n+/g, '\n\n');
+    
+    return filtered.trim();
   };
 
   return (
@@ -501,8 +543,10 @@ export default function DCFValuation() {
                 <div>
                   <h3 className="text-sm font-medium text-gray-500">Fair Value</h3>
                   <p className="text-2xl font-bold">
-                    {valuation.method === 'exit-multiple' 
-                      ? `$${valuation.fairValue?.toFixed(2)} per share`
+                    {valuation.method === 'exit-multiple'
+                      ? (typeof valuation.currentSharePrice === 'number' && typeof valuation.upside === 'number'
+                          ? `$${(valuation.currentSharePrice * (1 + (valuation.upside / 100))).toFixed(2)} per share`
+                          : 'N/A')
                       : `$${valuation.fairValue?.toLocaleString()} million`
                     }
                   </p>
@@ -559,9 +603,7 @@ export default function DCFValuation() {
                   <div>
                     <h3 className="text-sm font-medium text-gray-500">2029 Upside</h3>
                     <p className="text-xl font-bold text-green-600">
-                      {valuation.currentSharePrice && valuation.fairValue 
-                        ? ((valuation.fairValue - valuation.currentSharePrice) / valuation.currentSharePrice * 100).toFixed(1)
-                        : 0}%
+                      {valuation.upside?.toFixed(1) || 0}%
                     </p>
                   </div>
                   <div>
@@ -571,6 +613,22 @@ export default function DCFValuation() {
                     </p>
                   </div>
                 </div>
+                
+                {/* Currency conversion info */}
+                {valuation.currencyInfo && valuation.currencyInfo.converted_to_usd && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                      <div className="flex items-center text-sm text-yellow-800">
+                        <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                        <span>
+                          <strong>Currency Conversion Applied:</strong> Financial data was converted from {valuation.currencyInfo.original_currency} to USD using exchange rate {valuation.currencyInfo.conversion_rate.toFixed(4)} (Source: {valuation.currencyInfo.exchange_rate_source})
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -591,54 +649,316 @@ export default function DCFValuation() {
                     {valuation.sections?.forecastTable && (
                       <div>
                         <h3 className="text-lg font-semibold mb-4 text-gray-800">Financial Projections</h3>
-                        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
-                              <thead className="bg-gray-50">
-                                <tr>
-                                  <th className="px-4 py-3 text-left font-medium text-gray-700">Year</th>
-                                  <th className="px-4 py-3 text-right font-medium text-gray-700">Revenue ($M)</th>
-                                  <th className="px-4 py-3 text-right font-medium text-gray-700">Growth (%)</th>
-                                  <th className="px-4 py-3 text-right font-medium text-gray-700">Gross Margin (%)</th>
-                                  <th className="px-4 py-3 text-right font-medium text-gray-700">EBITDA Margin (%)</th>
-                                  <th className="px-4 py-3 text-right font-medium text-gray-700">FCF Margin (%)</th>
-                                  <th className="px-4 py-3 text-right font-medium text-gray-700">Net Income ($M)</th>
-                                  {valuation.method === 'exit-multiple' && (
-                                    <th className="px-4 py-3 text-right font-medium text-gray-700">EPS</th>
-                                  )}
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-gray-200">
-                                {valuation.tableData?.map((row, index) => (
-                                  <tr key={index} className="hover:bg-gray-50">
-                                    <td className="px-4 py-3 text-left font-medium text-gray-900">{row.year}</td>
-                                    <td className="px-4 py-3 text-right text-gray-900">{row.revenue?.toLocaleString()}</td>
-                                    <td className="px-4 py-3 text-right text-gray-600">{row.revenueGrowth?.toFixed(1)}</td>
-                                    <td className="px-4 py-3 text-right text-gray-600">{row.grossMargin?.toFixed(1)}</td>
-                                    <td className="px-4 py-3 text-right text-gray-600">{row.ebitdaMargin?.toFixed(1)}</td>
-                                    <td className="px-4 py-3 text-right text-gray-600">{row.fcfMargin?.toFixed(1)}</td>
-                                    <td className="px-4 py-3 text-right text-gray-900">{row.netIncome?.toLocaleString()}</td>
-                                    {valuation.method === 'exit-multiple' && (
-                                      <td className="px-4 py-3 text-right text-gray-900">${row.eps?.toFixed(2)}</td>
-                                    )}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                        <div className="bg-white border border-gray-200 rounded-lg p-6">
+                          <div className="space-y-8">
+                            {/* Revenue and Growth Chart */}
+                            <div>
+                              <h4 className="text-md font-semibold mb-3 text-gray-700">Revenue & Growth</h4>
+                              <ResponsiveContainer width="100%" height={300}>
+                                <ComposedChart data={valuation.projections}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                  <XAxis dataKey="year" stroke="#6b7280" tickFormatter={(v) => String(v)} />
+                                  <YAxis yAxisId="left" stroke="#3b82f6" />
+                                  <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
+                                  <Tooltip 
+                                    formatter={(value, name) => [
+                                      (typeof name === 'string' && name.toLowerCase().includes('growth')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
+                                      name
+                                    ]}
+                                  />
+                                  <Legend />
+                                  <Bar yAxisId="left" dataKey="revenue" fill="#3b82f6" name="Revenue ($M)" />
+                                  <Line yAxisId="right" type="monotone" dataKey="revenueGrowth" stroke="#10b981" strokeWidth={2} name="Revenue Growth (%)" />
+                                </ComposedChart>
+                              </ResponsiveContainer>
+                            </div>
+
+                            {/* Margins Chart */}
+                            <div>
+                              <h4 className="text-md font-semibold mb-3 text-gray-700">Margins (%)</h4>
+                              <ResponsiveContainer width="100%" height={300}>
+                                <LineChart data={valuation.projections}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                  <XAxis dataKey="year" stroke="#6b7280" />
+                                  <YAxis stroke="#6b7280" />
+                                  <Tooltip formatter={(value) => [`${formatOneDecimal(value)}%`, '']} />
+                                  <Legend />
+                                  <Line type="monotone" dataKey="grossMargin" stroke="#8b5cf6" strokeWidth={2} name="Gross Margin" />
+                                  <Line type="monotone" dataKey="ebitdaMargin" stroke="#f59e0b" strokeWidth={2} name="EBITDA Margin" />
+                                  <Line type="monotone" dataKey="fcfMargin" stroke="#ef4444" strokeWidth={2} name="FCF Margin" />
+                                </LineChart>
+                              </ResponsiveContainer>
+                            </div>
+
+                            {/* Profitability Chart */}
+                            <div>
+                              <h4 className="text-md font-semibold mb-3 text-gray-700">Profitability</h4>
+                              <ResponsiveContainer width="100%" height={300}>
+                                <ComposedChart data={valuation.projections}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                  <XAxis dataKey="year" stroke="#6b7280" />
+                                  <YAxis yAxisId="left" stroke="#3b82f6" />
+                                  <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
+                                  <Tooltip 
+                                    formatter={(value, name) => [
+                                      (typeof name === 'string' && name.toLowerCase().includes('margin')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
+                                      name
+                                    ]}
+                                  />
+                                  <Legend />
+                                  <Bar yAxisId="left" dataKey="netIncome" fill="#3b82f6" name="Net Income ($M)" />
+                                  <Line yAxisId="right" type="monotone" dataKey="netIncomeMargin" stroke="#10b981" strokeWidth={2} name="Net Income Margin (%)" />
+                                </ComposedChart>
+                              </ResponsiveContainer>
+                            </div>
+
+                            {/* Cash Flow Chart */}
+                            <div>
+                              <h4 className="text-md font-semibold mb-3 text-gray-700">Cash Flow</h4>
+                              <ResponsiveContainer width="100%" height={300}>
+                                <ComposedChart data={valuation.projections}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                  <XAxis dataKey="year" stroke="#6b7280" />
+                                  <YAxis yAxisId="left" stroke="#3b82f6" />
+                                  <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
+                                  <Tooltip 
+                                    formatter={(value, name) => [
+                                      (typeof name === 'string' && name.toLowerCase().includes('margin')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
+                                      name
+                                    ]}
+                                  />
+                                  <Legend />
+                                  <Bar yAxisId="left" dataKey="fcf" fill="#3b82f6" name="FCF ($M)" />
+                                  <Line yAxisId="right" type="monotone" dataKey="fcfMargin" stroke="#10b981" strokeWidth={2} name="FCF Margin (%)" />
+                                </ComposedChart>
+                              </ResponsiveContainer>
+                            </div>
+
+                            {/* EPS Chart */}
+                            <div>
+                              <h4 className="text-md font-semibold mb-3 text-gray-700">EPS</h4>
+                              <ResponsiveContainer width="100%" height={300}>
+                                <LineChart data={valuation.projections}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                  <XAxis dataKey="year" stroke="#6b7280" />
+                                  <YAxis stroke="#6b7280" />
+                                  <Tooltip formatter={(value) => [`$${formatOneDecimal(value)}`, 'EPS']} />
+                                  <Legend />
+                                  <Line type="monotone" dataKey="eps" stroke="#ec4899" strokeWidth={2} name="EPS ($)" />
+                                </LineChart>
+                              </ResponsiveContainer>
+                            </div>
+
+                            {/* Summary Table for Reference */}
+                            <div className="mt-6">
+                              <h4 className="text-md font-semibold mb-3 text-gray-700">Summary Table</h4>
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm border border-gray-200 rounded-lg">
+                                  <thead className="bg-gray-50">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left font-medium text-gray-700 border-b border-r">Metric</th>
+                                      {valuation.projections?.map((row) => (
+                                        <th key={row.year} className="px-3 py-2 text-center font-medium text-gray-700 border-b border-r">
+                                          {row.year}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-200">
+                                    {/* Revenue Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Revenue ($M)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
+                                          {row.revenue?.toFixed(1)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                    
+                                    {/* Revenue Growth Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Revenue Growth (%)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-green-700 border-r">
+                                          {row.revenueGrowth?.toFixed(1)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                    
+                                    {/* Gross Profit Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Gross Profit ($M)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
+                                          {row.grossProfit?.toFixed(1)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                    
+                                    {/* Gross Margin Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Gross Margin (%)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-green-700 border-r">
+                                          {row.grossMargin?.toFixed(1)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                    
+                                    {/* EBITDA Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EBITDA ($M)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
+                                          {row.ebitda?.toFixed(1)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                    
+                                    {/* EBITDA Margin Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">EBITDA Margin (%)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-green-700 border-r">
+                                          {row.ebitdaMargin?.toFixed(1)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                    
+                                    {/* Net Income Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Net Income ($M)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
+                                          {row.netIncome?.toFixed(1)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                    
+                                    {/* Net Income Margin Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Net Income Margin (%)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-green-700 border-r">
+                                          {row.netIncomeMargin?.toFixed(1)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                    
+                                    {/* EPS Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EPS ($)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
+                                          ${row.eps?.toFixed(2)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                    
+                                    {/* FCF Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">FCF ($M)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
+                                          {row.fcf?.toFixed(1)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                    
+                                    {/* FCF Margin Row */}
+                                    <tr className="hover:bg-gray-50">
+                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">FCF Margin (%)</td>
+                                      {valuation.projections?.map((row) => (
+                                        <td key={row.year} className="px-3 py-2 text-center text-green-700 border-r">
+                                          {row.fcfMargin?.toFixed(1)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </div>
                     )}
                     
-                    {valuation.sections?.fairValueCalculation && valuation.method === 'dcf' && (
+                    {valuation.method === 'dcf' && (
                       <div>
-                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Fair Value Calculation</h3>
+                        <h3 className="text-lg font-semibold mb-4 text-gray-800">DCF Valuation</h3>
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                          <div className="prose prose-sm max-w-none">
-                            <div className="whitespace-pre-line text-gray-700">
-                              {valuation.sections.fairValueCalculation}
-                            </div>
-                          </div>
+                          {(() => {
+                            const discount = typeof valuation.discountRate === 'number' ? valuation.discountRate : null;
+                            const terminal = typeof valuation.terminalGrowth === 'number' ? valuation.terminalGrowth : null;
+                            const fairValueM = typeof valuation.fairValue === 'number' ? valuation.fairValue : null; // $M
+                            const marketCap = valuation.sourceMetrics?.marketCap || 0; // $
+                            const marketCapM = marketCap ? marketCap / 1_000_000 : 0; // $M
+                            const upsidePct = typeof valuation.upside === 'number' ? valuation.upside : null;
+                            const cagrPct = typeof valuation.cagr === 'number' ? valuation.cagr : null;
+                            const currentPrice = typeof valuation.currentSharePrice === 'number' ? valuation.currentSharePrice : null;
+                            const impliedPrice = currentPrice != null && upsidePct != null ? currentPrice * (1 + upsidePct / 100) : null;
+
+                            if (fairValueM && marketCapM) {
+                              return (
+                                <div className="space-y-4">
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                    <div className="bg-white border border-blue-200 p-3 rounded-lg">
+                                      <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Discount Rate</div>
+                                      <div className="text-lg font-semibold text-gray-900">{discount != null ? `${discount.toFixed(1)}%` : '—'}</div>
+                                    </div>
+                                    <div className="bg-white border border-blue-200 p-3 rounded-lg">
+                                      <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Terminal Growth</div>
+                                      <div className="text-lg font-semibold text-gray-900">{terminal != null ? `${terminal.toFixed(1)}%` : '—'}</div>
+                                    </div>
+                                    <div className="bg-white border border-blue-200 p-3 rounded-lg">
+                                      <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Fair Value</div>
+                                      <div className="text-lg font-semibold text-gray-900">${fairValueM.toFixed(1)}M</div>
+                                    </div>
+                                    <div className="bg-white border border-blue-200 p-3 rounded-lg">
+                                      <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Current Market Cap</div>
+                                      <div className="text-lg font-semibold text-gray-900">${marketCapM.toFixed(1)}M</div>
+                                    </div>
+                                  </div>
+
+                                  <div className="bg-blue-100 border border-blue-200 p-4 rounded-lg">
+                                    <div className="text-blue-800 font-medium mb-2">Upside Calculation</div>
+                                    <div className="text-sm text-blue-700 font-mono">
+                                      <span>(${fairValueM.toFixed(1)}M − ${marketCapM.toFixed(1)}M) ÷ ${marketCapM.toFixed(1)}M × 100 = {upsidePct != null ? `${upsidePct.toFixed(1)}%` : '—'}</span>
+                                    </div>
+                                  </div>
+
+                                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                                    <div>
+                                      <span className="text-gray-600">Upside:</span>
+                                      <div className={`font-medium ${upsidePct != null && upsidePct >= 0 ? 'text-green-600' : 'text-red-600'}`}>{upsidePct != null ? `${upsidePct.toFixed(1)}%` : '—'}</div>
+                                    </div>
+                                    <div>
+                                      <span className="text-gray-600">5-Year CAGR:</span>
+                                      <div className="font-medium text-blue-600">{cagrPct != null ? `${cagrPct.toFixed(1)}%` : '—'}</div>
+                                    </div>
+                                    {impliedPrice != null && (
+                                      <div>
+                                        <span className="text-gray-600">Implied Fair Share Price:</span>
+                                        <div className="font-medium text-green-700">${currentPrice.toFixed(2)} × {(1 + (upsidePct/100)).toFixed(4)} = ${impliedPrice.toFixed(2)}</div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // Fallback to server-provided text if numbers are missing
+                            if (valuation.sections?.fairValueCalculation) {
+                              return (
+                                <div className="prose prose-sm max-w-none">
+                                  <div className="whitespace-pre-line text-gray-700">
+                                    {valuation.sections.fairValueCalculation.replace(/^Fair Value Calculation:\s*/i, '')}
+                                  </div>
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
                       </div>
                     )}
@@ -647,22 +967,211 @@ export default function DCFValuation() {
                       <div>
                         <h3 className="text-lg font-semibold mb-4 text-gray-800">Exit Multiple Valuation</h3>
                         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                          <div className="prose prose-sm max-w-none">
-                            <div className="whitespace-pre-line text-gray-700">
-                              {valuation.sections.exitMultipleValuation}
+                          {/* Show only the relevant calculation math */}
+                          {valuation.exitMultipleCalculation && (
+                            <div className="space-y-4">
+                              <div className="bg-white border border-green-200 rounded-lg p-4">
+                                <h4 className="font-semibold text-green-800 text-base mb-3">Calculation Breakdown</h4>
+                                {/* Dynamic step-by-step based on multiple type */}
+                                {(() => {
+                                  const calc = valuation.exitMultipleCalculation;
+                                  const type = calc?.type;
+                                  const multiple = calc?.multiple;
+                                  const proj = Array.isArray(valuation.projections) && valuation.projections.length > 0
+                                    ? valuation.projections[valuation.projections.length - 1]
+                                    : null;
+                                  const currentEV = valuation.sourceMetrics?.enterpriseValue || 0; // in $M
+                                  const currentPrice = valuation.currentSharePrice || 0;
+                                  const upsidePct = typeof valuation.upside === 'number' ? valuation.upside : 0;
+                                  const impliedPrice = currentPrice && (typeof upsidePct === 'number')
+                                    ? currentPrice * (1 + upsidePct / 100)
+                                    : 0;
+
+                                  if (type === 'EV/EBITDA' && proj) {
+                                    const metric = proj.ebitda || 0; // $M
+                                    const fairEV = metric * (multiple || 0); // $M
+                                    return (
+                                      <div className="space-y-3 text-sm">
+                                        <div className="grid grid-cols-2 gap-4">
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">2029 EBITDA</div>
+                                            <div className="text-lg font-semibold text-gray-900">${metric.toFixed(1)}M</div>
+                                          </div>
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Multiple</div>
+                                            <div className="text-lg font-semibold text-gray-900">{multiple}x</div>
+                                          </div>
+                                        </div>
+                                        
+                                        <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                                          <div className="text-blue-800 font-medium mb-2">Fair Enterprise Value Calculation</div>
+                                          <div className="text-sm text-blue-700">
+                                            <span className="font-mono">${metric.toFixed(1)}M × {multiple} = ${fairEV.toFixed(1)}M</span>
+                                          </div>
+                                        </div>
+                                        
+                                        <div className="grid grid-cols-2 gap-4">
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Current EV</div>
+                                            <div className="text-lg font-semibold text-gray-900">${currentEV.toFixed(1)}M</div>
+                                          </div>
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Upside</div>
+                                            <div className={`text-lg font-semibold ${valuation.upside >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                              {valuation.upside?.toFixed(1)}%
+                                            </div>
+                                          </div>
+                                        </div>
+                                        
+                                        <div className="bg-green-50 border border-green-200 p-4 rounded-lg">
+                                          <div className="text-green-800 font-medium mb-2">Implied Fair Share Price</div>
+                                          <div className="text-sm text-green-700">
+                                            <span className="font-mono">${currentPrice.toFixed(2)} × {(1 + (upsidePct/100)).toFixed(4)} = ${impliedPrice.toFixed(2)}</span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                  if (type === 'EV/FCF' && proj) {
+                                    const metric = proj.freeCashFlow || 0; // $M
+                                    const fairEV = metric * (multiple || 0); // $M
+                                    return (
+                                      <div className="space-y-3 text-sm">
+                                        <div className="grid grid-cols-2 gap-4">
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">2029 FCF</div>
+                                            <div className="text-lg font-semibold text-gray-900">${metric.toFixed(1)}M</div>
+                                          </div>
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Multiple</div>
+                                            <div className="text-lg font-semibold text-gray-900">{multiple}x</div>
+                                          </div>
+                                        </div>
+                                        
+                                        <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                                          <div className="text-blue-800 font-medium mb-2">Fair Enterprise Value Calculation</div>
+                                          <div className="text-sm text-blue-700">
+                                            <span className="font-mono">${metric.toFixed(1)}M × {multiple} = ${fairEV.toFixed(1)}M</span>
+                                          </div>
+                                        </div>
+                                        
+                                        <div className="grid grid-cols-2 gap-4">
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Current EV</div>
+                                            <div className="text-lg font-semibold text-gray-900">${currentEV.toFixed(1)}M</div>
+                                          </div>
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Upside</div>
+                                            <div className={`text-lg font-semibold ${valuation.upside >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                              {valuation.upside?.toFixed(1)}%
+                                            </div>
+                                          </div>
+                                        </div>
+                                        
+                                        <div className="bg-green-50 border border-green-200 p-4 rounded-lg">
+                                          <div className="text-green-800 font-medium mb-2">Implied Fair Share Price</div>
+                                          <div className="text-sm text-green-700">
+                                            <span className="font-mono">${currentPrice.toFixed(2)} × {(1 + (upsidePct/100)).toFixed(4)} = ${impliedPrice.toFixed(2)}</span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                  if (type === 'P/E' && proj) {
+                                    const eps = proj.eps || 0;
+                                    const fairPrice = eps * (multiple || 0);
+                                    return (
+                                      <div className="space-y-3 text-sm">
+                                        <div className="grid grid-cols-2 gap-4">
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">2029 EPS</div>
+                                            <div className="text-lg font-semibold text-gray-900">${eps.toFixed(2)}</div>
+                                          </div>
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Multiple</div>
+                                            <div className="text-lg font-semibold text-gray-900">{multiple}x</div>
+                                          </div>
+                                        </div>
+                                        
+                                        <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                                          <div className="text-blue-800 font-medium mb-2">Fair Price Calculation</div>
+                                          <div className="text-sm text-blue-700">
+                                            <span className="font-mono">${eps.toFixed(2)} × {multiple} = ${fairPrice.toFixed(2)}</span>
+                                          </div>
+                                        </div>
+                                        
+                                        <div className="grid grid-cols-2 gap-4">
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Current Price</div>
+                                            <div className="text-lg font-semibold text-gray-900">${currentPrice.toFixed(2)}</div>
+                                          </div>
+                                          <div className="bg-gray-50 p-3 rounded-lg">
+                                            <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Upside</div>
+                                            <div className={`text-lg font-semibold ${valuation.upside >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                              {valuation.upside?.toFixed(1)}%
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                  // Fallback to server-provided calculation text
+                                  return (
+                                    <div className="whitespace-pre-line text-sm text-gray-700 font-mono">
+                                      {valuation.exitMultipleCalculation.calculationDetails}
+                                    </div>
+                                  );
+                                })()}
+
+                                {/* Key metrics summary */}
+                                <div className="mt-4 pt-4 border-t border-green-200">
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                    <div>
+                                      <span className="text-gray-600">Exit Multiple Type:</span>
+                                      <div className="font-medium">{valuation.exitMultipleCalculation.type}</div>
+                                    </div>
+                                    <div>
+                                      <span className="text-gray-600">Multiple Value:</span>
+                                      <div className="font-medium">{valuation.exitMultipleCalculation.multiple}x</div>
+                                    </div>
+                                    <div>
+                                      <span className="text-gray-600">Calculated Upside:</span>
+                                      <div className="font-medium text-green-600">{valuation.upside?.toFixed(1)}%</div>
+                                    </div>
+                                    <div>
+                                      <span className="text-gray-600">5-Year CAGR:</span>
+                                      <div className="font-medium text-blue-600">{valuation.cagr?.toFixed(1)}%</div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
-                          </div>
+                          )}
+                          
+                          {/* Fallback to raw text if no calculation details */}
+                          {!valuation.exitMultipleCalculation && (
+                            <div className="prose prose-sm max-w-none">
+                              <div className="whitespace-pre-line text-gray-700">
+                                {valuation.sections.exitMultipleValuation
+                                  .replace(/^Exit Multiple Valuation:\s*/i, '') // Remove header
+                                }
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
                     
+                    {/* Only show assumptions here, not the full forecast text */}
                     {valuation.sections?.assumptions && (
                       <div>
                         <h3 className="text-lg font-semibold mb-4 text-gray-800">Assumptions and Justifications</h3>
                         <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                           <div className="prose prose-sm max-w-none">
                             <div className="text-gray-700 leading-relaxed">
-                              {valuation.sections.assumptions.split('\n').map((line, index) => {
+                              {valuation.sections.assumptions
+                                .replace(/^Assumptions and Justifications:\s*/i, '') // Remove header
+                                .split('\n').map((line, index) => {
                                 if (line.trim() === '') {
                                   return <div key={index} className="h-3"></div>;
                                 } else {
@@ -690,37 +1199,258 @@ export default function DCFValuation() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-6">
-                    {valuation.sections?.financialAnalysis && (
+                    {valuation.latestDevelopments && (
                       <div>
-                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Historical Analysis & Projections</h3>
-                        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Latest Developments & Insights</h3>
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                           <div className="prose prose-sm max-w-none">
-                            {valuation.sections.financialAnalysis.split('\n').map((line, index) => {
-                              if (line.startsWith('**') && line.endsWith('**')) {
-                                // This is a header - make it bold and add spacing
-                                return (
-                                  <div key={index} className="mt-4 mb-2">
-                                    <h4 className="font-semibold text-purple-800 text-base">
-                                      {line.replace(/\*\*/g, '')}
-                                    </h4>
-                                  </div>
-                                );
-                              } else if (line.trim() === '') {
-                                // Empty line - add spacing
-                                return <div key={index} className="h-2"></div>;
-                              } else {
-                                // Regular text
-                                return (
-                                  <div key={index} className="text-gray-700 mb-1">
-                                    {line}
-                                  </div>
-                                );
-                              }
-                            })}
+                            <div className="text-gray-700 leading-relaxed">
+                              {filterLatestDevelopments(valuation.latestDevelopments).split('\n').map((line, index) => (
+                                line.trim() === '' ? <div key={index} className="h-3"></div> : <div key={index} className="mb-2">{line}</div>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       </div>
                     )}
+
+                    {/* Debug info removed */}
+
+                    {/* Historical Financials Section */}
+                    <div className="mt-8">
+                      <h3 className="text-xl font-bold mb-4 text-gray-800">Historical Financials (FY21-FY24)</h3>
+                      
+                      {/* Historical Charts */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                        {/* Revenue & Growth Chart */}
+                        <div>
+                          <h4 className="text-md font-semibold mb-3 text-gray-700">Revenue & Growth</h4>
+                          <ResponsiveContainer width="100%" height={300}>
+                            <ComposedChart data={valuation.historicalFinancials}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis dataKey="year" stroke="#6b7280" />
+                              <YAxis yAxisId="left" stroke="#3b82f6" />
+                              <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
+                              <Tooltip 
+                                formatter={(value, name) => [
+                                  (typeof name === 'string' && name.toLowerCase().includes('growth')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
+                                  name
+                                ]}
+                              />
+                              <Legend />
+                              <Bar yAxisId="left" dataKey="revenue" fill="#3b82f6" name="Revenue ($M)" />
+                              <Line yAxisId="right" type="monotone" dataKey="revenueGrowth" stroke="#10b981" strokeWidth={2} name="Revenue Growth (%)" />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* Margins Chart */}
+                        <div>
+                          <h4 className="text-md font-semibold mb-3 text-gray-700">Margins (%)</h4>
+                          <ResponsiveContainer width="100%" height={300}>
+                            <LineChart data={valuation.historicalFinancials}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis dataKey="year" stroke="#6b7280" />
+                              <YAxis stroke="#6b7280" />
+                              <Tooltip formatter={(value, name) => [`${formatOneDecimal(value)}%`, name]} />
+                              <Legend />
+                              <Line type="monotone" dataKey="grossMargin" stroke="#8b5cf6" strokeWidth={2} name="Gross Margin (%)" />
+                              <Line type="monotone" dataKey="ebitdaMargin" stroke="#f59e0b" strokeWidth={2} name="EBITDA Margin (%)" />
+                              <Line type="monotone" dataKey="fcfMargin" stroke="#ef4444" strokeWidth={2} name="FCF Margin (%)" />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* Profitability Chart */}
+                        <div>
+                          <h4 className="text-md font-semibold mb-3 text-gray-700">Profitability</h4>
+                          <ResponsiveContainer width="100%" height={300}>
+                            <ComposedChart data={valuation.historicalFinancials}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis dataKey="year" stroke="#6b7280" />
+                              <YAxis yAxisId="left" stroke="#3b82f6" />
+                              <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
+                              <Tooltip 
+                                formatter={(value, name) => [
+                                  (typeof name === 'string' && name.toLowerCase().includes('margin')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
+                                  name
+                                ]}
+                              />
+                              <Legend />
+                              <Bar yAxisId="left" dataKey="netIncome" fill="#3b82f6" name="Net Income ($M)" />
+                              <Line yAxisId="right" type="monotone" dataKey="netIncomeMargin" stroke="#10b981" strokeWidth={2} name="Net Income Margin (%)" />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* Cash Flow Chart */}
+                        <div>
+                          <h4 className="text-md font-semibold mb-3 text-gray-700">Cash Flow</h4>
+                          <ResponsiveContainer width="100%" height={300}>
+                            <ComposedChart data={valuation.historicalFinancials}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis dataKey="year" stroke="#6b7280" />
+                              <YAxis yAxisId="left" stroke="#3b82f6" />
+                              <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
+                              <Tooltip 
+                                formatter={(value, name) => [
+                                  (typeof name === 'string' && name.toLowerCase().includes('margin')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
+                                  name
+                                ]}
+                              />
+                              <Legend />
+                              <Bar yAxisId="left" dataKey="fcf" fill="#3b82f6" name="FCF ($M)" />
+                              <Line yAxisId="right" type="monotone" dataKey="fcfMargin" stroke="#10b981" strokeWidth={2} name="FCF Margin (%)" />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* EPS Chart */}
+                        <div>
+                          <h4 className="text-md font-semibold mb-3 text-gray-700">EPS</h4>
+                          <ResponsiveContainer width="100%" height={300}>
+                            <LineChart data={valuation.historicalFinancials}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis dataKey="year" stroke="#6b7280" />
+                              <YAxis stroke="#6b7280" />
+                              <Tooltip formatter={(value) => [`$${formatOneDecimal(value)}`, 'EPS']} />
+                              <Legend />
+                              <Line type="monotone" dataKey="eps" stroke="#ec4899" strokeWidth={2} name="EPS ($)" />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                      {/* Historical Summary Table */}
+                      <div className="mt-6">
+                        <h4 className="text-lg font-semibold mb-3 text-gray-700">Historical Summary Table</h4>
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full bg-white border border-gray-300 rounded-lg">
+                            <thead>
+                              <tr className="bg-gray-50">
+                                <th className="px-3 py-2 text-left font-medium text-gray-900 border-r">Metric</th>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <th key={index} className="px-3 py-2 text-center font-medium text-gray-900 border-r">
+                                    {row.year}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {/* Revenue Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Revenue ($M)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.revenue?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+                              
+                              {/* Revenue Growth Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Revenue Growth (%)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {index === 0 ? 'NA' : row.revenueGrowth?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+                              
+                              {/* Gross Profit Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Gross Profit ($M)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.grossProfit?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+                              
+                              {/* Gross Margin Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Gross Margin (%)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.grossMargin?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+                              
+                              {/* EBITDA Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EBITDA ($M)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.ebitda?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+                              
+                              {/* EBITDA Margin Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">EBITDA Margin (%)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.ebitdaMargin?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+                              
+                              {/* Net Income Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Net Income ($M)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.netIncome?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+                              
+                              {/* Net Income Margin Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Net Income Margin (%)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.netIncomeMargin?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+                              
+                              {/* EPS Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EPS ($)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.eps?.toFixed(2)}
+                                  </td>
+                                ))}
+                              </tr>
+                              
+                              {/* FCF Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">FCF ($M)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.fcf?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+                              
+                              {/* FCF Margin Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">FCF Margin (%)</td>
+                                {valuation.historicalFinancials?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.fcfMargin?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
