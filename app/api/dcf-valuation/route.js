@@ -69,6 +69,7 @@ async function fetchFinancialsWithYfinance(ticker) {
     const localFallback = 'http://localhost:3000';
     const baseUrl = vercelUrl ? `https://${vercelUrl}` : (process.env.NEXT_PUBLIC_SITE_URL || localFallback);
 
+    // Prefer root-level Python function (api directory) to avoid Next.js app routing conflicts
     const pythonApiUrl = `${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`;
 
     // Forward protection bypass/cookies for protected preview deployments
