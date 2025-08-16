@@ -64,7 +64,7 @@ async function fetchFinancialsWithYfinance(ticker) {
     console.log('Fetching yfinance data for:', ticker);
     
           // Call the Python API route instead of spawning subprocess
-      const pythonApiUrl = `${process.env.VERCEL_URL || 'http://localhost:5001'}/api/yfinance-data?ticker=${ticker}`;
+      const pythonApiUrl = `https://${process.env.VERCEL_URL || 'localhost:5001'}/api/yfinance-data?ticker=${ticker}`;
     const response = await fetch(pythonApiUrl);
     
     if (!response.ok) {
