@@ -271,11 +271,32 @@ def fetch_financials(ticker):
             }
         }
 
+# Standard Vercel Python runtime handler
 def handler(request):
-    """Vercel Python runtime handler function"""
+    """Main Vercel Python runtime handler"""
     try:
         # Get ticker from query parameters
-        ticker = request.args.get('ticker')
+        # Try different ways to access query parameters
+        ticker = None
+        
+        # Method 1: Direct query string parsing
+        if hasattr(request, 'query') and request.query:
+            ticker = request.query.get('ticker')
+        
+        # Method 2: URL parsing
+        if not ticker and hasattr(request, 'url'):
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(request.url)
+            params = parse_qs(parsed.query)
+            ticker = params.get('ticker', [None])[0]
+        
+        # Method 3: Request args (fallback)
+        if not ticker and hasattr(request, 'args'):
+            ticker = request.args.get('ticker')
+        
+        # Method 4: Event-like format
+        if not ticker and hasattr(request, 'get'):
+            ticker = request.get('ticker')
         
         if not ticker:
             return {
@@ -310,9 +331,9 @@ def handler(request):
             })
         }
 
-# Alternative handler format for Vercel
+# Alternative handler for different Vercel formats
 def lambda_handler(event, context):
-    """Alternative handler format for Vercel Python runtime"""
+    """Alternative handler for Vercel Python runtime"""
     try:
         # Parse query parameters from event
         query_params = event.get('queryStringParameters', {}) or {}
@@ -350,3 +371,90 @@ def lambda_handler(event, context):
                 'type': type(e).__name__
             })
         }
+
+# HTTP server handler for maximum compatibility
+class HTTPRequestHandler:
+    def __init__(self, request):
+        self.request = request
+    
+    def handle(self):
+        try:
+            # Try to get ticker from various request formats
+            ticker = None
+            
+            # Method 1: Direct access
+            if hasattr(self.request, 'ticker'):
+                ticker = self.request.ticker
+            
+            # Method 2: Query parameters
+            if not ticker and hasattr(self.request, 'query'):
+                ticker = self.request.query.get('ticker')
+            
+            # Method 3: URL parsing
+            if not ticker and hasattr(self.request, 'url'):
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(self.request.url)
+                params = parse_qs(parsed.query)
+                ticker = params.get('ticker', [None])[0]
+            
+            if not ticker:
+                return {
+                    'statusCode': 400,
+                    'body': json.dumps({'error': 'Missing ticker parameter'})
+                }
+            
+            # Fetch data using the embedded function
+            result = fetch_financials(ticker)
+            
+            # Return successful response
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps(result)
+            }
+            
+        except Exception as e:
+            # Return error response
+            return {
+                'statusCode': 500,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'error': str(e),
+                    'type': type(e).__name__
+                })
+            }
+
+# Main entry point that tries all handler formats
+def main_handler(request):
+    """Main entry point that tries multiple handler formats"""
+    try:
+        # Try the standard handler first
+        return handler(request)
+    except Exception as e1:
+        try:
+            # Try the lambda handler format
+            return lambda_handler(request, None)
+        except Exception as e2:
+            try:
+                # Try the HTTP server handler
+                handler_obj = HTTPRequestHandler(request)
+                return handler_obj.handle()
+            except Exception as e3:
+                # Last resort - return error
+                return {
+                    'statusCode': 500,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({
+                        'error': f'All handler methods failed: {str(e1)}, {str(e2)}, {str(e3)}',
+                        'type': 'HandlerError'
+                    })
+                }
