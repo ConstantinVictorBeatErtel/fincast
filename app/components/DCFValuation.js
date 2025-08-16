@@ -13,7 +13,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 
 export default function DCFValuation() {
   const [ticker, setTicker] = useState('');
-  const [method, setMethod] = useState('dcf');
+  const [method, setMethod] = useState('exit-multiple');
   const [selectedMultiple, setSelectedMultiple] = useState('auto');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { headers as nextHeaders } from 'next/headers';
 
 // export const runtime = 'edge';
 
@@ -58,14 +59,32 @@ function extractSections(text, method) {
   };
 }
 
-// Function to fetch financial data from yfinance via Python script
+// Function to fetch financial data from yfinance via Python API route
 async function fetchFinancialsWithYfinance(ticker) {
   try {
     console.log('Fetching yfinance data for:', ticker);
     
-          // Call the Python API route instead of spawning subprocess
-      const pythonApiUrl = `https://${process.env.VERCEL_URL || 'localhost:5001'}/api/yfinance-data?ticker=${ticker}`;
-    const response = await fetch(pythonApiUrl);
+    // Build base URL for the current deployment
+    const vercelUrl = process.env.VERCEL_URL;
+    const localFallback = 'http://localhost:3000';
+    const baseUrl = vercelUrl ? `https://${vercelUrl}` : (process.env.NEXT_PUBLIC_SITE_URL || localFallback);
+
+    const pythonApiUrl = `${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`;
+
+    // Forward protection bypass/cookies for protected preview deployments
+    const incoming = nextHeaders();
+    const cookie = incoming.get('cookie');
+    const protectionBypass = process.env.VERCEL_DEPLOYMENT_PROTECTION_BYPASS;
+
+    const fetchHeaders = {};
+    if (cookie) fetchHeaders['cookie'] = cookie;
+    if (protectionBypass) fetchHeaders['x-vercel-protection-bypass'] = protectionBypass;
+
+    const response = await fetch(pythonApiUrl, {
+      method: 'GET',
+      headers: fetchHeaders,
+      cache: 'no-store'
+    });
     
     if (!response.ok) {
       throw new Error(`Python API failed: ${response.status} ${response.statusText}`);
@@ -138,7 +157,7 @@ Instructions: Focus ONLY on the latest reported quarterly results, management co
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'http://localhost:3000',
-        'X-Title': 'Finbase Valuation App'
+        'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify({
         model: 'perplexity/sonar',
@@ -467,7 +486,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'http://localhost:3000',
-        'X-Title': 'Finbase Valuation App'
+        'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify({
         model: 'meta-llama/llama-4-maverick',
@@ -1121,7 +1140,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'http://localhost:3000',
-        'X-Title': 'Finbase Valuation App'
+        'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify({
         model: 'meta-llama/llama-4-maverick',
