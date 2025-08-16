@@ -63,59 +63,17 @@ async function fetchFinancialsWithYfinance(ticker) {
   try {
     console.log('Fetching yfinance data for:', ticker);
     
-    // Call the Python script to get yfinance data
-    const { spawn } = require('child_process');
-    const path = require('path');
+          // Call the Python API route instead of spawning subprocess
+      const pythonApiUrl = `${process.env.VERCEL_URL || 'http://localhost:5001'}/api/yfinance-data?ticker=${ticker}`;
+    const response = await fetch(pythonApiUrl);
     
-    return new Promise((resolve, reject) => {
-      // Use path from project root since __dirname might not work in ES modules
-      const scriptPath = path.join(process.cwd(), 'scripts', 'fetch_yfinance.py');
-      console.log('Python script path:', scriptPath);
-      console.log('Current working directory:', process.cwd());
-      console.log('Script exists:', require('fs').existsSync(scriptPath));
-      
-      // Force arm64 architecture for Python to match installed NumPy wheels
-      const pythonProcess = spawn('/usr/bin/arch', ['-arm64', '/usr/local/bin/python3', scriptPath, ticker]);
-      
-      let dataString = '';
-      let errorString = '';
-      
-      pythonProcess.stdout.on('data', (data) => {
-        dataString += data.toString();
-        console.log('Python stdout:', data.toString());
-      });
-      
-      pythonProcess.stderr.on('data', (data) => {
-        errorString += data.toString();
-        console.log('Python stderr:', data.toString());
-      });
-      
-      pythonProcess.on('close', (code) => {
-        console.log('Python process closed with code:', code);
-        console.log('Python stdout final:', dataString);
-        console.log('Python stderr final:', errorString);
-        
-        if (code !== 0) {
-          console.error('Python script error:', errorString);
-          reject(new Error(`Python script failed with code ${code}`));
-          return;
-        }
-        
-        try {
-          const result = JSON.parse(dataString);
-          console.log('Real yfinance data from Python:', result);
-          resolve(result);
-        } catch (parseError) {
-          console.error('Error parsing Python output:', parseError);
-          reject(new Error('Failed to parse Python script output'));
-        }
-      });
-      
-      pythonProcess.on('error', (error) => {
-        console.error('Error spawning Python process:', error);
-        reject(error);
-      });
-    });
+    if (!response.ok) {
+      throw new Error(`Python API failed: ${response.status} ${response.statusText}`);
+    }
+    
+    const result = await response.json();
+    console.log('Real yfinance data from Python API:', result);
+    return result;
     
   } catch (error) {
     console.error('Error fetching yfinance data:', error);
