@@ -309,3 +309,44 @@ def handler(request):
                 'type': type(e).__name__
             })
         }
+
+# Alternative handler format for Vercel
+def lambda_handler(event, context):
+    """Alternative handler format for Vercel Python runtime"""
+    try:
+        # Parse query parameters from event
+        query_params = event.get('queryStringParameters', {}) or {}
+        ticker = query_params.get('ticker')
+        
+        if not ticker:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'Missing ticker parameter'})
+            }
+        
+        # Fetch data using the embedded function
+        result = fetch_financials(ticker)
+        
+        # Return successful response
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps(result)
+        }
+        
+    except Exception as e:
+        # Return error response
+        return {
+            'statusCode': 500,
+            'headers': {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            },
+            'body': json.dumps({
+                'error': str(e),
+                'type': type(e).__name__
+            })
+        }
