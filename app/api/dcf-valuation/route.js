@@ -77,8 +77,11 @@ async function fetchFinancialsWithYfinance(ticker) {
       if (process.env.VERCEL === '1' || process.env.NEXT_RUNTIME === 'edge' || process.env.NODE_ENV === 'production') {
         (async () => {
           try {
+            const externalPyApi = process.env.PY_YF_URL;
             const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '';
-            const url = `${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`;
+            const url = externalPyApi
+              ? `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`
+              : `${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`;
             const res = await fetch(url, { method: 'GET' });
             if (!res.ok) {
               const txt = await res.text();
