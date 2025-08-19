@@ -2,8 +2,5 @@
   "version": 2,
   "buildCommand": "npm run build",
   "installCommand": "npm install",
-  "framework": "nextjs",
-  "functions": {
-    "app/api/company-data/route.js": { }
-  }
+  "framework": "nextjs"
 }
