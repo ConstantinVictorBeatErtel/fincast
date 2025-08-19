@@ -101,7 +101,10 @@ export default function Home() {
         )}
         
         {activeTab === 'portfolio' && session && (
-          <Portfolio />
+          <div>
+            <h2 className="text-3xl font-bold text-center mb-8">Portfolio Management</h2>
+            <Portfolio />
+          </div>
         )}
         
         {activeTab === 'portfolio' && !session && (

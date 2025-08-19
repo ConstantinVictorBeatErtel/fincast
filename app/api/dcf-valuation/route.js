@@ -59,61 +59,98 @@ function extractSections(text, method) {
   };
 }
 
-// Function to fetch financial data from yfinance via Python API route
+// Function to fetch financial data from yfinance via Python script
 async function fetchFinancialsWithYfinance(ticker) {
   try {
     console.log('Fetching yfinance data for:', ticker);
     
-    // Build base URL for the current deployment
-    const vercelUrl = process.env.VERCEL_URL;
-    const localFallback = 'http://localhost:3000';
-    const baseUrl = vercelUrl ? `https://${vercelUrl}` : (process.env.NEXT_PUBLIC_SITE_URL || localFallback);
+    const { spawn } = await import('child_process');
+    
+    // Use the working venv Python
+    const pythonCmd = `${process.cwd()}/venv/bin/python3`;
+    const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+    
+    console.log('Executing Python script:', { pythonCmd, scriptPath });
+    
+    return new Promise((resolve, reject) => {
+      // Use Vercel Python function in production
+      if (process.env.VERCEL === '1' || process.env.NEXT_RUNTIME === 'edge' || process.env.NODE_ENV === 'production') {
+        (async () => {
+          try {
+            const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '';
+            const url = `${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`;
+            const res = await fetch(url, { method: 'GET' });
+            if (!res.ok) {
+              const txt = await res.text();
+              throw new Error(`Vercel yfinance function failed: ${res.status} ${txt}`);
+            }
+            const json = await res.json();
+            resolve(json);
+          } catch (err) {
+            reject(err);
+          }
+        })();
+        return;
+      }
 
-    // Prefer root-level Python function (api directory) to avoid Next.js app routing conflicts
-    const pythonApiUrl = `${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`;
+      // On Apple Silicon, if Node is running under Rosetta (x64), force the
+      // subprocess to run as arm64 so NumPy wheels match architecture.
+      const isDarwin = process.platform === 'darwin';
+      const isNodeRosetta = process.arch === 'x64';
+      const archCmd = '/usr/bin/arch';
 
-    // Forward protection bypass/cookies for protected preview deployments
-    const incoming = nextHeaders();
-    const cookie = incoming.get('cookie');
-    const protectionBypass = process.env.VERCEL_DEPLOYMENT_PROTECTION_BYPASS;
+      const useArchWrapper = isDarwin && isNodeRosetta;
+      const cmd = useArchWrapper ? archCmd : pythonCmd;
+      const args = useArchWrapper ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
 
-    const fetchHeaders = {};
-    if (cookie) fetchHeaders['cookie'] = cookie;
-    if (protectionBypass) fetchHeaders['x-vercel-protection-bypass'] = protectionBypass;
+      if (useArchWrapper) {
+        console.log('Forcing ARM64 Python subprocess via arch wrapper', { cmd, args });
+      }
 
-    const response = await fetch(pythonApiUrl, {
-      method: 'GET',
-      headers: fetchHeaders,
-      cache: 'no-store'
+      const child = spawn(cmd, args, {
+        cwd: process.cwd(),
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      child.on('close', (code) => {
+        if (code !== 0) {
+          console.error('Python script failed:', stderr);
+          reject(new Error(`Python script failed with code ${code}`));
+          return;
+        }
+        
+        try {
+          // Parse the JSON output
+          const result = JSON.parse(stdout);
+          console.log('Successfully parsed Python output');
+          resolve(result);
+        } catch (parseError) {
+          console.error('Failed to parse Python output:', parseError);
+          console.error('Raw stdout:', stdout);
+          reject(new Error('Failed to parse Python script output'));
+        }
+      });
+      
+      child.on('error', (error) => {
+        console.error('Failed to start Python process:', error);
+        reject(error);
+      });
     });
     
-    if (!response.ok) {
-      throw new Error(`Python API failed: ${response.status} ${response.statusText}`);
-    }
-    
-    const result = await response.json();
-    console.log('Real yfinance data from Python API:', result);
-    return result;
-    
   } catch (error) {
-    console.error('Error fetching yfinance data:', error);
-    // Return default values if yfinance fails
-    return {
-      fy24_financials: {
-        revenue: 0,
-        gross_margin_pct: 0,
-        ebitda: 0,
-        net_income: 0,
-        eps: 0,
-        shares_outstanding: 1000000000
-      },
-      market_data: {
-        current_price: 0,
-        market_cap: 0,
-        enterprise_value: 0,
-        pe_ratio: 0
-      }
-    };
+    console.error('Error in fetchFinancialsWithYfinance:', error);
+    throw error;
   }
 }
 

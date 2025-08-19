@@ -1,0 +1,17 @@
+venv/
+node_modules/
+.next/
+run_dir/
+**/*.ipynb
+**/.DS_Store
+**/__pycache__/
+
+# Large caches or data
+**/*.parquet
+**/*.csv
+**/*.feather
+**/*.arrow
+
+# Local dev env files
+.env.local
+.env.*.local

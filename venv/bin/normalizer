@@ -1,5 +1,5 @@
 #!/bin/sh
-'''exec' "/Users/ConstiX/Downloads/Finbase 3/venv/bin/python3.12" "$0" "$@"
+'''exec' "/Users/ConstiX/Downloads/Finbase 3/venv/bin/python3.13" "$0" "$@"
 ' '''
 import sys
 from charset_normalizer.cli import cli_detect

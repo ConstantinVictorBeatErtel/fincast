@@ -10,6 +10,12 @@ import yfinance as yf
 import requests
 
 
+def debug(*args, **kwargs):
+    try:
+        sys.stderr.write(" ".join(str(a) for a in args) + "\n")
+    except Exception:
+        pass
+
 def safe_float(value, default=0.0):
     try:
         f = float(value)
@@ -66,300 +72,342 @@ def convert_currency(value, from_currency, to_currency='USD'):
 def fetch_financials(ticker):
     """Fetch financial data from yfinance for a given ticker."""
     try:
+        debug(f"Fetching data for {ticker}...")
+        
+        # Create ticker object
         company = yf.Ticker(ticker)
-        annual_income = company.income_stmt
-        if annual_income is None or annual_income.empty:
-            return None
         
-        latest_year = annual_income.columns[0]
-        # Try to obtain cash flow statement for FCF
-        cashflow = getattr(company, 'cashflow', None)
-        if cashflow is None or cashflow.empty:
-            cashflow = getattr(company, 'cash_flow', None)
-
-        def get_row(df, names, col):
-            if df is None or df.empty:
-                return 0.0
-            for name in names:
-                if name in df.index:
-                    try:
-                        return safe_float(df.loc[name, col])
-                    except Exception:
-                        continue
-            return 0.0
+        # Get current price from download method
+        current_price = 0
+        try:
+            hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
+            if hist is not None and not hist.empty:
+                current_price = safe_float(hist['Close'].iloc[-1])
+                debug(f"Got current price from download: ${current_price}")
+            else:
+                debug("Download returned empty data")
+        except Exception as e:
+            debug(f"Download failed: {e}")
         
-        # Get company info for currency detection
-        info = company.info or {}
-        
-        # Enhanced currency detection - check multiple sources
-        currency = info.get('currency', 'USD')
-        if not currency or currency == 'None':
-            currency = 'USD'
-        
-        # Additional currency detection logic for known non-US companies
-        company_name = info.get('longName', '').lower()
-        country = info.get('country', '').lower()
-        
-        # Known European companies that often report in local currency
-        european_currencies = {
-            'novo nordisk': 'DKK',
-            'roche': 'CHF',
-            'sanofi': 'EUR',
-            'astrazeneca': 'GBP',
-            'glaxosmithkline': 'GBP',
-            'bayer': 'EUR',
-            'basf': 'EUR',
-            'sap': 'EUR',
-            'siemens': 'EUR',
-            'volkswagen': 'EUR',
-            'bmw': 'EUR',
-            'daimler': 'EUR',
-            'nestle': 'CHF',
-            'novartis': 'CHF',
-            'ubs': 'CHF',
-            'credit suisse': 'CHF',
-            'deutsche bank': 'EUR',
-            'bnp paribas': 'EUR',
-            'societe generale': 'EUR',
-            'ing group': 'EUR',
-            'unilever': 'EUR',
-            'anheuser-busch': 'EUR',
-            'philips': 'EUR',
-            'asml': 'EUR',
-            'shell': 'EUR',
-            'bp': 'GBP',
-            'total': 'EUR',
-            'eni': 'EUR',
-            'repsol': 'EUR'
+        # Get financial data using the working methods
+        fy24_financials = {
+            "revenue": 0,
+            "gross_margin_pct": 0,
+            "ebitda": 0,
+            "net_income": 0,
+            "eps": 0,
+            "shares_outstanding": 0
         }
-        
-        # Check if this is a known European company - use word boundaries to avoid false matches
-        for company_key, expected_currency in european_currencies.items():
-            # Use word boundaries to avoid matching "ing" in "holdings"
-            if f" {company_key} " in f" {company_name} " or company_name.startswith(f"{company_key} ") or company_name.endswith(f" {company_key}"):
-                currency = expected_currency
-                break
-        
-        # Additional checks for country-based currency
-        if country and currency == 'USD':
-            country_currencies = {
-                'denmark': 'DKK',
-                'sweden': 'SEK',
-                'norway': 'NOK',
-                'switzerland': 'CHF',
-                'germany': 'EUR',
-                'france': 'EUR',
-                'italy': 'EUR',
-                'spain': 'EUR',
-                'netherlands': 'EUR',
-                'belgium': 'EUR',
-                'austria': 'EUR',
-                'finland': 'EUR',
-                'ireland': 'EUR',
-                'portugal': 'EUR',
-                'greece': 'EUR',
-                'united kingdom': 'GBP',
-                'japan': 'JPY',
-                'canada': 'CAD',
-                'australia': 'AUD',
-                'brazil': 'BRL',
-                'mexico': 'MXN',
-                'south korea': 'KRW',
-                'singapore': 'SGD',
-                'hong kong': 'HKD',
-                'india': 'INR',
-                'china': 'CNY'
-            }
-            
-            for country_key, expected_currency in country_currencies.items():
-                if country_key in country:
-                    currency = expected_currency
-                    break
-        
-        # Check if we need to convert (non-USD data)
-        needs_conversion = currency != 'USD'
-        conversion_rate = 1.0
-        if needs_conversion:
-            conversion_rate = get_exchange_rate(currency, 'USD')
-        
-        # Extract financial data
-        revenue = safe_float(annual_income.loc['Total Revenue', latest_year] if 'Total Revenue' in annual_income.index else 0)
-        gross_profit = safe_float(annual_income.loc['Gross Profit', latest_year] if 'Gross Profit' in annual_income.index else 0)
-        operating_income = safe_float(annual_income.loc['Operating Income', latest_year] if 'Operating Income' in annual_income.index else 0)
-        ebitda = safe_float(annual_income.loc['EBITDA', latest_year] if 'EBITDA' in annual_income.index else 0)
-        net_income = safe_float(annual_income.loc['Net Income', latest_year] if 'Net Income' in annual_income.index else 0)
-        eps = safe_float(annual_income.loc['Diluted EPS', latest_year] if 'Diluted EPS' in annual_income.index else 0)
-        shares_outstanding = safe_float(annual_income.loc['Diluted Average Shares', latest_year] if 'Diluted Average Shares' in annual_income.index else 0)
-        
-        # Convert to USD if needed
-        if needs_conversion:
-            revenue = convert_currency(revenue, currency, 'USD')
-            gross_profit = convert_currency(gross_profit, currency, 'USD')
-            operating_income = convert_currency(operating_income, currency, 'USD')
-            ebitda = convert_currency(ebitda, currency, 'USD')
-            net_income = convert_currency(net_income, currency, 'USD')
-            eps = convert_currency(eps, currency, 'USD')
-        
-        # Compute FY free cash flow if possible
-        ocf_latest = get_row(cashflow, ['Operating Cash Flow', 'Total Cash From Operating Activities'], latest_year)
-        capex_latest = get_row(cashflow, ['Capital Expenditure', 'Capital Expenditures'], latest_year)
-        # FCF = OCF - |CapEx| (CapEx is typically negative in cash flow statements)
-        fcf_latest = ocf_latest + capex_latest if capex_latest < 0 else ocf_latest - capex_latest
-        if needs_conversion:
-            fcf_latest = convert_currency(fcf_latest, currency, 'USD')
-
-        fy24_data = {
-            "revenue": revenue,
-            "gross_profit": gross_profit,
-            "gross_margin_pct": (gross_profit / revenue * 100) if revenue > 0 and gross_profit > 0 else 0,
-            "operating_income": operating_income,
-            "ebitda": ebitda,
-            "net_income": net_income,
-            "eps": eps,
-            "shares_outstanding": shares_outstanding,
-            "fiscal_year": str(latest_year),
-            "fcf": fcf_latest,
-            "fcf_margin_pct": (fcf_latest / revenue * 100) if revenue > 0 else 0
-        }
-        
-        # Market data (prices are usually already in USD, but check)
-        current_price = safe_float(info.get('currentPrice', info.get('regularMarketPrice', 0)))
-        market_cap = safe_float(info.get('marketCap', 0))
-        enterprise_value = safe_float(info.get('enterpriseValue', 0))
-        
-        # Convert market data if needed - but NOT the share price
-        if needs_conversion:
-            # Don't convert current_price - keep it in original currency
-            # Only convert market cap and enterprise value for consistency
-            market_cap = convert_currency(market_cap, currency, 'USD')
-            enterprise_value = convert_currency(enterprise_value, currency, 'USD')
         
         market_data = {
             "current_price": current_price,
-            "market_cap": market_cap,
-            "enterprise_value": enterprise_value,
-            "pe_ratio": safe_float(info.get('trailingPE', 0)),
-            "forward_pe": safe_float(info.get('forwardPE', 0)),
-            "price_to_book": safe_float(info.get('priceToBook', 0)),
-            "debt_to_equity": safe_float(info.get('debtToEquity', 0)),
+            "market_cap": 0,
+            "enterprise_value": 0,
+            "pe_ratio": 0
         }
         
-        # TTM revenue
-        quarterly_income = company.quarterly_income_stmt
-        if quarterly_income is not None and not quarterly_income.empty and len(quarterly_income.columns) >= 4:
-            if 'Total Revenue' in quarterly_income.index:
-                ttm_revenue = safe_float(quarterly_income.loc['Total Revenue'].iloc[:4].sum())
-                if needs_conversion:
-                    ttm_revenue = convert_currency(ttm_revenue, currency, 'USD')
-                fy24_data["ttm_revenue"] = ttm_revenue
-        
-        # Historical financials (ensure FY21-FY24 if available), normalized to millions
-        all_years = []
-        for col in list(annual_income.columns):
-            # Extract fiscal year as int (first 4 digits of column label)
-            y_str = str(col)
-            try:
-                y_int = int(y_str[:4])
-            except Exception:
-                continue
-            all_years.append((y_int, col))
-
-        # Sort ascending by fiscal year
-        all_years.sort(key=lambda t: t[0])
-
-        # Prefer FY21..FY24 if present (removed 2020)
-        preferred = [y for y in all_years if 2021 <= y[0] <= 2024]
-        selected = preferred[-4:] if len(preferred) >= 4 else all_years[-4:]
-
         historical_financials = []
-        for idx, (year_int, col) in enumerate(selected):
-            year_revenue = safe_float(annual_income.loc['Total Revenue', col] if 'Total Revenue' in annual_income.index else 0)
-            year_gross_profit = safe_float(annual_income.loc['Gross Profit', col] if 'Gross Profit' in annual_income.index else 0)
-            year_ebitda = safe_float(annual_income.loc['EBITDA', col] if 'EBITDA' in annual_income.index else 0)
-            year_net_income = safe_float(annual_income.loc['Net Income', col] if 'Net Income' in annual_income.index else 0)
-            year_eps = safe_float(annual_income.loc['Diluted EPS', col] if 'Diluted EPS' in annual_income.index else 0)
 
-            # FCF from cash flow when available
-            ocf = get_row(cashflow, ['Operating Cash Flow', 'Total Cash From Operating Activities'], col)
-            capex = get_row(cashflow, ['Capital Expenditure', 'Capital Expenditures'], col)
-            # FCF = OCF - |CapEx| (CapEx is typically negative in cash flow statements)
-            fcf_abs = ocf + capex if capex < 0 else ocf - capex
+        try:
+            # Get income statement data
+            income_stmt = company.income_stmt
+            # Try to get cash flow statement (newer yfinance uses cash_flow)
+            cash_flow = None
+            try:
+                cash_flow = company.cash_flow
+            except Exception:
+                try:
+                    cash_flow = company.cashflow
+                except Exception:
+                    cash_flow = None
+            if income_stmt is not None and not income_stmt.empty and len(income_stmt.columns) > 0:
+                latest_year = income_stmt.columns[0]
+                debug(f"Latest financial year: {latest_year}")
+                
+                # Extract key metrics
+                if 'Total Revenue' in income_stmt.index:
+                    revenue = income_stmt.loc['Total Revenue', latest_year]
+                    fy24_financials["revenue"] = safe_float(revenue)
+                    debug(f"Revenue: ${fy24_financials['revenue']:,.0f}")
+                
+                if 'Gross Profit' in income_stmt.index and 'Total Revenue' in income_stmt.index:
+                    gross_profit = income_stmt.loc['Gross Profit', latest_year]
+                    revenue = income_stmt.loc['Total Revenue', latest_year]
+                    fy24_financials["gross_profit"] = safe_float(gross_profit)
+                    debug(f"Gross Profit: ${fy24_financials['gross_profit']:,.0f}")
+                    if revenue != 0:
+                        fy24_financials["gross_margin_pct"] = (safe_float(gross_profit) / safe_float(revenue)) * 100
+                        debug(f"Gross Margin: {fy24_financials['gross_margin_pct']:.1f}%")
+                
+                if 'EBITDA' in income_stmt.index:
+                    ebitda = income_stmt.loc['EBITDA', latest_year]
+                    fy24_financials["ebitda"] = safe_float(ebitda)
+                    debug(f"EBITDA: ${fy24_financials['ebitda']:,.0f}")
+                    # Calculate EBITDA margin
+                    if 'Total Revenue' in income_stmt.index:
+                        revenue = fy24_financials["revenue"]
+                        if revenue != 0:
+                            fy24_financials["ebitda_margin_pct"] = (safe_float(ebitda) / revenue) * 100
+                            debug(f"EBITDA Margin: {fy24_financials['ebitda_margin_pct']:.1f}%")
+                
+                if 'Net Income' in income_stmt.index:
+                    net_income = income_stmt.loc['Net Income', latest_year]
+                    fy24_financials["net_income"] = safe_float(net_income)
+                    debug(f"Net Income: ${fy24_financials['net_income']:,.0f}")
+                
+                if 'Diluted EPS' in income_stmt.index:
+                    eps = income_stmt.loc['Diluted EPS', latest_year]
+                    fy24_financials["eps"] = safe_float(eps)
+                    debug(f"EPS: ${fy24_financials['eps']:.2f}")
+                
+                if 'Diluted Average Shares' in income_stmt.index:
+                    shares = income_stmt.loc['Diluted Average Shares', latest_year]
+                    fy24_financials["shares_outstanding"] = safe_float(shares)
+                    debug(f"Shares Outstanding: {fy24_financials['shares_outstanding']:,.0f}")
+                
+                # Calculate FCF (Free Cash Flow) from cash flow statement when available
+                try:
+                    if cash_flow is not None and not cash_flow.empty and latest_year in cash_flow.columns:
+                        # Support multiple possible index labels for OCF and CapEx
+                        ocf_labels = [
+                            'Operating Cash Flow',
+                            'Total Cash From Operating Activities',
+                            'Cash Flow From Operating Activities'
+                        ]
+                        capex_labels = [
+                            'Capital Expenditure',
+                            'Capital Expenditures'
+                        ]
+                        ocf = None
+                        capex = None
+                        for ocf_label in ocf_labels:
+                            if ocf_label in cash_flow.index:
+                                ocf = safe_float(cash_flow.loc[ocf_label, latest_year])
+                                break
+                        for capex_label in capex_labels:
+                            if capex_label in cash_flow.index:
+                                capex = safe_float(cash_flow.loc[capex_label, latest_year])
+                                break
+                        if ocf is not None and capex is not None:
+                            # In Yahoo data CapEx is typically negative; ocf + capex is correct
+                            fcf_latest = safe_float(ocf + capex)
+                            fy24_financials["fcf"] = fcf_latest
+                            if fy24_financials["revenue"]:
+                                fy24_financials["fcf_margin_pct"] = (fcf_latest / fy24_financials["revenue"]) * 100.0
+                            debug(f"FCF (from CF stmt): ${fy24_financials['fcf']:,.0f}, FCF Margin: {fy24_financials.get('fcf_margin_pct', 0):.1f}%")
+                        else:
+                            # Fallback: estimate 25% if CF data missing
+                            revenue = fy24_financials["revenue"]
+                            estimated_fcf = revenue * 0.25
+                            fy24_financials["fcf"] = estimated_fcf
+                            fy24_financials["fcf_margin_pct"] = 25.0
+                            debug(f"Estimated FCF (fallback): ${estimated_fcf:,.0f} (25% of revenue)")
+                    else:
+                        revenue = fy24_financials["revenue"]
+                        estimated_fcf = revenue * 0.25
+                        fy24_financials["fcf"] = estimated_fcf
+                        fy24_financials["fcf_margin_pct"] = 25.0
+                        debug(f"Estimated FCF (no CF stmt): ${estimated_fcf:,.0f} (25% of revenue)")
+                except Exception as cferr:
+                    debug(f"FCF computation failed: {cferr}")
+                    revenue = fy24_financials["revenue"]
+                    estimated_fcf = revenue * 0.25
+                    fy24_financials["fcf"] = estimated_fcf
+                    fy24_financials["fcf_margin_pct"] = 25.0
+                    debug(f"Estimated FCF (error fallback): ${estimated_fcf:,.0f} (25% of revenue)")
 
-            # Convert to USD if needed
-            if needs_conversion:
-                year_revenue = convert_currency(year_revenue, currency, 'USD')
-                year_gross_profit = convert_currency(year_gross_profit, currency, 'USD')
-                year_ebitda = convert_currency(year_ebitda, currency, 'USD')
-                year_net_income = convert_currency(year_net_income, currency, 'USD')
-                year_eps = convert_currency(year_eps, currency, 'USD')
-                fcf_abs = convert_currency(fcf_abs, currency, 'USD')
+                # Build historical financials (last up to 4 periods) in $M
+                try:
+                    # Ensure we have required rows
+                    idx = income_stmt.index
+                    needed = ['Total Revenue', 'Gross Profit', 'EBITDA', 'Net Income', 'Diluted EPS']
+                    if all(metric in idx for metric in needed):
+                        # Use last 4 columns (most recent first by yfinance convention)
+                        cols = list(income_stmt.columns)[:4]
+                        # Reverse to oldest->newest for nicer display
+                        cols = cols[::-1]
+                        prev_revenue_m = None
+                        for col in cols:
+                            # Column may be a Timestamp or string; derive a FY label
+                            year_label = str(col)
+                            year_num = None
+                            try:
+                                year_num = int(str(col)[:4])
+                            except Exception:
+                                pass
+                            if year_num:
+                                fy_label = f"FY{str(year_num)[-2:]}"
+                            else:
+                                fy_label = f"FY{year_label}"
 
-            # Calculate margins
-            year_gross_margin = (year_gross_profit / year_revenue * 100) if year_revenue > 0 else 0
-            year_ebitda_margin = (year_ebitda / year_revenue * 100) if year_revenue > 0 else 0
-            year_net_income_margin = (year_net_income / year_revenue * 100) if year_revenue > 0 else 0
+                            rev = safe_float(income_stmt.loc['Total Revenue', col])
+                            gp = safe_float(income_stmt.loc['Gross Profit', col])
+                            ebitda_val = safe_float(income_stmt.loc['EBITDA', col])
+                            ni = safe_float(income_stmt.loc['Net Income', col])
+                            eps_val = safe_float(income_stmt.loc['Diluted EPS', col])
 
-            # Revenue growth vs previous selected year
-            if idx > 0:
-                prev_year, prev_col = selected[idx-1]
-                prev_revenue = safe_float(annual_income.loc['Total Revenue', prev_col] if 'Total Revenue' in annual_income.index else 0)
-                if needs_conversion:
-                    prev_revenue = convert_currency(prev_revenue, currency, 'USD')
-                year_revenue_growth = ((year_revenue - prev_revenue) / prev_revenue * 100) if prev_revenue > 0 else 0
-            else:
-                year_revenue_growth = 0
+                            rev_m = rev / 1_000_000.0
+                            gp_m = gp / 1_000_000.0
+                            ebitda_m = ebitda_val / 1_000_000.0
+                            ni_m = ni / 1_000_000.0
+                            # Historical FCF from cash flow statement if available
+                            fcf_val = None
+                            try:
+                                if cash_flow is not None and not cash_flow.empty and col in cash_flow.columns:
+                                    ocf = None
+                                    capex = None
+                                    for ocf_label in ['Operating Cash Flow', 'Total Cash From Operating Activities', 'Cash Flow From Operating Activities']:
+                                        if ocf_label in cash_flow.index:
+                                            ocf = safe_float(cash_flow.loc[ocf_label, col])
+                                            break
+                                    for capex_label in ['Capital Expenditure', 'Capital Expenditures']:
+                                        if capex_label in cash_flow.index:
+                                            capex = safe_float(cash_flow.loc[capex_label, col])
+                                            break
+                                    if ocf is not None and capex is not None:
+                                        fcf_val = safe_float(ocf + capex)
+                            except Exception as hcferr:
+                                debug(f"Historical FCF compute failed for {col}: {hcferr}")
+                            if fcf_val is None:
+                                fcf_val = rev * 0.25  # fallback
+                            fcf_m = fcf_val / 1_000_000.0
 
-            # Compute FCF margin from statements when possible
-            year_fcf = fcf_abs
-            year_fcf_margin = (year_fcf / year_revenue * 100) if year_revenue > 0 else 0
+                            gross_margin = (gp / rev * 100.0) if rev else 0.0
+                            ebitda_margin = (ebitda_val / rev * 100.0) if rev else 0.0
+                            ni_margin = (ni / rev * 100.0) if rev else 0.0
+                            fcf_margin = (fcf_val / rev * 100.0) if rev else 0.0
 
-            # Normalize to millions for absolute values
-            revenue_m = year_revenue / 1_000_000
-            gross_profit_m = year_gross_profit / 1_000_000
-            ebitda_m = year_ebitda / 1_000_000
-            net_income_m = year_net_income / 1_000_000
-            fcf_m = year_fcf / 1_000_000
+                            if prev_revenue_m is not None and prev_revenue_m > 0:
+                                rev_growth = ((rev_m - prev_revenue_m) / prev_revenue_m) * 100.0
+                            else:
+                                rev_growth = 0.0
+                            prev_revenue_m = rev_m
 
-            # Label as FYxx (last two digits)
-            fy_label = f"FY{str(year_int)[-2:]}"
+                            historical_financials.append({
+                                "year": fy_label,
+                                "revenue": rev_m,
+                                "revenueGrowth": rev_growth,
+                                "grossProfit": gp_m,
+                                "grossMargin": gross_margin,
+                                "ebitda": ebitda_m,
+                                "ebitdaMargin": ebitda_margin,
+                                "fcf": fcf_m,
+                                "fcfMargin": fcf_margin,
+                                "netIncome": ni_m,
+                                "netIncomeMargin": ni_margin,
+                                "eps": eps_val
+                            })
+                except Exception as he:
+                    debug(f"Failed to build historical financials: {he}")
+            
+            # Get market data
+            info = company.info
+            if info:
+                if 'marketCap' in info:
+                    market_data["market_cap"] = safe_float(info['marketCap'])
+                    debug(f"Market Cap: ${market_data['market_cap']:,.0f}")
+                
+                if 'enterpriseValue' in info:
+                    market_data["enterprise_value"] = safe_float(info['enterpriseValue'])
+                    debug(f"Enterprise Value: ${market_data['enterprise_value']:,.0f}")
+                
+                if 'trailingPE' in info:
+                    market_data["pe_ratio"] = safe_float(info['trailingPE'])
+                    debug(f"P/E Ratio: {market_data['pe_ratio']:.2f}")
+                
+                # Update current price if not already set
+                if current_price == 0 and 'currentPrice' in info:
+                    market_data["current_price"] = safe_float(info['currentPrice'])
+                    current_price = market_data["current_price"]
+                    debug(f"Current Price from info: ${current_price:.2f}")
+            
+        except Exception as e:
+            debug(f"Error getting financial data: {e}")
+        
+        # Get company name
+        company_name = ticker
+        try:
+            if info and 'longName' in info:
+                company_name = info['longName']
+            elif info and 'shortName' in info:
+                company_name = info['shortName']
+        except Exception as e:
+            debug(f"Error getting company name: {e}")
+        
+        # Get currency info
+        currency_info = {
+            "original_currency": "USD",
+            "converted_to_usd": False,
+            "conversion_rate": 1.0,
+            "exchange_rate_source": "none"
+        }
+        
+        try:
+            if info and 'currency' in info:
+                original_currency = info['currency']
+                if original_currency and original_currency != 'USD':
+                    currency_info["original_currency"] = original_currency
+                    conversion_rate = get_exchange_rate(original_currency, 'USD')
+                    currency_info["conversion_rate"] = conversion_rate
+                    currency_info["converted_to_usd"] = True
+                    currency_info["exchange_rate_source"] = "exchangerate-api"
+                    
+                    # Convert financial values to USD
+                    if fy24_financials["revenue"] > 0:
+                        fy24_financials["revenue"] = convert_currency(fy24_financials["revenue"], original_currency, 'USD')
+                    if fy24_financials["ebitda"] > 0:
+                        fy24_financials["ebitda"] = convert_currency(fy24_financials["ebitda"], original_currency, 'USD')
+                    if fy24_financials["net_income"] > 0:
+                        fy24_financials["net_income"] = convert_currency(fy24_financials["net_income"], original_currency, 'USD')
+                    if market_data["market_cap"] > 0:
+                        market_data["market_cap"] = convert_currency(market_data["market_cap"], original_currency, 'USD')
+                    if market_data["enterprise_value"] > 0:
+                        market_data["enterprise_value"] = convert_currency(market_data["enterprise_value"], original_currency, 'USD')
 
-            historical_financials.append({
-                "year": fy_label,
-                "revenue": revenue_m,
-                "revenueGrowth": year_revenue_growth,
-                "grossProfit": gross_profit_m,
-                "grossMargin": year_gross_margin,
-                "ebitda": ebitda_m,
-                "ebitdaMargin": year_ebitda_margin,
-                "netIncome": net_income_m,
-                "netIncomeMargin": year_net_income_margin,
-                "eps": year_eps,
-                "fcf": fcf_m,
-                "fcfMargin": year_fcf_margin
-            })
+                    # Convert historical values to USD (they are in $M, so convert base then divide)
+                    if historical_financials:
+                        for row in historical_financials:
+                            # Convert base currency amounts first
+                            row["revenue"] = convert_currency(row["revenue"] * 1_000_000.0, original_currency, 'USD') / 1_000_000.0
+                            row["grossProfit"] = convert_currency(row["grossProfit"] * 1_000_000.0, original_currency, 'USD') / 1_000_000.0
+                            row["ebitda"] = convert_currency(row["ebitda"] * 1_000_000.0, original_currency, 'USD') / 1_000_000.0
+                            row["netIncome"] = convert_currency(row["netIncome"] * 1_000_000.0, original_currency, 'USD') / 1_000_000.0
+                            row["fcf"] = convert_currency(row["fcf"] * 1_000_000.0, original_currency, 'USD') / 1_000_000.0
+        except Exception as e:
+            debug(f"Error handling currency conversion: {e}")
         
         result = {
-            "fy24_financials": fy24_data,
+            "fy24_financials": fy24_financials,
             "market_data": market_data,
-            "historical_financials": historical_financials,
-            "company_name": info.get('longName') or info.get('shortName') or ticker,
+            "company_name": company_name,
             "source": "yfinance",
-            "currency_info": {
-                "original_currency": currency,
-                "converted_to_usd": needs_conversion,
-                "conversion_rate": conversion_rate,
-                "exchange_rate_source": "exchangerate-api.com" if needs_conversion else "none"
-            }
+            "currency_info": currency_info,
+            "historical_financials": historical_financials
         }
         
-        # Emit strict JSON (no NaN/Infinity)
+        debug("Successfully fetched financial data!")
         return result
         
     except Exception as e:
+        debug(f"Error in fetch_financials: {e}")
+        # Return fallback data
         return {
-            "error": str(e),
-            "fy24_financials": { "revenue": 0, "gross_margin_pct": 0, "ebitda": 0, "net_income": 0, "eps": 0, "shares_outstanding": 0 },
-            "market_data": { "current_price": 0, "market_cap": 0, "enterprise_value": 0, "pe_ratio": 0 },
+            "fy24_financials": {
+                "revenue": 0,
+                "gross_margin_pct": 0,
+                "ebitda": 0,
+                "net_income": 0,
+                "eps": 0,
+                "shares_outstanding": 0
+            },
+            "market_data": {
+                "current_price": current_price,
+                "market_cap": 0,
+                "enterprise_value": 0,
+                "pe_ratio": 0
+            },
+            "company_name": ticker,
+            "source": "yfinance_alternative",
             "currency_info": {
                 "original_currency": "USD",
                 "converted_to_usd": False,
@@ -371,9 +419,9 @@ def fetch_financials(ticker):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print(json.dumps({"error": "Usage: python fetch_yfinance.py <TICKER>"}))
+        debug(json.dumps({"error": "Usage: python fetch_yfinance.py <TICKER>"}))
         sys.exit(1)
     ticker = sys.argv[1].upper()
     result = fetch_financials(ticker)
     # Ensure strict JSON output
-    print(json.dumps(result, allow_nan=False)) 
+    print(json.dumps(result, allow_nan=False))
