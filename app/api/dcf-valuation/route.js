@@ -78,10 +78,10 @@ async function fetchFinancialsWithYfinance(ticker) {
         (async () => {
           try {
             const externalPyApi = process.env.PY_YF_URL;
-            const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '';
-            const url = externalPyApi
-              ? `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`
-              : `${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`;
+            if (!externalPyApi) {
+              throw new Error('Missing PY_YF_URL in environment. Set PY_YF_URL to your Python yfinance API URL.');
+            }
+            const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
             const res = await fetch(url, { method: 'GET' });
             if (!res.ok) {
               const txt = await res.text();

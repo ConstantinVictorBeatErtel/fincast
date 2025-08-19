@@ -424,4 +424,4 @@ if __name__ == "__main__":
     ticker = sys.argv[1].upper()
     result = fetch_financials(ticker)
     # Ensure strict JSON output
-    print(json.dumps(result, allow_nan=False))
+    print(json.dumps(result, allow_nan=False)) 
