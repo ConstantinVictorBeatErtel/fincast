@@ -1,4 +1,6 @@
 venv/
+ENV/
+.venv/
 node_modules/
 .next/
 run_dir/
@@ -15,3 +17,11 @@ run_dir/
 # Local dev env files
 .env.local
 .env.*.local
+*.log
+build/
+dist/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/*.whl
+**/*.egg-info/
