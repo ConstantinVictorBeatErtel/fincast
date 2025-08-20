@@ -1,9 +1,8 @@
 services:
   - type: web
     name: fincast-yfinance-api
-    env: python
+    env: docker
     rootDir: python_service
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    dockerfilePath: Dockerfile
     plan: free
 
