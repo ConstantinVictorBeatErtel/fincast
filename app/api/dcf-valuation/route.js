@@ -390,7 +390,7 @@ async function fetchFinancialsWithYfinance(ticker) {
           if (sharesY > 0) epsY = ni / sharesY;
         }
 
-        const revenueGrowth = prevRevenueM ? ((revM - prevRevenueM) / prevRevenueM) * 100 : 0;
+        const revenueGrowth = prevRevenueM ? ((revM - prevRevenueM) / prevRevenueM) * 100 : null;
         prevRevenueM = revM;
 
         historical_financials.push({
@@ -579,7 +579,7 @@ const generateValuation = async (ticker, method, selectedMultiple = 'auto', feed
     let prompt;
     
     if (method === 'dcf') {
-      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, and net income, ultimately leading to a fair value calculation for the company.
+      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
 
 The company you will be analyzing is: ${(yf_data?.company_name) || ticker}
 
@@ -659,14 +659,14 @@ Company Name: ${(yf_data?.company_name) || ticker}
 
 Financial Forecast 2024-2029:
 
-Year | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M)
----- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | ---------------
-2024 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2025 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2026 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2027 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2028 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2029 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
+Year | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M) | EPS
+---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | --------------- | ---
+2024 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+2025 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+2026 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+2027 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+2028 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+2029 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
 
 Fair Value Calculation:
 Discount Rate: [Value]%
@@ -695,7 +695,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
         multipleTypeInstruction = `Use ${selectedMultiple} multiple. For P/E multiples, set enterpriseValue to 0.`;
       }
       
-      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
+      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
 
 The company you will be analyzing is: ${(yf_data?.company_name) || ticker}
 
@@ -1159,7 +1159,11 @@ Return ONLY the <forecast> section as specified above, without any additional co
               fcfMargin: row.fcfMargin || 0,
               netIncome: netIncome,
               netIncomeMargin: revenueM > 0 ? (netIncome / revenueM) * 100 : 0,
-              eps: row.eps || 0
+              eps: (row.eps && row.eps > 0)
+                ? row.eps
+                : ((yf_data?.fy24_financials?.shares_outstanding || 0) > 0
+                    ? (netIncome * 1_000_000) / (yf_data.fy24_financials.shares_outstanding)
+                    : 0)
             };
           });
 
@@ -1181,6 +1185,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
               }
               if (prevRev && prevRev > 0 && first.revenue > 0) {
                 first.revenueGrowth = ((first.revenue - prevRev) / prevRev) * 100;
+              } else {
+                first.revenueGrowth = null;
               }
             }
           } catch (_) { /* no-op */ }
@@ -1232,7 +1238,7 @@ const generateValuationWithFeedback = async (ticker, method, selectedMultiple = 
     let prompt;
     
     if (method === 'dcf') {
-      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, and net income, ultimately leading to a fair value calculation for the company.
+      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
 
 The company you will be analyzing is: ${(yf_data?.company_name) || ticker}
 
@@ -1348,7 +1354,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
         multipleTypeInstruction = `Use ${selectedMultiple} multiple. For P/E multiples, set enterpriseValue to 0.`;
       }
       
-      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
+      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
 
 The company you will be analyzing is: ${(yf_data?.company_name) || ticker}
 

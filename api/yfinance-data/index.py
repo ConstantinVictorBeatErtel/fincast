@@ -116,7 +116,7 @@ def _fetch_ticker_payload(ticker: str):
                 if prev_rev_m is not None and prev_rev_m > 0:
                     rev_g = ((rev_m - prev_rev_m) / prev_rev_m) * 100.0
                 else:
-                    rev_g = 0.0
+                    rev_g = None
                 prev_rev_m = rev_m
 
                 historical.append({
