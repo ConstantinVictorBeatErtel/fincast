@@ -2,5 +2,11 @@
   "version": 2,
   "buildCommand": "npm run build",
   "installCommand": "npm install",
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "functions": {
+    "api/yfinance-data/index.py": {
+      "memory": 1024,
+      "maxDuration": 20
+    }
+  }
 }

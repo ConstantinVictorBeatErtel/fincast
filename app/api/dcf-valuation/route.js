@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { headers as nextHeaders } from 'next/headers';
+import yahooFinance from 'yahoo-finance2';
 
 // export const runtime = 'edge';
 
@@ -59,100 +60,390 @@ function extractSections(text, method) {
   };
 }
 
-// Function to fetch financial data from yfinance via Python script
+// Function to fetch financial data using yahoo-finance2 (replacing Python yfinance)
 async function fetchFinancialsWithYfinance(ticker) {
   try {
     console.log('Fetching yfinance data for:', ticker);
-    
-    const { spawn } = await import('child_process');
-    
-    // Use the working venv Python
-    const pythonCmd = `${process.cwd()}/venv/bin/python3`;
-    const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
-    
-    console.log('Executing Python script:', { pythonCmd, scriptPath });
-    
-    return new Promise((resolve, reject) => {
-      // Use Vercel Python function in production
+
+    // 1) Try Python script first for robust statements (historical margins)
+    try {
+      const { spawn } = await import('child_process');
+
+      // Use external API in production if configured
       if (process.env.VERCEL === '1' || process.env.NEXT_RUNTIME === 'edge' || process.env.NODE_ENV === 'production') {
-        (async () => {
-          try {
-            const externalPyApi = process.env.PY_YF_URL;
-            if (!externalPyApi) {
-              throw new Error('Missing PY_YF_URL in environment. Set PY_YF_URL to your Python yfinance API URL.');
-            }
-            const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
-            const res = await fetch(url, { method: 'GET' });
-            if (!res.ok) {
-              const txt = await res.text();
-              throw new Error(`Vercel yfinance function failed: ${res.status} ${txt}`);
-            }
+        const externalPyApi = process.env.PY_YF_URL;
+        if (externalPyApi) {
+          const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
+          const res = await fetch(url, { method: 'GET' });
+          if (res.ok) {
             const json = await res.json();
-            resolve(json);
-          } catch (err) {
-            reject(err);
+            if (json && (Array.isArray(json.historical_financials) ? json.historical_financials.length : 0) > 0) {
+              console.log('Using Python yfinance API (external) result');
+              return json;
+            }
+          } else {
+            console.warn('External Python yfinance API failed:', res.status);
           }
-        })();
-        return;
+        }
       }
 
-      // On Apple Silicon, if Node is running under Rosetta (x64), force the
-      // subprocess to run as arm64 so NumPy wheels match architecture.
+      // Local Python script execution (dev/local)
+      const pythonCmd = `${process.cwd()}/venv/bin/python3`;
+      const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+
       const isDarwin = process.platform === 'darwin';
       const isNodeRosetta = process.arch === 'x64';
-      const archCmd = '/usr/bin/arch';
-
       const useArchWrapper = isDarwin && isNodeRosetta;
-      const cmd = useArchWrapper ? archCmd : pythonCmd;
+      const cmd = useArchWrapper ? '/usr/bin/arch' : pythonCmd;
       const args = useArchWrapper ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
 
-      if (useArchWrapper) {
-        console.log('Forcing ARM64 Python subprocess via arch wrapper', { cmd, args });
-      }
+      const pyResult = await new Promise((resolve, reject) => {
+        const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => { stdout += d.toString(); });
+        child.stderr.on('data', (d) => { stderr += d.toString(); });
+        child.on('close', (code) => {
+          if (code !== 0) {
+            console.warn('Python script exited with non-zero code:', code, stderr);
+            return resolve(null);
+          }
+          try {
+            const json = JSON.parse(stdout);
+            resolve(json);
+          } catch (e) {
+            console.warn('Failed to parse Python output:', e);
+            resolve(null);
+          }
+        });
+        child.on('error', (err) => {
+          console.warn('Failed to start Python process:', err);
+          resolve(null);
+        });
+      });
 
-      const child = spawn(cmd, args, {
-        cwd: process.cwd(),
-        stdio: ['pipe', 'pipe', 'pipe']
+      if (pyResult && (Array.isArray(pyResult.historical_financials) ? pyResult.historical_financials.length : 0) > 0) {
+        console.log('Using local Python yfinance result');
+        return pyResult;
+      }
+    } catch (pyErr) {
+      console.warn('Python yfinance fetch not available, falling back to yahoo-finance2:', pyErr?.message);
+    }
+
+    // 2) Fallback: yahoo-finance2
+    console.log('Fetching yfinance data (node fallback) for:', ticker);
+
+    const modules = [
+      'price',
+      'summaryDetail',
+      'defaultKeyStatistics',
+      'financialData',
+      'incomeStatementHistory',
+      'cashflowStatementHistory',
+      'balanceSheetHistory',
+    ];
+
+    const summary = await yahooFinance.quoteSummary(ticker, { modules });
+
+    const price = summary?.price || {};
+    const summaryDetail = summary?.summaryDetail || {};
+    const keyStats = summary?.defaultKeyStatistics || {};
+    const financialData = summary?.financialData || {};
+    const incomeHistory = summary?.incomeStatementHistory?.incomeStatementHistory || [];
+    const cashflowHistory = summary?.cashflowStatementHistory?.cashflowStatements || [];
+    const balanceHistory = summary?.balanceSheetHistory?.balanceSheetStatements || [];
+
+    const latestIncome = incomeHistory[0] || {};
+    const latestCashflow = cashflowHistory[0] || {};
+
+    const toNumber = (v) => {
+      if (typeof v === 'number') return v;
+      if (v && typeof v === 'object') {
+        if (typeof v.raw === 'number') return v.raw;
+        if (typeof v.longFmt === 'string') return Number(v.longFmt.replace(/[^\d.-]/g, '')) || 0;
+        if (typeof v.fmt === 'string') return Number(v.fmt.replace(/[^\d.-]/g, '')) || 0;
+      }
+      return Number(v) || 0;
+    };
+
+    const totalRevenue = toNumber(latestIncome.totalRevenue);
+    let grossProfit = toNumber(latestIncome.grossProfit);
+    if (!grossProfit && totalRevenue) {
+      const costOfRevenue = toNumber(latestIncome.costOfRevenue);
+      if (costOfRevenue) grossProfit = totalRevenue - costOfRevenue;
+    }
+    const netIncome = toNumber(latestIncome.netIncome);
+    // EBITDA might be available under financialData
+    let ebitda = toNumber(financialData.ebitda);
+    if (!ebitda) {
+      const latestCFDep = toNumber(
+        latestCashflow.depreciation ?? latestCashflow.depreciationAndAmortization
+      );
+      const latestOperatingIncome = toNumber(latestIncome.operatingIncome ?? latestIncome.ebit);
+      ebitda = latestOperatingIncome + latestCFDep;
+    }
+
+    const operatingCF = toNumber(
+      latestCashflow.totalCashFromOperatingActivities ?? latestCashflow.operatingCashflow
+    );
+    const capex = toNumber(latestCashflow.capitalExpenditures);
+    const fcf = operatingCF + capex; // capex usually negative
+
+    const currentPrice = toNumber(price.regularMarketPrice ?? financialData.currentPrice);
+    const marketCap = toNumber(price.marketCap);
+    const enterpriseValue = toNumber(
+      (summaryDetail && summaryDetail.enterpriseValue) || (keyStats && keyStats.enterpriseValue)
+    );
+    const peRatio = toNumber(
+      (summaryDetail && summaryDetail.trailingPE) || (keyStats && keyStats.trailingPE)
+    );
+
+    const sharesOutstandingRaw = toNumber(
+      price.sharesOutstanding || keyStats.sharesOutstanding
+    );
+
+    let eps = toNumber(latestIncome.dilutedEPS ?? latestIncome.basicEPS);
+    if (!eps) {
+      const dilutedShares = toNumber(latestIncome.dilutedAverageShares);
+      if (dilutedShares > 0) {
+        eps = netIncome / dilutedShares;
+      } else {
+        eps = toNumber(keyStats.trailingEps ?? financialData.epsCurrentYear);
+      }
+    }
+
+    // Fallback margins from financialData if statement components unavailable
+    const fdGross = toNumber(financialData.grossMargins);
+    const fdEbitda = toNumber(financialData.ebitdaMargins);
+    const fdProfit = toNumber(financialData.profitMargins);
+    const fdFreeCashflow = toNumber(financialData.freeCashflow);
+    const fdOperatingCashflow = toNumber(financialData.operatingCashflow);
+
+    const grossMarginPct = totalRevenue
+      ? (grossProfit / totalRevenue) * 100
+      : (fdGross ? (fdGross < 1 ? fdGross * 100 : fdGross) : 0);
+    const ebitdaMarginPct = totalRevenue
+      ? (ebitda / totalRevenue) * 100
+      : (fdEbitda ? (fdEbitda < 1 ? fdEbitda * 100 : fdEbitda) : 0);
+    const fcfMarginPct = totalRevenue
+      ? (fcf / totalRevenue) * 100
+      : (fdFreeCashflow && totalRevenue ? (fdFreeCashflow / totalRevenue) * 100 : 25);
+
+    const companyName = price.longName || price.shortName || ticker;
+    const currency = price.currency || 'USD';
+
+    // Build historical financials (up to 4 most recent, oldest->newest), values in $M
+    let historical_financials = [];
+    try {
+      const ts = await yahooFinance.fundamentalsTimeSeries(ticker, {
+        type: [
+          'annualTotalRevenue',
+          'annualGrossProfit',
+          'annualEbitda',
+          'annualOperatingIncome',
+          'annualNetIncomeCommonStockholders',
+          'annualOperatingCashFlow',
+          'annualCapitalExpenditure',
+          'annualDilutedEPS',
+          'annualDilutedAverageShares',
+          'annualBasicAverageShares'
+        ],
+        period1: '2000-01-01'
       });
-      
-      let stdout = '';
-      let stderr = '';
-      
-      child.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-      
-      child.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-      
-      child.on('close', (code) => {
-        if (code !== 0) {
-          console.error('Python script failed:', stderr);
-          reject(new Error(`Python script failed with code ${code}`));
-          return;
+
+      const toYearValues = (series) => {
+        const out = new Map();
+        if (!Array.isArray(series)) return out;
+        for (const item of series) {
+          const asOf = item?.asOfDate || item?.endDate || item?.period || item?.updated || item?.date;
+          const val = item?.reportedValue?.raw ?? item?.reportedValue ?? item?.value ?? item?.raw ?? null;
+          if (!asOf || val === null || typeof val === 'undefined') continue;
+          const d = new Date(asOf);
+          if (Number.isNaN(d.getTime())) continue;
+          const y = d.getUTCFullYear();
+          out.set(String(y), Number(val));
         }
-        
-        try {
-          // Parse the JSON output
-          const result = JSON.parse(stdout);
-          console.log('Successfully parsed Python output');
-          resolve(result);
-        } catch (parseError) {
-          console.error('Failed to parse Python output:', parseError);
-          console.error('Raw stdout:', stdout);
-          reject(new Error('Failed to parse Python script output'));
+        return out;
+      };
+
+      const pickSeries = (name) => toYearValues(ts?.[name]?.series || ts?.[name] || []);
+
+      const revMap = pickSeries('annualTotalRevenue');
+      const gpMap = pickSeries('annualGrossProfit');
+      const ebitdaMap = pickSeries('annualEbitda');
+      const niMap = pickSeries('annualNetIncomeCommonStockholders');
+      const ocfMap = pickSeries('annualOperatingCashFlow');
+      const capexMap = pickSeries('annualCapitalExpenditure');
+      const epsMap = pickSeries('annualDilutedEPS');
+      const dilutedSharesMap = pickSeries('annualDilutedAverageShares');
+      const basicSharesMap = pickSeries('annualBasicAverageShares');
+
+      const years = Array.from(new Set([
+        ...revMap.keys(),
+        ...gpMap.keys(),
+        ...ebitdaMap.keys(),
+        ...niMap.keys(),
+        ...ocfMap.keys(),
+        ...capexMap.keys(),
+      ])).map(y => Number(y)).filter(y => !Number.isNaN(y)).sort((a,b)=>a-b).slice(-4);
+
+      if (years.length > 0) {
+        let prevRevM = null;
+        for (const y of years) {
+          const rev = Number(revMap.get(String(y)) || 0);
+          const gp = Number(gpMap.get(String(y)) || 0);
+          const ebitdaY = Number(ebitdaMap.get(String(y)) || 0);
+          const ni = Number(niMap.get(String(y)) || 0);
+          const ocf = Number(ocfMap.get(String(y)) || 0);
+          const capex = Number(capexMap.get(String(y)) || 0);
+          const fcfY = ocf + capex; // capex negative
+          let epsY = Number(epsMap.get(String(y)) || 0);
+          if (!epsY && ni) {
+            const sharesY = Number(dilutedSharesMap.get(String(y)) || basicSharesMap.get(String(y)) || 0);
+            if (sharesY > 0) epsY = ni / sharesY;
+          }
+
+          const revM = rev / 1_000_000;
+          const gpM = gp / 1_000_000;
+          const ebitdaM = ebitdaY / 1_000_000;
+          const niM = ni / 1_000_000;
+          const fcfM = fcfY / 1_000_000;
+
+          const grossMargin = rev ? (gp / rev) * 100 : 0;
+          const ebitdaMargin = rev ? (ebitdaY / rev) * 100 : 0;
+          const netIncomeMargin = rev ? (ni / rev) * 100 : 0;
+          const fcfMargin = rev ? (fcfY / rev) * 100 : 0;
+          const revenueGrowth = prevRevM ? ((revM - prevRevM) / prevRevM) * 100 : 0;
+          prevRevM = revM;
+
+          historical_financials.push({
+            year: `FY${String(y).slice(-2)}`,
+            revenue: revM,
+            revenueGrowth,
+            grossProfit: gpM,
+            grossMargin,
+            ebitda: ebitdaM,
+            ebitdaMargin,
+            fcf: fcfM,
+            fcfMargin,
+            netIncome: niM,
+            netIncomeMargin,
+            eps: epsY || 0
+          });
         }
-      });
-      
-      child.on('error', (error) => {
-        console.error('Failed to start Python process:', error);
-        reject(error);
-      });
-    });
-    
+      }
+    } catch (tsErr) {
+      console.warn('fundamentalsTimeSeries failed; falling back to statement alignment:', tsErr?.message);
+    }
+
+    // Fallback: align income/cashflow statements by nearest date
+    if (!historical_financials.length) {
+      const findNearestByDate = (list, targetDate, toleranceDays = 90) => {
+        if (!Array.isArray(list) || list.length === 0) return null;
+        const t = new Date(targetDate).getTime();
+        let best = null;
+        let bestDelta = Number.POSITIVE_INFINITY;
+        for (const item of list) {
+          if (!item?.endDate) continue;
+          const d = new Date(item.endDate).getTime();
+          const delta = Math.abs(d - t);
+          if (delta < bestDelta) {
+            best = item;
+            bestDelta = delta;
+          }
+        }
+        return best;
+      };
+
+      const recent = incomeHistory.slice(0, 4).reverse();
+      let prevRevenueM = null;
+      for (const inc of recent) {
+        const yearNum = new Date(inc.endDate).getUTCFullYear();
+        const rev = toNumber(inc.totalRevenue);
+        let gp = toNumber(inc.grossProfit);
+        if (!gp && rev) {
+          const cor = toNumber(inc.costOfRevenue);
+          if (cor) gp = rev - cor;
+        }
+        const ni = toNumber(inc.netIncome);
+        const cf = findNearestByDate(cashflowHistory, inc.endDate) || {};
+        const depY = toNumber(cf.depreciation ?? cf.depreciationAndAmortization);
+        const ebitY = toNumber(inc.ebit ?? inc.operatingIncome);
+        const ebitdaVal = ebitY + depY;
+        const ocfY = toNumber(cf.totalCashFromOperatingActivities ?? cf.operatingCashflow);
+        const capexY = toNumber(cf.capitalExpenditures);
+        const fcfY = (ocfY || 0) + (capexY || 0);
+
+        const revM = rev / 1_000_000;
+        const gpM = gp / 1_000_000;
+        const ebitdaM = ebitdaVal / 1_000_000;
+        const niM = ni / 1_000_000;
+        const fcfM = fcfY / 1_000_000;
+        const grossMargin = rev ? (gp / rev) * 100 : 0;
+        const ebitdaMargin = rev ? (ebitdaVal / rev) * 100 : 0;
+        const netIncomeMargin = rev ? (ni / rev) * 100 : 0;
+        const fcfMargin = rev ? (fcfY / rev) * 100 : 0;
+
+        let epsY = toNumber(inc.dilutedEPS ?? inc.basicEPS);
+        if (!epsY) {
+          const sharesY = toNumber(inc.dilutedAverageShares ?? inc.basicAverageShares);
+          if (sharesY > 0) epsY = ni / sharesY;
+        }
+
+        const revenueGrowth = prevRevenueM ? ((revM - prevRevenueM) / prevRevenueM) * 100 : 0;
+        prevRevenueM = revM;
+
+        historical_financials.push({
+          year: `FY${String(yearNum).slice(-2)}`,
+          revenue: revM,
+          revenueGrowth,
+          grossProfit: gpM,
+          grossMargin,
+          ebitda: ebitdaM,
+          ebitdaMargin,
+          fcf: fcfM,
+          fcfMargin,
+          netIncome: niM,
+          netIncomeMargin,
+          eps: epsY || 0
+        });
+      }
+    }
+
+    const result = {
+      fy24_financials: {
+        revenue: totalRevenue,
+        gross_profit: grossProfit,
+        gross_margin_pct: grossMarginPct,
+        ebitda: ebitda,
+        ebitda_margin_pct: ebitdaMarginPct,
+        net_income: netIncome,
+        eps: eps,
+        shares_outstanding: sharesOutstandingRaw,
+        fcf: fcf,
+        fcf_margin_pct: fcfMarginPct
+      },
+      market_data: {
+        current_price: currentPrice,
+        market_cap: marketCap,
+        enterprise_value: enterpriseValue,
+        pe_ratio: peRatio
+      },
+      company_name: companyName,
+      source: 'yahoo-finance2',
+      currency_info: {
+        original_currency: currency,
+        converted_to_usd: currency !== 'USD' ? false : false,
+        conversion_rate: 1.0,
+        exchange_rate_source: 'none'
+      },
+      historical_financials
+    };
+
+    console.log('Successfully fetched financial data via yahoo-finance2');
+    return result;
   } catch (error) {
-    console.error('Error in fetchFinancialsWithYfinance:', error);
+    console.error('Error in fetchFinancialsWithYfinance (node):', error);
     throw error;
   }
 }
