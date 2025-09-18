@@ -6,7 +6,7 @@
   "functions": {
     "api/yfinance-data/index.py": {
       "memory": 1024,
-      "maxDuration": 20
+      "maxDuration": 60
     },
     "app/api/dcf-valuation/route.js": {
       "maxDuration": 60
