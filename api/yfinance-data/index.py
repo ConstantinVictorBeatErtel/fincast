@@ -3,11 +3,16 @@ import math
 import os
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
+from datetime import datetime, timedelta
 
 try:
     import yfinance as yf
+    import pandas as pd
+    import numpy as np
 except Exception:
     yf = None
+    pd = None
+    np = None
 
 
 def _safe_float(value, default=0.0):
@@ -18,6 +23,47 @@ def _safe_float(value, default=0.0):
         return f
     except Exception:
         return default
+
+
+def _fetch_spy_data(start_date, end_date):
+    """
+    Fetch SPY historical data using yfinance
+    """
+    if yf is None or pd is None or np is None:
+        return 500, {"error": "Required libraries not available"}
+    
+    try:
+        # Convert string dates to datetime objects if needed
+        if isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, '%Y-%m-%d')
+        if isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, '%Y-%m-%d')
+        
+        # Fetch SPY data
+        spy = yf.Ticker("SPY")
+        spy_data = spy.history(start=start_date, end=end_date)
+        
+        if spy_data.empty:
+            return 404, {"error": "No SPY data found for the given date range"}
+        
+        # Calculate returns
+        spy_data['Returns'] = spy_data['Close'].pct_change()
+        spy_returns = spy_data['Returns'].dropna().tolist()
+        
+        return 200, {
+            'returns': spy_returns,
+            'dates': [d.strftime('%Y-%m-%d') for d in spy_data.index[1:]],  # Skip first date (no return)
+            'prices': spy_data['Close'].tolist(),
+            'mean_return': float(np.mean(spy_returns)),
+            'variance': float(np.var(spy_returns)),
+            'std_dev': float(np.std(spy_returns)),
+            'start_date': start_date.strftime('%Y-%m-%d'),
+            'end_date': end_date.strftime('%Y-%m-%d'),
+            'data_points': len(spy_returns)
+        }
+        
+    except Exception as e:
+        return 500, {"error": f"Error fetching SPY data: {str(e)}"}
 
 
 def _fetch_ticker_payload(ticker: str):
@@ -198,9 +244,25 @@ class handler(BaseHTTPRequestHandler):
         try:
             parsed = urllib.parse.urlparse(self.path)
             qs = urllib.parse.parse_qs(parsed.query)
+            
+            # Check if this is a SPY data request
             ticker = (qs.get('ticker') or [None])[0]
-
-            status, payload = _fetch_ticker_payload((ticker or '').upper())
+            if ticker and ticker.upper() == 'SPY':
+                start_date = (qs.get('start_date') or [None])[0]
+                end_date = (qs.get('end_date') or [None])[0]
+                
+                # Default to 5 years if no dates provided
+                if not start_date or not end_date:
+                    end_date = datetime.now()
+                    start_date = end_date - timedelta(days=5*365)
+                    start_date = start_date.strftime('%Y-%m-%d')
+                    end_date = end_date.strftime('%Y-%m-%d')
+                
+                status, payload = _fetch_spy_data(start_date, end_date)
+            else:
+                # Regular ticker data request
+                ticker = (qs.get('ticker') or [None])[0]
+                status, payload = _fetch_ticker_payload((ticker or '').upper())
 
             body = json.dumps(payload, allow_nan=False).encode('utf-8')
             self.send_response(status)

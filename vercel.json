@@ -7,6 +7,15 @@
     "api/yfinance-data/index.py": {
       "memory": 1024,
       "maxDuration": 20
+    },
+    "app/api/dcf-valuation/route.js": {
+      "maxDuration": 60
+    },
+    "app/api/portfolio-analysis/route.js": {
+      "maxDuration": 60
+    },
+    "app/api/portfolio-calculator/route.js": {
+      "maxDuration": 60
     }
   }
 }

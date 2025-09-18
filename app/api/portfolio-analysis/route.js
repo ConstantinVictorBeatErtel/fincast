@@ -1,0 +1,641 @@
+import { NextResponse } from 'next/server';
+import yahooFinance from 'yahoo-finance2';
+
+export async function POST(request) {
+  try {
+    const { holdings, method = 'exit-multiple', correlationOnly = false } = await request.json();
+
+    if (!holdings || !Array.isArray(holdings) || holdings.length < 2) {
+      return NextResponse.json(
+        { error: 'At least 2 holdings are required for correlation analysis' },
+        { status: 400 }
+      );
+    }
+
+    const tickers = holdings.map(h => h.ticker);
+    const weights = holdings.map(h => h.weight / 100); // Convert percentages to decimals
+
+    console.log(`Analyzing portfolio with ${tickers.length} holdings:`, tickers);
+
+    // Fetch historical data for all tickers
+    const historicalData = await fetchHistoricalData(tickers);
+    
+    if (!historicalData || Object.keys(historicalData).length === 0) {
+      return NextResponse.json(
+        { error: 'Failed to fetch historical data for the provided tickers' },
+        { status: 500 }
+      );
+    }
+
+    // Calculate returns
+    const returns = calculateReturns(historicalData);
+    
+    // Calculate correlation matrix
+    const correlationData = calculateCorrelationMatrix(returns);
+    
+    // Get the date range used for fetching data
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(endDate.getFullYear() - 5); // 5 years of data
+    
+    // Calculate portfolio beta with fallback
+    let betaData;
+    try {
+      console.log('Attempting primary beta calculation...');
+      betaData = await calculatePortfolioBeta(returns, weights, startDate, endDate);
+      console.log('Primary beta calculation succeeded:', betaData);
+    } catch (error) {
+      console.error('Primary beta calculation failed, using fallback:', error.message);
+      console.error('Error details:', error.stack);
+      betaData = await calculatePortfolioBetaAlternative(returns, weights, startDate, endDate);
+      console.log('Fallback beta calculation result:', betaData);
+    }
+    
+    // If only correlation/beta is requested, return early with minimal payload
+    if (correlationOnly) {
+      const analysisResult = {
+        correlationOnly: true,
+        correlationMatrix: correlationData.correlationMatrix,
+        averageCorrelations: correlationData.averageCorrelations,
+        topCorrelatedPairs: correlationData.topCorrelatedPairs,
+        portfolioBeta: betaData.portfolioBeta,
+        stockBetas: betaData.stockBetas,
+        topBetaContributors: betaData.topBetaContributors,
+        bottomBetaContributors: betaData.bottomBetaContributors,
+        dataPeriod: {
+          startDate: returns.index[0],
+          endDate: returns.index[returns.index.length - 1],
+          totalDays: returns.index.length
+        }
+      };
+
+      console.log('Correlation-only analysis complete.');
+      return NextResponse.json(analysisResult);
+    }
+
+    // Calculate portfolio statistics (only for full analysis)
+    const portfolioStats = calculatePortfolioStatistics(returns, weights);
+    
+    // Get valuation-based expected returns for more accurate forward-looking analysis
+    const valuationExpectedReturns = await getValuationExpectedReturns(holdings, method);
+
+    const analysisResult = {
+      correlationMatrix: correlationData.correlationMatrix,
+      averageCorrelations: correlationData.averageCorrelations,
+      topCorrelatedPairs: correlationData.topCorrelatedPairs,
+      portfolioBeta: betaData.portfolioBeta,
+      stockBetas: betaData.stockBetas,
+      topBetaContributors: betaData.topBetaContributors,
+      bottomBetaContributors: betaData.bottomBetaContributors,
+      portfolioStats: portfolioStats,
+      valuationExpectedReturns: valuationExpectedReturns,
+      valuationMethod: method,
+      dataPeriod: {
+        startDate: returns.index[0],
+        endDate: returns.index[returns.index.length - 1],
+        totalDays: returns.index.length
+      }
+    };
+
+    console.log(`Portfolio analysis complete. Beta: ${betaData.portfolioBeta.toFixed(4)}`);
+
+    return NextResponse.json(analysisResult);
+
+  } catch (error) {
+    console.error('Portfolio analysis error:', error);
+    return NextResponse.json(
+      { error: 'Failed to analyze portfolio: ' + error.message },
+      { status: 500 }
+    );
+  }
+}
+
+async function fetchHistoricalData(tickers) {
+  try {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(endDate.getFullYear() - 5); // 5 years of data
+
+    const historicalData = {};
+
+    for (const ticker of tickers) {
+      try {
+        console.log(`Fetching historical data for ${ticker}...`);
+        
+        const quote = await yahooFinance.historical(ticker, {
+          period1: startDate,
+          period2: endDate,
+          interval: '1d'
+        });
+
+        if (quote && quote.length > 0) {
+          // Convert to object with dates as keys and close prices as values
+          const priceData = {};
+          quote.forEach(day => {
+            if (day.close) {
+              priceData[day.date.toISOString().split('T')[0]] = day.close;
+            }
+          });
+          historicalData[ticker] = priceData;
+        }
+      } catch (error) {
+        console.error(`Error fetching data for ${ticker}:`, error.message);
+        // Continue with other tickers even if one fails
+      }
+    }
+
+    return historicalData;
+  } catch (error) {
+    console.error('Error fetching historical data:', error);
+    return {};
+  }
+}
+
+function calculateReturns(historicalData) {
+  const allDates = new Set();
+  
+  // Collect all unique dates
+  Object.values(historicalData).forEach(data => {
+    Object.keys(data).forEach(date => allDates.add(date));
+  });
+
+  const sortedDates = Array.from(allDates).sort();
+  
+  // Create aligned price matrix
+  const alignedData = {};
+  Object.keys(historicalData).forEach(ticker => {
+    alignedData[ticker] = [];
+    sortedDates.forEach(date => {
+      alignedData[ticker].push(historicalData[ticker][date] || null);
+    });
+  });
+
+  // Forward fill missing values
+  Object.keys(alignedData).forEach(ticker => {
+    for (let i = 1; i < alignedData[ticker].length; i++) {
+      if (alignedData[ticker][i] === null) {
+        alignedData[ticker][i] = alignedData[ticker][i - 1];
+      }
+    }
+  });
+
+  // Calculate returns
+  const returns = {};
+  Object.keys(alignedData).forEach(ticker => {
+    returns[ticker] = [];
+    for (let i = 1; i < alignedData[ticker].length; i++) {
+      const prevPrice = alignedData[ticker][i - 1];
+      const currPrice = alignedData[ticker][i];
+      if (prevPrice && currPrice && prevPrice > 0) {
+        returns[ticker].push((currPrice - prevPrice) / prevPrice);
+      } else {
+        returns[ticker].push(0);
+      }
+    }
+  });
+
+  // Add dates (excluding first date since we can't calculate return for it)
+  returns.index = sortedDates.slice(1);
+
+  return returns;
+}
+
+function calculateCorrelationMatrix(returns) {
+  const tickers = Object.keys(returns).filter(key => key !== 'index');
+  const correlationMatrix = {};
+  const averageCorrelations = {};
+
+  // Initialize correlation matrix
+  tickers.forEach(ticker => {
+    correlationMatrix[ticker] = {};
+  });
+
+  // Calculate correlations
+  for (let i = 0; i < tickers.length; i++) {
+    for (let j = 0; j < tickers.length; j++) {
+      const ticker1 = tickers[i];
+      const ticker2 = tickers[j];
+      
+      if (i === j) {
+        correlationMatrix[ticker1][ticker2] = 1.0;
+      } else {
+        const correlation = calculateCorrelation(returns[ticker1], returns[ticker2]);
+        correlationMatrix[ticker1][ticker2] = correlation;
+      }
+    }
+  }
+
+  // Calculate average correlations
+  tickers.forEach(ticker => {
+    const correlations = Object.values(correlationMatrix[ticker]).filter((val, idx) => 
+      Object.keys(correlationMatrix[ticker])[idx] !== ticker
+    );
+    averageCorrelations[ticker] = correlations.reduce((sum, corr) => sum + corr, 0) / correlations.length;
+  });
+
+  // Find top correlated pairs
+  const pairs = [];
+  for (let i = 0; i < tickers.length; i++) {
+    for (let j = i + 1; j < tickers.length; j++) {
+      const ticker1 = tickers[i];
+      const ticker2 = tickers[j];
+      const correlation = correlationMatrix[ticker1][ticker2];
+      pairs.push([ticker1, ticker2, correlation]);
+    }
+  }
+
+  const topCorrelatedPairs = pairs
+    .sort((a, b) => Math.abs(b[2]) - Math.abs(a[2]))
+    .slice(0, 5);
+
+  return {
+    correlationMatrix,
+    averageCorrelations,
+    topCorrelatedPairs
+  };
+}
+
+function calculateCorrelation(returns1, returns2) {
+  if (returns1.length !== returns2.length || returns1.length === 0) {
+    return 0;
+  }
+
+  const n = returns1.length;
+  const sum1 = returns1.reduce((sum, val) => sum + val, 0);
+  const sum2 = returns2.reduce((sum, val) => sum + val, 0);
+  const sum1Sq = returns1.reduce((sum, val) => sum + val * val, 0);
+  const sum2Sq = returns2.reduce((sum, val) => sum + val * val, 0);
+  const pSum = returns1.reduce((sum, val, i) => sum + val * returns2[i], 0);
+
+  const num = pSum - (sum1 * sum2 / n);
+  const den = Math.sqrt((sum1Sq - sum1 * sum1 / n) * (sum2Sq - sum2 * sum2 / n));
+
+  return den === 0 ? 0 : num / den;
+}
+
+async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
+  try {
+    console.log('Calculating portfolio beta using integrated Python API...');
+    
+    // Convert dates to YYYY-MM-DD format for API call
+    const startDateStr = startDate.toISOString().split('T')[0];
+    const endDateStr = endDate.toISOString().split('T')[0];
+    
+    console.log(`Fetching SPY data from ${startDateStr} to ${endDateStr}`);
+    
+    // Call the integrated Python API to get SPY data
+    const baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}` 
+      : 'http://localhost:3001';
+    
+    const spyUrl = `${baseUrl}/api/yfinance-data?ticker=SPY&start_date=${startDateStr}&end_date=${endDateStr}`;
+    
+    const response = await fetch(spyUrl);
+    if (!response.ok) {
+      throw new Error(`SPY API request failed: ${response.status} ${response.statusText}`);
+    }
+    
+    const spyData = await response.json();
+    
+    if (spyData.error) {
+      throw new Error(`SPY API error: ${spyData.error}`);
+    }
+    
+    console.log(`SPY API returned ${spyData.returns.length} SPY returns`);
+    
+    // Use the SPY returns from API
+    const spyReturns = spyData.returns;
+    const marketVariance = spyData.variance;
+    
+    console.log(`SPY returns sample:`, spyReturns.slice(0, 5));
+    console.log(`SPY variance from API: ${marketVariance}`);
+
+    const tickers = Object.keys(returns).filter(key => key !== 'index');
+    console.log(`DEBUG: Processing tickers: ${tickers.join(', ')}`);
+    console.log(`DEBUG: Stock returns lengths:`, tickers.map(t => ({ticker: t, length: returns[t].length})));
+    console.log(`DEBUG: SPY returns length: ${spyReturns.length}`);
+    
+    const stockBetas = {};
+    const weightedBetas = {};
+
+    // Calculate individual stock betas using API SPY data
+    tickers.forEach((ticker, index) => {
+      const stockReturns = returns[ticker];
+      // Align stock returns with SPY returns (use shorter length)
+      const minLength = Math.min(stockReturns.length, spyReturns.length);
+      const alignedStockReturns = stockReturns.slice(0, minLength);
+      const alignedSpyReturns = spyReturns.slice(0, minLength);
+      
+      // Debug: show some sample data
+      console.log(`${ticker} sample data (first 5):`);
+      console.log(`  Stock: ${alignedStockReturns.slice(0, 5).map(r => r.toFixed(4)).join(', ')}`);
+      console.log(`  SPY:   ${alignedSpyReturns.slice(0, 5).map(r => r.toFixed(4)).join(', ')}`);
+      
+      // Calculate means for debugging
+      const stockMean = alignedStockReturns.reduce((sum, val) => sum + val, 0) / alignedStockReturns.length;
+      const spyMean = alignedSpyReturns.reduce((sum, val) => sum + val, 0) / alignedSpyReturns.length;
+      console.log(`  Stock mean: ${stockMean.toFixed(6)}, SPY mean: ${spyMean.toFixed(6)}`);
+      
+      const covariance = calculateCovariance(alignedStockReturns, alignedSpyReturns);
+      const beta = marketVariance === 0 ? 0 : covariance / marketVariance;
+      
+      console.log(`${ticker}: covariance=${covariance.toFixed(6)}, beta=${beta.toFixed(4)}, marketVariance=${marketVariance.toFixed(6)}`);
+      
+      stockBetas[ticker] = beta;
+      weightedBetas[ticker] = beta * weights[index];
+    });
+
+    // Calculate portfolio beta
+    const portfolioBeta = Object.values(weightedBetas).reduce((sum, beta) => sum + beta, 0);
+
+    // Sort contributors by absolute value
+    const sortedContributors = Object.entries(weightedBetas)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+
+    const topBetaContributors = sortedContributors.slice(0, 5);
+    const bottomBetaContributors = sortedContributors.slice(-5);
+
+    return {
+      portfolioBeta,
+      stockBetas,
+      topBetaContributors,
+      bottomBetaContributors
+    };
+
+  } catch (error) {
+    console.error('Error calculating portfolio beta:', error);
+    return {
+      portfolioBeta: 0,
+      stockBetas: {},
+      topBetaContributors: [],
+      bottomBetaContributors: []
+    };
+  }
+}
+
+function calculateVariance(returns) {
+  if (returns.length === 0) return 0;
+  
+  const mean = returns.reduce((sum, val) => sum + val, 0) / returns.length;
+  const variance = returns.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / returns.length;
+  
+  console.log(`Variance calculation: mean=${mean.toFixed(6)}, variance=${variance.toFixed(6)}, length=${returns.length}`);
+  
+  return variance;
+}
+
+function calculateCovariance(returns1, returns2) {
+  if (returns1.length !== returns2.length || returns1.length === 0) return 0;
+  
+  const mean1 = returns1.reduce((sum, val) => sum + val, 0) / returns1.length;
+  const mean2 = returns2.reduce((sum, val) => sum + val, 0) / returns2.length;
+  
+  const covariance = returns1.reduce((sum, val, i) => 
+    sum + (val - mean1) * (returns2[i] - mean2), 0) / returns1.length;
+  
+  console.log(`Covariance calculation: mean1=${mean1.toFixed(6)}, mean2=${mean2.toFixed(6)}, covariance=${covariance.toFixed(6)}, length=${returns1.length}`);
+  
+  return covariance;
+}
+
+function calculatePortfolioStatistics(returns, weights) {
+  const tickers = Object.keys(returns).filter(key => key !== 'index');
+  
+  // Risk-free rate (10-year Treasury yield, approximately 4.5% annually)
+  const riskFreeRate = 0.045; // 4.5% annually
+  const dailyRiskFreeRate = riskFreeRate / 252; // Daily risk-free rate
+  
+  // Calculate individual stock statistics
+  const stockStats = {};
+  tickers.forEach(ticker => {
+    const stockReturns = returns[ticker];
+    const meanReturn = stockReturns.reduce((sum, val) => sum + val, 0) / stockReturns.length;
+    const variance = calculateVariance(stockReturns);
+    const volatility = Math.sqrt(variance);
+    
+    const annualizedReturn = meanReturn * 252;
+    const annualizedVolatility = volatility * Math.sqrt(252);
+    const excessReturn = annualizedReturn - riskFreeRate;
+    
+    stockStats[ticker] = {
+      meanReturn: annualizedReturn,
+      volatility: annualizedVolatility,
+      sharpeRatio: annualizedVolatility === 0 ? 0 : excessReturn / annualizedVolatility
+    };
+  });
+
+  // Calculate portfolio statistics
+  const portfolioReturn = tickers.reduce((sum, ticker, index) => 
+    sum + stockStats[ticker].meanReturn * weights[index], 0);
+
+  // Calculate portfolio volatility using proper portfolio variance formula
+  // Portfolio variance = sum of (wi^2 * var_i) + sum of (wi * wj * cov_ij) for all i != j
+  let portfolioVariance = 0;
+  
+  // Add individual stock variances
+  tickers.forEach((ticker, i) => {
+    const dailyVariance = Math.pow(stockStats[ticker].volatility / Math.sqrt(252), 2);
+    portfolioVariance += Math.pow(weights[i], 2) * dailyVariance;
+  });
+  
+  // Add covariance terms (simplified - using correlation matrix if available)
+  for (let i = 0; i < tickers.length; i++) {
+    for (let j = i + 1; j < tickers.length; j++) {
+      const ticker1 = tickers[i];
+      const ticker2 = tickers[j];
+      const returns1 = returns[ticker1];
+      const returns2 = returns[ticker2];
+      
+      // Calculate correlation
+      const correlation = calculateCorrelation(returns1, returns2);
+      const vol1 = stockStats[ticker1].volatility / Math.sqrt(252);
+      const vol2 = stockStats[ticker2].volatility / Math.sqrt(252);
+      
+      portfolioVariance += 2 * weights[i] * weights[j] * correlation * vol1 * vol2;
+    }
+  }
+
+  const portfolioVolatility = Math.sqrt(portfolioVariance * 252); // Annualized
+  const portfolioExcessReturn = portfolioReturn - riskFreeRate;
+  const portfolioSharpeRatio = portfolioVolatility === 0 ? 0 : portfolioExcessReturn / portfolioVolatility;
+
+  return {
+    portfolioReturn,
+    portfolioVolatility,
+    portfolioSharpeRatio,
+    riskFreeRate,
+    stockStats
+  };
+}
+
+async function getValuationExpectedReturns(holdings, method) {
+  const baseUrl = process.env.VERCEL_URL 
+    ? `https://${process.env.VERCEL_URL}` 
+    : 'http://localhost:3001';
+
+  const runWithConcurrencyLimit = async (tasks, limit) => {
+    const results = new Array(tasks.length);
+    let nextIndex = 0;
+    const worker = async () => {
+      while (true) {
+        const current = nextIndex++;
+        if (current >= tasks.length) break;
+        results[current] = await tasks[current]();
+      }
+    };
+    const workers = Array(Math.min(limit, tasks.length)).fill(0).map(worker);
+    await Promise.all(workers);
+    return results;
+  };
+
+  const tasks = holdings.map((holding) => async () => {
+    try {
+      console.log(`Fetching ${method} valuation for ${holding.ticker}...`);
+      const url = `${baseUrl}/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${method}`;
+      const valuationResponse = await fetch(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!valuationResponse.ok) {
+        return { holding, error: `Failed to fetch valuation (${valuationResponse.status})` };
+      }
+
+      const valuationData = await valuationResponse.json();
+      if (!valuationData.fairValue || valuationData.upside === undefined || valuationData.upside === null) {
+        return { holding, error: 'Invalid valuation data' };
+      }
+
+      let fairValuePerShare = valuationData.fairValue;
+      if (valuationData.method === 'dcf' && valuationData.sourceMetrics?.sharesOutstanding > 0) {
+        fairValuePerShare = (valuationData.fairValue * 1_000_000) / valuationData.sourceMetrics.sharesOutstanding;
+      } else if (valuationData.method === 'exit-multiple' && valuationData.exitMultipleCalculation?.fairValue) {
+        fairValuePerShare = valuationData.exitMultipleCalculation.fairValue;
+      }
+
+      return {
+        holding,
+        data: {
+          upside: valuationData.upside,
+          fairValue: fairValuePerShare,
+          currentPrice: valuationData.currentSharePrice,
+          method: valuationData.method
+        }
+      };
+    } catch (error) {
+      return { holding, error: error.message };
+    }
+  });
+
+  const CONCURRENCY = parseInt(process.env.PORTFOLIO_CONCURRENCY || '4', 10);
+  const results = await runWithConcurrencyLimit(tasks, CONCURRENCY);
+
+  const valuationReturns = {};
+  let totalWeightedReturn = 0;
+
+  for (const res of results) {
+    if (!res || res.error) {
+      valuationReturns[res?.holding?.ticker || 'UNKNOWN'] = {
+        upside: 0,
+        fairValue: 0,
+        currentPrice: 0,
+        error: res?.error || 'Unknown error'
+      };
+      continue;
+    }
+
+    valuationReturns[res.holding.ticker] = res.data;
+    const weightedReturn = (res.holding.weight / 100) * res.data.upside;
+    totalWeightedReturn += weightedReturn;
+    console.log(`${res.holding.ticker}: ${method.toUpperCase()} Upside ${res.data.upside.toFixed(1)}%, Weighted Return ${weightedReturn.toFixed(2)}%`);
+  }
+
+  return {
+    individualReturns: valuationReturns,
+    portfolioExpectedReturn: totalWeightedReturn
+  };
+}
+
+async function calculatePortfolioBetaAlternative(returns, weights, startDate, endDate) {
+  try {
+    console.log('Using alternative beta calculation method...');
+    console.log('Start date:', startDate, 'End date:', endDate);
+    
+    // Fetch SPY data for the same period as stock data
+    
+    const spyData = await yahooFinance.historical('SPY', {
+      period1: startDate,
+      period2: endDate,
+      interval: '1d'
+    });
+    
+    console.log('SPY data fetched, length:', spyData?.length);
+
+    if (!spyData || spyData.length === 0) {
+      throw new Error('Failed to fetch SPY data for alternative calculation');
+    }
+
+    // Calculate SPY returns
+    const spyReturns = [];
+    for (let i = 1; i < spyData.length; i++) {
+      const prevPrice = spyData[i - 1].close;
+      const currPrice = spyData[i].close;
+      if (prevPrice && currPrice && prevPrice > 0) {
+        spyReturns.push((currPrice - prevPrice) / prevPrice);
+      }
+    }
+
+    console.log(`Alternative SPY returns: ${spyReturns.length} points`);
+
+    const tickers = Object.keys(returns).filter(key => key !== 'index');
+    const stockBetas = {};
+    const weightedBetas = {};
+
+    // Calculate individual stock betas using the alternative method
+    const marketVariance = calculateVariance(spyReturns);
+    console.log(`Alternative market variance: ${marketVariance}`);
+    
+    tickers.forEach((ticker, index) => {
+      const stockReturns = returns[ticker];
+      // Use the shorter length to avoid index issues
+      const minLength = Math.min(stockReturns.length, spyReturns.length);
+      const alignedStockReturns = stockReturns.slice(0, minLength);
+      const alignedSpyReturns = spyReturns.slice(0, minLength);
+      
+      const covariance = calculateCovariance(alignedStockReturns, alignedSpyReturns);
+      const beta = marketVariance === 0 ? 0 : covariance / marketVariance;
+      
+      console.log(`${ticker} (alt): covariance=${covariance.toFixed(6)}, beta=${beta.toFixed(4)}, marketVariance=${marketVariance.toFixed(6)}`);
+      
+      stockBetas[ticker] = beta;
+      weightedBetas[ticker] = beta * weights[index];
+    });
+
+    // Calculate portfolio beta
+    const portfolioBeta = Object.values(weightedBetas).reduce((sum, beta) => sum + beta, 0);
+
+    // Sort contributors by absolute value
+    const sortedContributors = Object.entries(weightedBetas)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+
+    const topBetaContributors = sortedContributors.slice(0, 5);
+    const bottomBetaContributors = sortedContributors.slice(-5);
+
+    return {
+      portfolioBeta,
+      stockBetas,
+      topBetaContributors,
+      bottomBetaContributors
+    };
+
+  } catch (error) {
+    console.error('Error in alternative beta calculation:', error);
+    console.error('Error details:', error.message, error.stack);
+    return {
+      portfolioBeta: 0,
+      stockBetas: {},
+      topBetaContributors: [],
+      bottomBetaContributors: []
+    };
+  }
+}

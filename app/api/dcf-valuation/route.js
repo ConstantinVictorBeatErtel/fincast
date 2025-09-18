@@ -2,7 +2,86 @@ import { NextResponse } from 'next/server';
 import { headers as nextHeaders } from 'next/headers';
 import yahooFinance from 'yahoo-finance2';
 
+// Function to get exchange rate from currency to USD
+async function getExchangeRate(fromCurrency, toCurrency = 'USD') {
+  if (fromCurrency === toCurrency) return 1.0;
+  
+  try {
+    // Use yahoo-finance2 to get exchange rate
+    const exchangeTicker = `${fromCurrency}${toCurrency}=X`;
+    const quote = await yahooFinance.quote(exchangeTicker);
+    return quote.regularMarketPrice || 1.0;
+  } catch (error) {
+    console.error(`Failed to get exchange rate for ${fromCurrency} to ${toCurrency}:`, error.message);
+    // Fallback to approximate rates (these should be updated regularly)
+    const fallbackRates = {
+      'DKK': 0.15, // 1 DKK ≈ 0.15 USD
+      'SEK': 0.095, // 1 SEK ≈ 0.095 USD
+      'NOK': 0.095, // 1 NOK ≈ 0.095 USD
+      'CHF': 1.1, // 1 CHF ≈ 1.1 USD
+      'GBP': 1.25, // 1 GBP ≈ 1.25 USD
+      'EUR': 1.08, // 1 EUR ≈ 1.08 USD
+      'JPY': 0.0067, // 1 JPY ≈ 0.0067 USD
+      'CNY': 0.14, // 1 CNY ≈ 0.14 USD
+      'INR': 0.012, // 1 INR ≈ 0.012 USD
+      'BRL': 0.20, // 1 BRL ≈ 0.20 USD
+      'CAD': 0.74, // 1 CAD ≈ 0.74 USD
+      'AUD': 0.66, // 1 AUD ≈ 0.66 USD
+      'KRW': 0.00075, // 1 KRW ≈ 0.00075 USD
+      'TWD': 0.031, // 1 TWD ≈ 0.031 USD
+      'HKD': 0.13, // 1 HKD ≈ 0.13 USD
+      'SGD': 0.74 // 1 SGD ≈ 0.74 USD
+    };
+    return fallbackRates[fromCurrency] || 1.0;
+  }
+}
+
 // export const runtime = 'edge';
+
+// Function to detect if a stock is a bank/financial institution
+function detectBankStock(incomeStatement, summary) {
+  // Check for bank-specific income statement items
+  const hasInterestIncome = incomeStatement?.interestIncome && Number(incomeStatement.interestIncome) > 0;
+  const hasInterestExpense = incomeStatement?.interestExpense && Number(incomeStatement.interestExpense) > 0;
+  const hasNetInterestIncome = incomeStatement?.netInterestIncome && Number(incomeStatement.netInterestIncome) > 0;
+  
+  // Check for bank-specific business description keywords
+  const businessSummary = summary?.summaryProfile?.longBusinessSummary || '';
+  const bankKeywords = ['bank', 'banking', 'financial services', 'credit', 'lending', 'deposits', 'loans', 'mortgage', 'investment banking', 'jpmorgan', 'chase'];
+  const hasBankKeywords = bankKeywords.some(keyword => 
+    businessSummary.toLowerCase().includes(keyword)
+  );
+  
+  // Check industry classification
+  const industry = summary?.summaryProfile?.industry || '';
+  const sector = summary?.summaryProfile?.sector || '';
+  const isFinancialSector = sector.toLowerCase().includes('financial') || 
+                           industry.toLowerCase().includes('bank') ||
+                           industry.toLowerCase().includes('financial') ||
+                           industry.toLowerCase().includes('banking');
+  
+  // Additional check: if gross profit is 0 or very low relative to revenue, likely a bank
+  const revenue = Number(incomeStatement?.totalRevenue) || 0;
+  const grossProfit = Number(incomeStatement?.grossProfit) || 0;
+  const hasLowGrossProfit = revenue > 0 && grossProfit < (revenue * 0.1); // Less than 10% gross margin
+  
+  const isBank = hasInterestIncome || hasInterestExpense || hasNetInterestIncome || hasBankKeywords || isFinancialSector || hasLowGrossProfit;
+  
+  console.log('Bank detection details:', {
+    hasInterestIncome,
+    hasInterestExpense,
+    hasNetInterestIncome,
+    hasBankKeywords,
+    isFinancialSector,
+    hasLowGrossProfit,
+    businessSummary: businessSummary.substring(0, 100),
+    industry,
+    sector,
+    isBank
+  });
+  
+  return isBank;
+}
 
 // Helper functions for extracting forecast sections
 function extractForecastTable(text) {
@@ -64,17 +143,17 @@ function extractSections(text, method) {
 async function fetchFinancialsWithYfinance(ticker) {
   try {
     console.log('Fetching yfinance data for:', ticker);
-
+    
     // 1) Try Python script first for robust statements (historical margins)
     try {
-      const { spawn } = await import('child_process');
-
+    const { spawn } = await import('child_process');
+    
       // Use external API in production if configured
       if (process.env.VERCEL === '1' || process.env.NEXT_RUNTIME === 'edge' || process.env.NODE_ENV === 'production') {
-        const externalPyApi = process.env.PY_YF_URL;
+            const externalPyApi = process.env.PY_YF_URL;
         if (externalPyApi) {
-          const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
-          const res = await fetch(url, { method: 'GET' });
+            const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
+            const res = await fetch(url, { method: 'GET' });
           if (res.ok) {
             const json = await res.json();
             if (json && (Array.isArray(json.historical_financials) ? json.historical_financials.length : 0) > 0) {
@@ -136,6 +215,7 @@ async function fetchFinancialsWithYfinance(ticker) {
     const modules = [
       'price',
       'summaryDetail',
+      'summaryProfile',
       'defaultKeyStatistics',
       'financialData',
       'incomeStatementHistory',
@@ -147,6 +227,7 @@ async function fetchFinancialsWithYfinance(ticker) {
 
     const price = summary?.price || {};
     const summaryDetail = summary?.summaryDetail || {};
+    const summaryProfile = summary?.summaryProfile || {};
     const keyStats = summary?.defaultKeyStatistics || {};
     const financialData = summary?.financialData || {};
     const incomeHistory = summary?.incomeStatementHistory?.incomeStatementHistory || [];
@@ -167,20 +248,49 @@ async function fetchFinancialsWithYfinance(ticker) {
     };
 
     const totalRevenue = toNumber(latestIncome.totalRevenue);
-    let grossProfit = toNumber(latestIncome.grossProfit);
-    if (!grossProfit && totalRevenue) {
-      const costOfRevenue = toNumber(latestIncome.costOfRevenue);
-      if (costOfRevenue) grossProfit = totalRevenue - costOfRevenue;
-    }
     const netIncome = toNumber(latestIncome.netIncome);
-    // EBITDA might be available under financialData
-    let ebitda = toNumber(financialData.ebitda);
-    if (!ebitda) {
-      const latestCFDep = toNumber(
-        latestCashflow.depreciation ?? latestCashflow.depreciationAndAmortization
-      );
-      const latestOperatingIncome = toNumber(latestIncome.operatingIncome ?? latestIncome.ebit);
-      ebitda = latestOperatingIncome + latestCFDep;
+    
+    // Detect if this is a bank/financial institution
+    const isBank = detectBankStock(latestIncome, summary);
+    console.log(`Bank detection for ${ticker}:`, {
+      isBank,
+      hasInterestIncome: !!latestIncome.interestIncome,
+      hasInterestExpense: !!latestIncome.interestExpense,
+      industry: summary?.summaryProfile?.industry,
+      sector: summary?.summaryProfile?.sector
+    });
+    
+    let grossProfit, ebitda;
+    
+    if (isBank) {
+      // For banks, use different metrics
+      // Net Interest Income = Interest Income - Interest Expense
+      const interestIncome = toNumber(latestIncome.interestIncome);
+      const interestExpense = toNumber(latestIncome.interestExpense);
+      grossProfit = interestIncome - interestExpense; // Net Interest Income
+      
+      // For banks, use Pre-Provision Operating Revenue (PPOR) instead of EBITDA
+      // PPOR = Net Interest Income + Non-Interest Income - Non-Interest Expense
+      const nonInterestIncome = toNumber(latestIncome.totalOtherIncomeExpenseNet);
+      const nonInterestExpense = toNumber(latestIncome.operatingExpense) - interestExpense;
+      ebitda = grossProfit + nonInterestIncome - nonInterestExpense;
+    } else {
+      // Regular company logic
+      grossProfit = toNumber(latestIncome.grossProfit);
+      if (!grossProfit && totalRevenue) {
+        const costOfRevenue = toNumber(latestIncome.costOfRevenue);
+        if (costOfRevenue) grossProfit = totalRevenue - costOfRevenue;
+      }
+      
+      // EBITDA might be available under financialData
+      ebitda = toNumber(financialData.ebitda);
+      if (!ebitda) {
+        const latestCFDep = toNumber(
+          latestCashflow.depreciation ?? latestCashflow.depreciationAndAmortization
+        );
+        const latestOperatingIncome = toNumber(latestIncome.operatingIncome ?? latestIncome.ebit);
+        ebitda = latestOperatingIncome + latestCFDep;
+      }
     }
 
     const operatingCF = toNumber(
@@ -230,7 +340,34 @@ async function fetchFinancialsWithYfinance(ticker) {
       : (fdFreeCashflow && totalRevenue ? (fdFreeCashflow / totalRevenue) * 100 : 25);
 
     const companyName = price.longName || price.shortName || ticker;
-    const currency = price.currency || 'USD';
+    let currency = price.currency || 'USD';
+    
+    // Detect currency based on country if not explicitly provided
+    if (!price.currency && summaryProfile?.country) {
+      const countryCurrencyMap = {
+        'Denmark': 'DKK',
+        'Sweden': 'SEK',
+        'Norway': 'NOK',
+        'Switzerland': 'CHF',
+        'United Kingdom': 'GBP',
+        'Germany': 'EUR',
+        'France': 'EUR',
+        'Italy': 'EUR',
+        'Spain': 'EUR',
+        'Netherlands': 'EUR',
+        'Japan': 'JPY',
+        'China': 'CNY',
+        'India': 'INR',
+        'Brazil': 'BRL',
+        'Canada': 'CAD',
+        'Australia': 'AUD',
+        'South Korea': 'KRW',
+        'Taiwan': 'TWD',
+        'Hong Kong': 'HKD',
+        'Singapore': 'SGD'
+      };
+      currency = countryCurrencyMap[summaryProfile.country] || 'USD';
+    }
 
     // Build historical financials (up to 4 most recent, oldest->newest), values in $M
     let historical_financials = [];
@@ -277,6 +414,11 @@ async function fetchFinancialsWithYfinance(ticker) {
       const epsMap = pickSeries('annualDilutedEPS');
       const dilutedSharesMap = pickSeries('annualDilutedAverageShares');
       const basicSharesMap = pickSeries('annualBasicAverageShares');
+      
+      // Bank-specific metrics
+      const interestIncomeMap = pickSeries('annualInterestIncome');
+      const interestExpenseMap = pickSeries('annualInterestExpense');
+      const netInterestIncomeMap = pickSeries('annualNetInterestIncome');
 
       const years = Array.from(new Set([
         ...revMap.keys(),
@@ -291,8 +433,6 @@ async function fetchFinancialsWithYfinance(ticker) {
         let prevRevM = null;
         for (const y of years) {
           const rev = Number(revMap.get(String(y)) || 0);
-          const gp = Number(gpMap.get(String(y)) || 0);
-          const ebitdaY = Number(ebitdaMap.get(String(y)) || 0);
           const ni = Number(niMap.get(String(y)) || 0);
           const ocf = Number(ocfMap.get(String(y)) || 0);
           const capex = Number(capexMap.get(String(y)) || 0);
@@ -304,13 +444,38 @@ async function fetchFinancialsWithYfinance(ticker) {
           }
 
           const revM = rev / 1_000_000;
-          const gpM = gp / 1_000_000;
-          const ebitdaM = ebitdaY / 1_000_000;
           const niM = ni / 1_000_000;
           const fcfM = fcfY / 1_000_000;
 
-          const grossMargin = rev ? (gp / rev) * 100 : 0;
-          const ebitdaMargin = rev ? (ebitdaY / rev) * 100 : 0;
+          let gp, gpM, ebitda, ebitdaM, grossMargin, ebitdaMargin;
+          
+          if (isBank) {
+            // For banks, calculate Net Interest Income and PPOR
+            const interestIncome = Number(interestIncomeMap.get(String(y)) || 0);
+            const interestExpense = Number(interestExpenseMap.get(String(y)) || 0);
+            const netInterestIncome = Number(netInterestIncomeMap.get(String(y)) || (interestIncome - interestExpense));
+            
+            gp = netInterestIncome; // Net Interest Income
+            gpM = gp / 1_000_000;
+            
+            // For banks, use a simplified PPOR calculation
+            // PPOR ≈ Net Interest Income + Non-Interest Income - Non-Interest Expense
+            ebitda = netInterestIncome + (rev - interestIncome); // Simplified PPOR
+            ebitdaM = ebitda / 1_000_000;
+            
+            grossMargin = rev ? (gp / rev) * 100 : 0;
+            ebitdaMargin = rev ? (ebitda / rev) * 100 : 0;
+          } else {
+            // Regular company logic
+            gp = Number(gpMap.get(String(y)) || 0);
+            ebitda = Number(ebitdaMap.get(String(y)) || 0);
+            gpM = gp / 1_000_000;
+            ebitdaM = ebitda / 1_000_000;
+            
+            grossMargin = rev ? (gp / rev) * 100 : 0;
+            ebitdaMargin = rev ? (ebitda / rev) * 100 : 0;
+          }
+
           const netIncomeMargin = rev ? (ni / rev) * 100 : 0;
           const fcfMargin = rev ? (fcfY / rev) * 100 : 0;
           const revenueGrowth = prevRevM ? ((revM - prevRevM) / prevRevM) * 100 : 0;
@@ -338,6 +503,8 @@ async function fetchFinancialsWithYfinance(ticker) {
 
     // Fallback: align income/cashflow statements by nearest date
     if (!historical_financials.length) {
+      // Re-detect bank status for fallback processing
+      const isBankFallback = detectBankStock(incomeHistory[0], summary);
       const findNearestByDate = (list, targetDate, toleranceDays = 90) => {
         if (!Array.isArray(list) || list.length === 0) return null;
         const t = new Date(targetDate).getTime();
@@ -360,27 +527,46 @@ async function fetchFinancialsWithYfinance(ticker) {
       for (const inc of recent) {
         const yearNum = new Date(inc.endDate).getUTCFullYear();
         const rev = toNumber(inc.totalRevenue);
-        let gp = toNumber(inc.grossProfit);
-        if (!gp && rev) {
-          const cor = toNumber(inc.costOfRevenue);
-          if (cor) gp = rev - cor;
-        }
         const ni = toNumber(inc.netIncome);
         const cf = findNearestByDate(cashflowHistory, inc.endDate) || {};
-        const depY = toNumber(cf.depreciation ?? cf.depreciationAndAmortization);
-        const ebitY = toNumber(inc.ebit ?? inc.operatingIncome);
-        const ebitdaVal = ebitY + depY;
         const ocfY = toNumber(cf.totalCashFromOperatingActivities ?? cf.operatingCashflow);
         const capexY = toNumber(cf.capitalExpenditures);
         const fcfY = (ocfY || 0) + (capexY || 0);
+
+        let gp, ebitdaVal, grossMargin, ebitdaMargin;
+        
+        if (isBankFallback) {
+          // For banks, calculate Net Interest Income and PPOR
+          const interestIncome = toNumber(inc.interestIncome);
+          const interestExpense = toNumber(inc.interestExpense);
+          const netInterestIncome = toNumber(inc.netInterestIncome) || (interestIncome - interestExpense);
+          
+          gp = netInterestIncome; // Net Interest Income
+          ebitdaVal = netInterestIncome + (rev - interestIncome); // Simplified PPOR
+          
+          grossMargin = rev ? (gp / rev) * 100 : 0;
+          ebitdaMargin = rev ? (ebitdaVal / rev) * 100 : 0;
+        } else {
+          // Regular company logic
+          gp = toNumber(inc.grossProfit);
+          if (!gp && rev) {
+            const cor = toNumber(inc.costOfRevenue);
+            if (cor) gp = rev - cor;
+          }
+          
+          const depY = toNumber(cf.depreciation ?? cf.depreciationAndAmortization);
+          const ebitY = toNumber(inc.ebit ?? inc.operatingIncome);
+          ebitdaVal = ebitY + depY;
+          
+          grossMargin = rev ? (gp / rev) * 100 : 0;
+          ebitdaMargin = rev ? (ebitdaVal / rev) * 100 : 0;
+        }
 
         const revM = rev / 1_000_000;
         const gpM = gp / 1_000_000;
         const ebitdaM = ebitdaVal / 1_000_000;
         const niM = ni / 1_000_000;
         const fcfM = fcfY / 1_000_000;
-        const grossMargin = rev ? (gp / rev) * 100 : 0;
-        const ebitdaMargin = rev ? (ebitdaVal / rev) * 100 : 0;
         const netIncomeMargin = rev ? (ni / rev) * 100 : 0;
         const fcfMargin = rev ? (fcfY / rev) * 100 : 0;
 
@@ -410,34 +596,47 @@ async function fetchFinancialsWithYfinance(ticker) {
       }
     }
 
+    // TODO: Implement currency conversion
+    const exchangeRate = 1.0;
+    const needsConversion = false;
+    const convertValue = (value) => value; // No conversion for now
+    
     const result = {
       fy24_financials: {
-        revenue: totalRevenue,
-        gross_profit: grossProfit,
-        gross_margin_pct: grossMarginPct,
-        ebitda: ebitda,
+        revenue: convertValue(totalRevenue),
+        gross_profit: convertValue(grossProfit),
+        gross_margin_pct: grossMarginPct, // Percentages don't need conversion
+        ebitda: convertValue(ebitda),
         ebitda_margin_pct: ebitdaMarginPct,
-        net_income: netIncome,
-        eps: eps,
-        shares_outstanding: sharesOutstandingRaw,
-        fcf: fcf,
+        net_income: convertValue(netIncome),
+        eps: convertValue(eps),
+        shares_outstanding: sharesOutstandingRaw, // Share count doesn't need conversion
+        fcf: convertValue(fcf),
         fcf_margin_pct: fcfMarginPct
       },
       market_data: {
-        current_price: currentPrice,
-        market_cap: marketCap,
-        enterprise_value: enterpriseValue,
-        pe_ratio: peRatio
+        current_price: convertValue(currentPrice),
+        market_cap: convertValue(marketCap),
+        enterprise_value: convertValue(enterpriseValue),
+        pe_ratio: peRatio // Ratios don't need conversion
       },
       company_name: companyName,
       source: 'yahoo-finance2',
       currency_info: {
         original_currency: currency,
-        converted_to_usd: currency !== 'USD' ? false : false,
-        conversion_rate: 1.0,
-        exchange_rate_source: 'none'
+        converted_to_usd: needsConversion,
+        conversion_rate: exchangeRate,
+        exchange_rate_source: needsConversion ? 'yahoo-finance' : 'none'
       },
-      historical_financials
+      historical_financials: historical_financials.map(year => ({
+        ...year,
+        revenue: convertValue(year.revenue),
+        grossProfit: convertValue(year.grossProfit),
+        ebitda: convertValue(year.ebitda),
+        fcf: convertValue(year.fcf),
+        netIncome: convertValue(year.netIncome),
+        eps: convertValue(year.eps)
+      }))
     };
 
     console.log('Successfully fetched financial data via yahoo-finance2');
@@ -689,7 +888,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
 - P/E: Consumer staples, Healthcare, Retail, Financials
 - EV/FCF: Software (mature stage), Industrial compounders, Capital-light consumer businesses
 - EV/EBITDA: Industrial conglomerates, Telecoms, Infrastructure, Manufacturing, high-growth tech firms
-- EV/Sales: High-growth firms with negative or erratic earnings`;
+- Price/Sales: High-growth firms with negative or erratic earnings`;
 
       } else {
         multipleTypeInstruction = `Use ${selectedMultiple} multiple. For P/E multiples, set enterpriseValue to 0.`;
@@ -1348,7 +1547,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
 - P/E: Consumer staples, Healthcare, Retail, Financials
 - EV/FCF: Software (mature stage), Industrial compounders, Capital-light consumer businesses
 - EV/EBITDA: Industrial conglomerates, Telecoms, Infrastructure, Manufacturing, high-growth tech firms
-- EV/Sales: High-growth firms with negative or erratic earnings`;
+- Price/Sales: High-growth firms with negative or erratic earnings`;
 
       } else {
         multipleTypeInstruction = `Use ${selectedMultiple} multiple. For P/E multiples, set enterpriseValue to 0.`;
@@ -2297,19 +2496,19 @@ Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
 Upside: ($${fairEVFCF.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
               break;
               
-            case 'EV/Sales':
-              // EV/Sales: Fair EV = 2029 Revenue × EV/Sales Multiple
+            case 'Price/Sales':
+              // Price/Sales: Fair Market Cap = 2029 Revenue × Price/Sales Multiple
               const revenue2029 = finalYearProjection.revenue || 0;
-              const fairEVSales = revenue2029 * rawValuation.exitMultipleValue;
-              calculatedFairValue = fairEVSales / 1000; // Convert to millions for display
-              calculatedUpside = currentEV > 0 ? ((fairEVSales - currentEV) / currentEV) * 100 : 0;
+              const fairMarketCapSales = revenue2029 * rawValuation.exitMultipleValue;
+              calculatedFairValue = fairMarketCapSales / 1000; // Convert to millions for display
+              calculatedUpside = currentMarketCap > 0 ? ((fairMarketCapSales - currentMarketCap) / currentMarketCap) * 100 : 0;
               
               calculationDetails = `Fair Value Calculation:
 2029 Revenue: $${revenue2029.toFixed(1)}M
-EV/Sales Multiple: ${rawValuation.exitMultipleValue}x
-Fair Enterprise Value: $${revenue2029.toFixed(1)}M × ${rawValuation.exitMultipleValue} = $${fairEVSales.toFixed(1)}M
-Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
-Upside: ($${fairEVSales.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
+Price/Sales Multiple: ${rawValuation.exitMultipleValue}x
+Fair Market Cap: $${revenue2029.toFixed(1)}M × ${rawValuation.exitMultipleValue} = $${fairMarketCapSales.toFixed(1)}M
+Current Market Cap: $${(currentMarketCap / 1000000).toFixed(1)}M
+Upside: ($${fairMarketCapSales.toFixed(1)}M - $${(currentMarketCap / 1000000).toFixed(1)}M) / $${(currentMarketCap / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
               break;
               
             default:
@@ -2593,19 +2792,19 @@ Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
 Upside: ($${fairEVFCF.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
               break;
               
-            case 'EV/Sales':
-              // EV/Sales: Fair EV = 2029 Revenue × EV/Sales Multiple
+            case 'Price/Sales':
+              // Price/Sales: Fair Market Cap = 2029 Revenue × Price/Sales Multiple
               const revenue2029 = finalYearProjection.revenue || 0;
-              const fairEVSales = revenue2029 * valuation.exitMultipleValue;
-              calculatedFairValue = fairEVSales / 1000; // Convert to millions for display
-              calculatedUpside = currentEV > 0 ? ((fairEVSales - currentEV) / currentEV) * 100 : 0;
+              const fairMarketCapSales = revenue2029 * valuation.exitMultipleValue;
+              calculatedFairValue = fairMarketCapSales / 1000; // Convert to millions for display
+              calculatedUpside = currentMarketCap > 0 ? ((fairMarketCapSales - currentMarketCap) / currentMarketCap) * 100 : 0;
               
               calculationDetails = `Fair Value Calculation:
 2029 Revenue: $${revenue2029.toFixed(1)}M
-EV/Sales Multiple: ${valuation.exitMultipleValue}x
-Fair Enterprise Value: $${revenue2029.toFixed(1)}M × ${valuation.exitMultipleValue} = $${fairEVSales.toFixed(1)}M
-Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
-Upside: ($${fairEVSales.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
+Price/Sales Multiple: ${valuation.exitMultipleValue}x
+Fair Market Cap: $${revenue2029.toFixed(1)}M × ${valuation.exitMultipleValue} = $${fairMarketCapSales.toFixed(1)}M
+Current Market Cap: $${(currentMarketCap / 1000000).toFixed(1)}M
+Upside: ($${fairMarketCapSales.toFixed(1)}M - $${(currentMarketCap / 1000000).toFixed(1)}M) / $${(currentMarketCap / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
               break;
               
             default:

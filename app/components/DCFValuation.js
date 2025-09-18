@@ -123,6 +123,7 @@ export default function DCFValuation() {
       // Set the raw data directly
       setValuation(data);
       setRetrying(false);
+      
     } catch (err) {
       console.error('Error in handleSubmit:', err);
       setError(err.message);
@@ -131,6 +132,7 @@ export default function DCFValuation() {
       setLoading(false);
     }
   };
+
 
   const handleFeedbackSubmit = async (e) => {
     e.preventDefault();
@@ -493,7 +495,7 @@ export default function DCFValuation() {
                 <SelectItem value="P/E">P/E Multiple</SelectItem>
                 <SelectItem value="EV/EBITDA">EV/EBITDA Multiple</SelectItem>
                 <SelectItem value="EV/FCF">EV/FCF Multiple</SelectItem>
-                <SelectItem value="EV/Sales">EV/Sales Multiple</SelectItem>
+                <SelectItem value="Price/Sales">Price/Sales Multiple</SelectItem>
               </SelectContent>
             </Select>
           )}
@@ -1459,6 +1461,7 @@ export default function DCFValuation() {
                         </div>
                       </div>
                     </div>
+
                   </div>
                 </CardContent>
               </Card>
