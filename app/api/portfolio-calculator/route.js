@@ -22,30 +22,18 @@ export async function POST(request) {
 
     console.log(`Calculating portfolio for ${holdings.length} holdings:`, holdings.map(h => `${h.ticker} (${h.weight}%)`));
 
-    // Helper to run tasks with a concurrency limit
-    const runWithConcurrencyLimit = async (tasks, limit) => {
-      const results = new Array(tasks.length);
-      let nextIndex = 0;
-      const worker = async () => {
-        while (true) {
-          const current = nextIndex++;
-          if (current >= tasks.length) break;
-          results[current] = await tasks[current]();
-        }
-      };
-      const workers = Array(Math.min(limit, tasks.length)).fill(0).map(worker);
-      await Promise.all(workers);
-      return results;
-    };
-
-    // Build valuation tasks for each holding
+    // Sequential valuation fetches to avoid rate limiting
     const baseUrl = process.env.VERCEL_URL 
       ? `https://${process.env.VERCEL_URL}` 
       : 'http://localhost:3001';
 
-    const tasks = holdings.map((holding) => async () => {
+    const holdingResults = [];
+    let totalWeightedReturn = 0;
+    let totalWeightedFairValue = 0;
+
+    for (const holding of holdings) {
       try {
-        console.log(`Fetching valuation for ${holding.ticker}...`);
+        console.log(`Fetching valuation for ${holding.ticker} (sequential)...`);
         const url = `${baseUrl}/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${encodeURIComponent(method)}`;
         const valuationResponse = await fetch(url, {
           method: 'GET',
@@ -55,13 +43,31 @@ export async function POST(request) {
         if (!valuationResponse.ok) {
           const status = `${valuationResponse.status}`;
           console.error(`Failed to fetch valuation for ${holding.ticker}:`, status);
-          return { error: `HTTP ${status}`, holding };
+          holdingResults.push({
+            ticker: holding.ticker,
+            weight: holding.weight,
+            fairValue: 0,
+            upside: 0,
+            currentPrice: 0,
+            method: method,
+            error: `HTTP ${status}`
+          });
+          continue;
         }
 
         const valuationData = await valuationResponse.json();
         if (!valuationData.fairValue || valuationData.upside === undefined || valuationData.upside === null) {
           console.error(`Invalid valuation data for ${holding.ticker}:`, valuationData);
-          return { error: 'Invalid valuation data', holding };
+          holdingResults.push({
+            ticker: holding.ticker,
+            weight: holding.weight,
+            fairValue: 0,
+            upside: 0,
+            currentPrice: 0,
+            method: method,
+            error: 'Invalid valuation data'
+          });
+          continue;
         }
 
         let fairValuePerShare = valuationData.fairValue;
@@ -71,7 +77,7 @@ export async function POST(request) {
           fairValuePerShare = valuationData.exitMultipleCalculation.fairValue;
         }
 
-        return {
+        const res = {
           ticker: holding.ticker,
           weight: holding.weight,
           fairValue: fairValuePerShare,
@@ -79,43 +85,25 @@ export async function POST(request) {
           currentPrice: valuationData.currentSharePrice,
           method: valuationData.method,
         };
+        holdingResults.push(res);
+
+        const weightedReturn = (res.weight / 100) * res.upside;
+        const weightedFairValue = (res.weight / 100) * res.fairValue;
+        totalWeightedReturn += weightedReturn;
+        totalWeightedFairValue += weightedFairValue;
+        console.log(`${res.ticker}: Fair Value $${res.fairValue.toFixed(2)}, Upside ${res.upside.toFixed(1)}%, Weighted Return ${weightedReturn.toFixed(2)}%`);
       } catch (error) {
         console.error(`Error processing ${holding.ticker}:`, error.message);
-        return { error: error.message, holding };
+        holdingResults.push({
+          ticker: holding.ticker,
+          weight: holding.weight,
+          fairValue: 0,
+          upside: 0,
+          currentPrice: 0,
+          method: method,
+          error: error.message
+        });
       }
-    });
-
-    const CONCURRENCY = parseInt(process.env.PORTFOLIO_CONCURRENCY || '4', 10);
-    const resultsParallel = await runWithConcurrencyLimit(tasks, CONCURRENCY);
-
-    // Aggregate results
-    const holdingResults = [];
-    let totalWeightedReturn = 0;
-    let totalWeightedFairValue = 0;
-
-    for (const res of resultsParallel) {
-      if (!res || res.error) {
-        const h = res?.holding;
-        if (h) {
-          holdingResults.push({
-            ticker: h.ticker,
-            weight: h.weight,
-            fairValue: 0,
-            upside: 0,
-            currentPrice: 0,
-            method: 'dcf',
-            error: res?.error || 'Unknown error'
-          });
-        }
-        continue;
-      }
-
-      holdingResults.push(res);
-      const weightedReturn = (res.weight / 100) * res.upside;
-      const weightedFairValue = (res.weight / 100) * res.fairValue;
-      totalWeightedReturn += weightedReturn;
-      totalWeightedFairValue += weightedFairValue;
-      console.log(`${res.ticker}: Fair Value $${res.fairValue.toFixed(2)}, Upside ${res.upside.toFixed(1)}%, Weighted Return ${weightedReturn.toFixed(2)}%`);
     }
 
     const portfolioResult = {
