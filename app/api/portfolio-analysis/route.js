@@ -472,6 +472,19 @@ async function getValuationExpectedReturns(holdings, method) {
   const valuationReturns = {};
   let totalWeightedReturn = 0;
 
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const fetchWithRetry = async (url, options, attempts = 3, baseDelayMs = 800) => {
+    for (let i = 0; i < attempts; i++) {
+      const res = await fetch(url, options);
+      if (res.ok) return res;
+      if (![401, 429, 500, 502, 503, 504].includes(res.status)) return res;
+      const delay = baseDelayMs * Math.pow(2, i);
+      await sleep(delay);
+    }
+    return fetch(url, options);
+  };
+
   for (const holding of holdings) {
     try {
       console.log(`Fetching ${method} valuation for ${holding.ticker} (sequential)...`);
@@ -480,9 +493,10 @@ async function getValuationExpectedReturns(holdings, method) {
         ? `https://${process.env.VERCEL_URL}` 
         : 'http://localhost:3001';
 
-      const valuationResponse = await fetch(`${baseUrl}/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${method}`, {
+      const url = `${baseUrl}/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${method}`;
+      const valuationResponse = await fetchWithRetry(url, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
       });
 
       if (!valuationResponse.ok) {
@@ -525,6 +539,9 @@ async function getValuationExpectedReturns(holdings, method) {
       const weightedReturn = (holding.weight / 100) * valuationData.upside;
       totalWeightedReturn += weightedReturn;
       console.log(`${holding.ticker}: ${method.toUpperCase()} Upside ${valuationData.upside.toFixed(1)}%, Weighted Return ${weightedReturn.toFixed(2)}%`);
+
+      // Small delay between calls to avoid provider rate limits
+      await sleep(500);
     } catch (error) {
       console.error(`Error fetching ${method} data for ${holding.ticker}:`, error.message);
       valuationReturns[holding.ticker] = {
