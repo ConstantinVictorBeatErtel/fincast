@@ -43,13 +43,17 @@ export async function POST(request) {
       return fetch(url, options);
     };
 
+    const internalHeaders = process.env.VERCEL_PROTECTION_BYPASS
+      ? { 'x-vercel-protection-bypass': process.env.VERCEL_PROTECTION_BYPASS }
+      : {};
+
     for (const holding of holdings) {
       try {
         console.log(`Fetching valuation for ${holding.ticker} (sequential)...`);
         const url = `${baseUrl}/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${encodeURIComponent(method)}`;
         const valuationResponse = await fetchWithRetry(url, {
           method: 'GET',
-          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...internalHeaders },
         });
 
         if (!valuationResponse.ok) {

@@ -290,7 +290,11 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
     
     const spyUrl = `${baseUrl}/api/yfinance-data?ticker=SPY&start_date=${startDateStr}&end_date=${endDateStr}`;
     
-    const response = await fetch(spyUrl);
+    const internalHeaders = process.env.VERCEL_PROTECTION_BYPASS
+      ? { 'x-vercel-protection-bypass': process.env.VERCEL_PROTECTION_BYPASS }
+      : {};
+
+    const response = await fetch(spyUrl, { headers: internalHeaders });
     if (!response.ok) {
       throw new Error(`SPY API request failed: ${response.status} ${response.statusText}`);
     }
@@ -485,6 +489,10 @@ async function getValuationExpectedReturns(holdings, method) {
     return fetch(url, options);
   };
 
+  const internalHeaders = process.env.VERCEL_PROTECTION_BYPASS
+    ? { 'x-vercel-protection-bypass': process.env.VERCEL_PROTECTION_BYPASS }
+    : {};
+
   for (const holding of holdings) {
     try {
       console.log(`Fetching ${method} valuation for ${holding.ticker} (sequential)...`);
@@ -496,7 +504,7 @@ async function getValuationExpectedReturns(holdings, method) {
       const url = `${baseUrl}/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${method}`;
       const valuationResponse = await fetchWithRetry(url, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...internalHeaders },
       });
 
       if (!valuationResponse.ok) {
