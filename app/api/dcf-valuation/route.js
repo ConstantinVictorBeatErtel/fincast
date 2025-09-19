@@ -689,6 +689,8 @@ Instructions: Focus ONLY on the latest reported quarterly results, management co
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': referer,
+        'Referer': referer,
+        'Origin': referer,
         'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify({
@@ -1019,6 +1021,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': referer,
+        'Referer': referer,
+        'Origin': referer,
         'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify({
@@ -1680,6 +1684,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': referer,
+        'Referer': referer,
+        'Origin': referer,
         'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify({
