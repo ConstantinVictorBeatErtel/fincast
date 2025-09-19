@@ -682,12 +682,13 @@ Instructions: Focus ONLY on the latest reported quarterly results, management co
       }
     ];
     
+    const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3001';
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'http://localhost:3000',
+        'HTTP-Referer': referer,
         'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify({
@@ -1011,12 +1012,13 @@ Return ONLY the <forecast> section as specified above, without any additional co
       throw new Error(`Unsupported valuation method: ${method}`);
     }
 
+    const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3001';
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'http://localhost:3000',
+        'HTTP-Referer': referer,
         'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify({
