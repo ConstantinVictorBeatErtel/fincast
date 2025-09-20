@@ -2352,13 +2352,21 @@ export async function GET(request) {
     );
   }
 
-  // Check API key
-  if (!process.env.OPENROUTER_API_KEY) {
-    console.error('OPENROUTER_API_KEY is not configured');
-    return NextResponse.json(
-      { error: 'API configuration error' },
-      { status: 500 }
-    );
+  // Check if this is an internal Vercel call
+  const headers = nextHeaders();
+  const isInternalCall = headers.get('x-vercel-protection-bypass') || headers.get('x-vercel-automation-bypass');
+  
+  if (isInternalCall) {
+    console.log('Internal Vercel call detected, skipping API key check');
+  } else {
+    // Check API key for external calls
+    if (!process.env.OPENROUTER_API_KEY) {
+      console.error('OPENROUTER_API_KEY is not configured');
+      return NextResponse.json(
+        { error: 'API configuration error' },
+        { status: 500 }
+      );
+    }
   }
 
   try {
@@ -2647,13 +2655,21 @@ export async function POST(request) {
     );
   }
 
-  // Check API key
-  if (!process.env.OPENROUTER_API_KEY) {
-    console.error('OPENROUTER_API_KEY is not configured');
-    return NextResponse.json(
-      { error: 'API configuration error' },
-      { status: 500 }
-    );
+  // Check if this is an internal Vercel call
+  const headers = nextHeaders();
+  const isInternalCall = headers.get('x-vercel-protection-bypass') || headers.get('x-vercel-automation-bypass');
+  
+  if (isInternalCall) {
+    console.log('Internal Vercel call detected, skipping API key check');
+  } else {
+    // Check API key for external calls
+    if (!process.env.OPENROUTER_API_KEY) {
+      console.error('OPENROUTER_API_KEY is not configured');
+      return NextResponse.json(
+        { error: 'API configuration error' },
+        { status: 500 }
+      );
+    }
   }
 
   try {
