@@ -148,6 +148,28 @@ async function fetchFinancialsWithYfinance(ticker) {
     try {
     const { spawn } = await import('child_process');
     
+      // Use yfinance-data API endpoint first (works on both local and Vercel)
+      const baseUrl = process.env.VERCEL_URL 
+        ? `https://${process.env.VERCEL_URL}`
+        : 'http://localhost:3001';
+      
+      const response = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.historical_financials && data.historical_financials.length > 0) {
+          console.log('Using yfinance-data API result');
+          return data;
+        }
+      } else {
+        console.warn(`yfinance-data API failed: ${response.status}`);
+      }
+
       // Use external API in production if configured
       if (process.env.VERCEL === '1' || process.env.NEXT_RUNTIME === 'edge' || process.env.NODE_ENV === 'production') {
             const externalPyApi = process.env.PY_YF_URL;
