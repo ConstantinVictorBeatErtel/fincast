@@ -122,18 +122,31 @@ async function fetchHistoricalData(tickers) {
       try {
         console.log(`Fetching historical data for ${ticker}...`);
         
-        const quote = await yahooFinance.historical(ticker, {
-          period1: startDate,
-          period2: endDate,
-          interval: '1d'
+        // Use our yfinance-data endpoint for historical data
+        const baseUrl = process.env.VERCEL_URL 
+          ? `https://${process.env.VERCEL_URL}`
+          : 'http://localhost:3001';
+
+        const response = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         });
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch data for ${ticker}: ${response.status}`);
+        }
+
+        const dataResult = await response.json();
+        const quote = dataResult.historicalData || [];
 
         if (quote && quote.length > 0) {
           // Convert to object with dates as keys and close prices as values
           const priceData = {};
           quote.forEach(day => {
             if (day.close) {
-              priceData[day.date.toISOString().split('T')[0]] = day.close;
+              priceData[day.date] = day.close; // day.date is already formatted as YYYY-MM-DD
             }
           });
           historicalData[ticker] = priceData;
@@ -593,13 +606,24 @@ async function calculatePortfolioBetaAlternative(returns, weights, startDate, en
     console.log('Using alternative beta calculation method...');
     console.log('Start date:', startDate, 'End date:', endDate);
     
-    // Fetch SPY data for the same period as stock data
-    
-    const spyData = await yahooFinance.historical('SPY', {
-      period1: startDate,
-      period2: endDate,
-      interval: '1d'
+    // Fetch SPY data using our yfinance-data endpoint
+    const baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}`
+      : 'http://localhost:3001';
+
+    const spyResponse = await fetch(`${baseUrl}/api/yfinance-data?ticker=SPY`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
     });
+
+    if (!spyResponse.ok) {
+      throw new Error(`Failed to fetch SPY data: ${spyResponse.status}`);
+    }
+
+    const spyDataResult = await spyResponse.json();
+    const spyData = spyDataResult.historicalData || [];
     
     console.log('SPY data fetched, length:', spyData?.length);
 
