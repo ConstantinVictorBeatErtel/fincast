@@ -290,9 +290,13 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
     
     const spyUrl = `${baseUrl}/api/yfinance-data?ticker=SPY&start_date=${startDateStr}&end_date=${endDateStr}`;
     
-    const internalHeaders = process.env.VERCEL_PROTECTION_BYPASS
-      ? { 'x-vercel-protection-bypass': process.env.VERCEL_PROTECTION_BYPASS }
-      : {};
+    const internalHeaders = {};
+    if (process.env.VERCEL_PROTECTION_BYPASS) {
+      internalHeaders['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+    }
+    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+      internalHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    }
 
     const response = await fetch(spyUrl, { headers: internalHeaders });
     if (!response.ok) {
@@ -489,9 +493,13 @@ async function getValuationExpectedReturns(holdings, method) {
     return fetch(url, options);
   };
 
-  const internalHeaders = process.env.VERCEL_PROTECTION_BYPASS
-    ? { 'x-vercel-protection-bypass': process.env.VERCEL_PROTECTION_BYPASS }
-    : {};
+  const internalHeaders = {};
+  if (process.env.VERCEL_PROTECTION_BYPASS) {
+    internalHeaders['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+  }
+  if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+    internalHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  }
 
   for (const holding of holdings) {
     try {

@@ -43,9 +43,13 @@ export async function POST(request) {
       return fetch(url, options);
     };
 
-    const internalHeaders = process.env.VERCEL_PROTECTION_BYPASS
-      ? { 'x-vercel-protection-bypass': process.env.VERCEL_PROTECTION_BYPASS }
-      : {};
+    const internalHeaders = {};
+    if (process.env.VERCEL_PROTECTION_BYPASS) {
+      internalHeaders['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+    }
+    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+      internalHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    }
 
     for (const holding of holdings) {
       try {
