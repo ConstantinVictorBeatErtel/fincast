@@ -1026,7 +1026,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
         'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-4-maverick',
+        model: 'x-ai/grok-code-fast-1',
         messages: [
           {
             role: 'system',
@@ -1689,7 +1689,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
         'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-4-maverick',
+        model: 'x-ai/grok-code-fast-1',
         messages: [
           {
             role: 'system',
