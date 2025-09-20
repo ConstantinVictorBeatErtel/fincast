@@ -1,4 +1,4 @@
-# Finbase - Financial Valuation & Portfolio Management
+# Fincast - Financial Valuation & Portfolio Management
 
 A comprehensive financial analysis platform that provides DCF (Discounted Cash Flow) and Exit Multiple valuations for stocks, with portfolio management capabilities.
 
@@ -42,7 +42,7 @@ A comprehensive financial analysis platform that provides DCF (Discounted Cash F
 1. Clone the repository:
 ```bash
 git clone <your-repo-url>
-cd finbase
+cd Fincast
 ```
 
 2. Install dependencies:
