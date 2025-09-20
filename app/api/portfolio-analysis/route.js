@@ -275,6 +275,12 @@ function calculateCorrelation(returns1, returns2) {
 
 async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
   try {
+    // On Vercel, avoid internal HTTP calls to our own SPY endpoint (can be protected);
+    // use the JS fallback directly.
+    if (process.env.VERCEL_URL) {
+      console.log('Vercel environment detected; using alternative beta calculation...');
+      return await calculatePortfolioBetaAlternative(returns, weights, startDate, endDate);
+    }
     console.log('Calculating portfolio beta using integrated Python API...');
     
     // Convert dates to YYYY-MM-DD format for API call
