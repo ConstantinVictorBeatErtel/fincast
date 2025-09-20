@@ -506,6 +506,13 @@ async function getValuationExpectedReturns(holdings, method) {
   if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
     internalHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
   }
+  
+  // For local testing, always add a test bypass header
+  if (!process.env.VERCEL_URL) {
+    internalHeaders['x-vercel-automation-bypass'] = 'local-test-token';
+  }
+  
+  console.log('Portfolio Analysis - Internal headers:', internalHeaders);
 
   for (const holding of holdings) {
     try {
