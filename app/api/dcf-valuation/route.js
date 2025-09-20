@@ -2354,7 +2354,16 @@ export async function GET(request) {
 
   // Check if this is an internal Vercel call
   const headers = nextHeaders();
-  const isInternalCall = headers.get('x-vercel-protection-bypass') || headers.get('x-vercel-automation-bypass');
+  const protectionBypass = headers.get('x-vercel-protection-bypass');
+  const automationBypass = headers.get('x-vercel-automation-bypass');
+  const isInternalCall = protectionBypass || automationBypass;
+  
+  console.log('DCF Valuation - Header check:', {
+    protectionBypass: protectionBypass ? 'SET' : 'NOT SET',
+    automationBypass: automationBypass ? 'SET' : 'NOT SET',
+    isInternalCall,
+    allHeaders: Object.fromEntries(headers.entries())
+  });
   
   if (isInternalCall) {
     console.log('Internal Vercel call detected, skipping API key check');
@@ -2657,7 +2666,16 @@ export async function POST(request) {
 
   // Check if this is an internal Vercel call
   const headers = nextHeaders();
-  const isInternalCall = headers.get('x-vercel-protection-bypass') || headers.get('x-vercel-automation-bypass');
+  const protectionBypass = headers.get('x-vercel-protection-bypass');
+  const automationBypass = headers.get('x-vercel-automation-bypass');
+  const isInternalCall = protectionBypass || automationBypass;
+  
+  console.log('DCF Valuation - Header check:', {
+    protectionBypass: protectionBypass ? 'SET' : 'NOT SET',
+    automationBypass: automationBypass ? 'SET' : 'NOT SET',
+    isInternalCall,
+    allHeaders: Object.fromEntries(headers.entries())
+  });
   
   if (isInternalCall) {
     console.log('Internal Vercel call detected, skipping API key check');
