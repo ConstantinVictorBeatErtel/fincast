@@ -153,11 +153,21 @@ async function fetchFinancialsWithYfinance(ticker) {
         ? `https://${process.env.VERCEL_URL}`
         : 'http://localhost:3001';
       
+      const headers = {
+        'Content-Type': 'application/json',
+      };
+      
+      // Add bypass token for Vercel protection
+      if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+        headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+      }
+      if (process.env.VERCEL_PROTECTION_BYPASS) {
+        headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+      }
+
       const response = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: headers,
       });
 
       if (response.ok) {
