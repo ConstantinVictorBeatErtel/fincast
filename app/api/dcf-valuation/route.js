@@ -372,117 +372,48 @@ async function fetchFinancialsWithYfinance(ticker) {
     // Build historical financials (up to 4 most recent, oldest->newest), values in $M
     let historical_financials = [];
     try {
-      const ts = await yahooFinance.fundamentalsTimeSeries(ticker, {
-        type: [
-          'annualTotalRevenue',
-          'annualGrossProfit',
-          'annualEbitda',
-          'annualOperatingIncome',
-          'annualNetIncomeCommonStockholders',
-          'annualOperatingCashFlow',
-          'annualCapitalExpenditure',
-          'annualDilutedEPS',
-          'annualDilutedAverageShares',
-          'annualBasicAverageShares'
-        ],
-        period1: '2000-01-01'
-      });
+      // Use income statement history instead of fundamentalsTimeSeries
+      const incomeHistory = quote.incomeStatementHistory || {};
+      const cashFlowHistory = quote.cashflowStatementHistory || {};
 
-      const toYearValues = (series) => {
-        const out = new Map();
-        if (!Array.isArray(series)) return out;
-        for (const item of series) {
-          const asOf = item?.asOfDate || item?.endDate || item?.period || item?.updated || item?.date;
-          const val = item?.reportedValue?.raw ?? item?.reportedValue ?? item?.value ?? item?.raw ?? null;
-          if (!asOf || val === null || typeof val === 'undefined') continue;
-          const d = new Date(asOf);
-          if (Number.isNaN(d.getTime())) continue;
-          const y = d.getUTCFullYear();
-          out.set(String(y), Number(val));
-        }
-        return out;
-      };
+      // Process income statement history
+      const incomeYears = Object.keys(incomeHistory).sort((a, b) => {
+        const dateA = new Date(incomeHistory[a].endDate);
+        const dateB = new Date(incomeHistory[b].endDate);
+        return dateA - dateB;
+      }).slice(-4); // Get last 4 years
 
-      const pickSeries = (name) => toYearValues(ts?.[name]?.series || ts?.[name] || []);
+      let prevRevenueM = null;
+      for (const yearKey of incomeYears) {
+        const yearData = incomeHistory[yearKey];
+        const yearNum = new Date(yearData.endDate).getFullYear();
+        
+        const rev = yearData.totalRevenue || 0;
+        const gp = yearData.grossProfit || 0;
+        const ebitdaY = yearData.ebitda || 0;
+        const ni = yearData.netIncome || 0;
+        const ocf = cashFlowHistory[yearKey]?.totalCashFromOperatingActivities || 0;
+        const capex = cashFlowHistory[yearKey]?.capitalExpenditures || 0;
+        const epsY = yearData.dilutedEPS || 0;
 
-      const revMap = pickSeries('annualTotalRevenue');
-      const gpMap = pickSeries('annualGrossProfit');
-      const ebitdaMap = pickSeries('annualEbitda');
-      const niMap = pickSeries('annualNetIncomeCommonStockholders');
-      const ocfMap = pickSeries('annualOperatingCashFlow');
-      const capexMap = pickSeries('annualCapitalExpenditure');
-      const epsMap = pickSeries('annualDilutedEPS');
-      const dilutedSharesMap = pickSeries('annualDilutedAverageShares');
-      const basicSharesMap = pickSeries('annualBasicAverageShares');
-      
-      // Bank-specific metrics
-      const interestIncomeMap = pickSeries('annualInterestIncome');
-      const interestExpenseMap = pickSeries('annualInterestExpense');
-      const netInterestIncomeMap = pickSeries('annualNetInterestIncome');
+        if (rev && rev > 0) {
+          const revM = rev / 1e6;
+          const gpM = gp / 1e6;
+          const ebitdaM = ebitdaY / 1e6;
+          const niM = ni / 1e6;
+          const ocfM = ocf / 1e6;
+          const capexM = capex / 1e6;
+          const fcfM = ocfM - capexM;
 
-      const years = Array.from(new Set([
-        ...revMap.keys(),
-        ...gpMap.keys(),
-        ...ebitdaMap.keys(),
-        ...niMap.keys(),
-        ...ocfMap.keys(),
-        ...capexMap.keys(),
-      ])).map(y => Number(y)).filter(y => !Number.isNaN(y)).sort((a,b)=>a-b).slice(-4);
-
-      if (years.length > 0) {
-        let prevRevM = null;
-        for (const y of years) {
-          const rev = Number(revMap.get(String(y)) || 0);
-          const ni = Number(niMap.get(String(y)) || 0);
-          const ocf = Number(ocfMap.get(String(y)) || 0);
-          const capex = Number(capexMap.get(String(y)) || 0);
-          const fcfY = ocf + capex; // capex negative
-          let epsY = Number(epsMap.get(String(y)) || 0);
-          if (!epsY && ni) {
-            const sharesY = Number(dilutedSharesMap.get(String(y)) || basicSharesMap.get(String(y)) || 0);
-            if (sharesY > 0) epsY = ni / sharesY;
-          }
-
-          const revM = rev / 1_000_000;
-          const niM = ni / 1_000_000;
-          const fcfM = fcfY / 1_000_000;
-
-          let gp, gpM, ebitda, ebitdaM, grossMargin, ebitdaMargin;
-          
-          if (isBank) {
-            // For banks, calculate Net Interest Income and PPOR
-            const interestIncome = Number(interestIncomeMap.get(String(y)) || 0);
-            const interestExpense = Number(interestExpenseMap.get(String(y)) || 0);
-            const netInterestIncome = Number(netInterestIncomeMap.get(String(y)) || (interestIncome - interestExpense));
-            
-            gp = netInterestIncome; // Net Interest Income
-            gpM = gp / 1_000_000;
-            
-            // For banks, use a simplified PPOR calculation
-            // PPOR ≈ Net Interest Income + Non-Interest Income - Non-Interest Expense
-            ebitda = netInterestIncome + (rev - interestIncome); // Simplified PPOR
-            ebitdaM = ebitda / 1_000_000;
-            
-            grossMargin = rev ? (gp / rev) * 100 : 0;
-            ebitdaMargin = rev ? (ebitda / rev) * 100 : 0;
-          } else {
-            // Regular company logic
-            gp = Number(gpMap.get(String(y)) || 0);
-            ebitda = Number(ebitdaMap.get(String(y)) || 0);
-            gpM = gp / 1_000_000;
-            ebitdaM = ebitda / 1_000_000;
-            
-            grossMargin = rev ? (gp / rev) * 100 : 0;
-            ebitdaMargin = rev ? (ebitda / rev) * 100 : 0;
-          }
-
-          const netIncomeMargin = rev ? (ni / rev) * 100 : 0;
-          const fcfMargin = rev ? (fcfY / rev) * 100 : 0;
-          const revenueGrowth = prevRevM ? ((revM - prevRevM) / prevRevM) * 100 : 0;
-          prevRevM = revM;
+          const grossMargin = rev ? (gpM / revM) * 100 : 0;
+          const ebitdaMargin = rev ? (ebitdaM / revM) * 100 : 0;
+          const netIncomeMargin = rev ? (niM / revM) * 100 : 0;
+          const fcfMargin = rev ? (fcfM / revM) * 100 : 0;
+          const revenueGrowth = prevRevenueM ? ((revM - prevRevenueM) / prevRevenueM) * 100 : null;
+          prevRevenueM = revM;
 
           historical_financials.push({
-            year: `FY${String(y).slice(-2)}`,
+            year: `FY${String(yearNum).slice(-2)}`,
             revenue: revM,
             revenueGrowth,
             grossProfit: gpM,
@@ -498,7 +429,7 @@ async function fetchFinancialsWithYfinance(ticker) {
         }
       }
     } catch (tsErr) {
-      console.warn('fundamentalsTimeSeries failed; falling back to statement alignment:', tsErr?.message);
+      console.warn('Income statement history processing failed:', tsErr?.message);
     }
 
     // Fallback: align income/cashflow statements by nearest date
@@ -2354,8 +2285,8 @@ export async function GET(request) {
 
   // Check if this is an internal Vercel call
   const headers = nextHeaders();
-  const protectionBypass = headers.get('x-vercel-protection-bypass');
-  const automationBypass = headers.get('x-vercel-automation-bypass');
+  const protectionBypass = headers.get('x-vercel-protection-bypass') || headers.get('X-Vercel-Protection-Bypass');
+  const automationBypass = headers.get('x-vercel-automation-bypass') || headers.get('X-Vercel-Automation-Bypass');
   const isInternalCall = protectionBypass || automationBypass;
   
   console.log('DCF Valuation - Header check:', {
@@ -2364,7 +2295,9 @@ export async function GET(request) {
     isInternalCall,
     allHeaders: Object.fromEntries(headers.entries()),
     vercelUrl: process.env.VERCEL_URL,
-    hasOpenRouterKey: !!process.env.OPENROUTER_API_KEY
+    hasOpenRouterKey: !!process.env.OPENROUTER_API_KEY,
+    rawProtectionBypass: headers.get('x-vercel-protection-bypass'),
+    rawAutomationBypass: headers.get('x-vercel-automation-bypass')
   });
   
   // For Vercel, if we don't have bypass headers but we're missing the API key, 
@@ -2672,8 +2605,8 @@ export async function POST(request) {
 
   // Check if this is an internal Vercel call
   const headers = nextHeaders();
-  const protectionBypass = headers.get('x-vercel-protection-bypass');
-  const automationBypass = headers.get('x-vercel-automation-bypass');
+  const protectionBypass = headers.get('x-vercel-protection-bypass') || headers.get('X-Vercel-Protection-Bypass');
+  const automationBypass = headers.get('x-vercel-automation-bypass') || headers.get('X-Vercel-Automation-Bypass');
   const isInternalCall = protectionBypass || automationBypass;
   
   console.log('DCF Valuation - Header check:', {
@@ -2682,7 +2615,9 @@ export async function POST(request) {
     isInternalCall,
     allHeaders: Object.fromEntries(headers.entries()),
     vercelUrl: process.env.VERCEL_URL,
-    hasOpenRouterKey: !!process.env.OPENROUTER_API_KEY
+    hasOpenRouterKey: !!process.env.OPENROUTER_API_KEY,
+    rawProtectionBypass: headers.get('x-vercel-protection-bypass'),
+    rawAutomationBypass: headers.get('x-vercel-automation-bypass')
   });
   
   // For Vercel, if we don't have bypass headers but we're missing the API key, 
