@@ -135,7 +135,7 @@ async function fetchHistoricalData(tickers) {
           ? `https://${process.env.VERCEL_URL}`
           : 'http://localhost:3000';
 
-        const response = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`, {
+        const response = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}&prices=1`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -310,7 +310,7 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
       ? `https://${process.env.VERCEL_URL}` 
       : 'http://localhost:3000';
     
-    const spyUrl = `${baseUrl}/api/yfinance-data?ticker=SPY`;
+    const spyUrl = `${baseUrl}/api/yfinance-data?ticker=SPY&prices=1`;
     
     const internalHeaders = {};
     if (process.env.VERCEL_PROTECTION_BYPASS) {
