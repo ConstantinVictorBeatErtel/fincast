@@ -144,14 +144,12 @@ async function fetchFinancialsWithYfinance(ticker) {
   try {
     console.log('Fetching yfinance data for:', ticker);
     
-    // 1) Try Python script first for robust statements (historical margins)
+    // 1) Try yfinance-data API endpoint first (works on both local and Vercel)
     try {
-    const { spawn } = await import('child_process');
-    
       // Use yfinance-data API endpoint first (works on both local and Vercel)
       const baseUrl = process.env.VERCEL_URL 
         ? `https://${process.env.VERCEL_URL}`
-        : 'http://localhost:3001';
+        : 'http://localhost:3000';
       
       const headers = {
         'Content-Type': 'application/json',
@@ -173,8 +171,65 @@ async function fetchFinancialsWithYfinance(ticker) {
       if (response.ok) {
         const data = await response.json();
         if (data.historical_financials && data.historical_financials.length > 0) {
-          console.log('Using yfinance-data API result');
-          return data;
+          // If response already has full python schema, pass it through unchanged
+          if (data.fy24_financials && data.market_data) {
+            console.log('Using yfinance-data API result (passthrough)');
+            return data;
+          }
+          // Otherwise, try to map minimal shape into expected structure
+          try {
+            const historical = Array.isArray(data.historical_financials) ? data.historical_financials : [];
+            // Prefer FY2024 if present, else pick latest by year
+            const parseYear = (y) => {
+              if (!y || typeof y !== 'string') return 0;
+              const m = y.match(/(\d{4})/);
+              return m ? parseInt(m[1], 10) : 0;
+            };
+            let fy24 = historical.find((h) => /FY?\s*2024/i.test(h.year || ''));
+            if (!fy24) {
+              fy24 = historical.slice().sort((a, b) => parseYear(b.year) - parseYear(a.year))[0];
+            }
+            const sharesOutstandingRaw = Number(data.sharesOutstanding || 0);
+            const sharesOutstandingMillions = sharesOutstandingRaw > 0 ? sharesOutstandingRaw / 1_000_000 : 0;
+            const eps = sharesOutstandingMillions > 0 && fy24 && typeof fy24.netIncome === 'number'
+              ? (fy24.netIncome) / sharesOutstandingMillions
+              : 0;
+
+            const mapped = {
+              fy24_financials: {
+                revenue: fy24?.revenue ?? 0,
+                gross_profit: fy24?.grossProfit ?? 0,
+                gross_margin_pct: fy24?.grossMargin ?? 0,
+                ebitda: fy24?.ebitda ?? 0,
+                ebitda_margin_pct: fy24?.ebitdaMargin ?? 0,
+                net_income: fy24?.netIncome ?? 0,
+                eps: Number(eps) || 0,
+                shares_outstanding: sharesOutstandingMillions,
+                fcf: fy24?.fcf ?? 0,
+                fcf_margin_pct: fy24?.fcfMargin ?? 0,
+              },
+              market_data: {
+                current_price: Number(data.currentPrice || 0),
+                market_cap: data.marketCap ? Number(data.marketCap) : 0, // dollars
+                enterprise_value: data.enterpriseValue ? Number(data.enterpriseValue) : 0, // dollars
+                pe_ratio: eps > 0 ? Number(data.currentPrice || 0) / eps : null,
+              },
+              company_name: data.company_name || ticker,
+              source: 'yfinance-data',
+              currency_info: data.currency_info || {
+                original_currency: 'USD',
+                converted_to_usd: true,
+                conversion_rate: 1,
+                exchange_rate_source: 'none',
+              },
+              historical_financials: historical,
+            };
+
+            console.log('Using yfinance-data API result (mapped)');
+            return mapped;
+          } catch (mapErr) {
+            console.warn('Failed to map yfinance-data response, falling through:', mapErr?.message);
+          }
         }
       } else {
         console.warn(`yfinance-data API failed: ${response.status}`);
@@ -610,6 +665,55 @@ async function fetchFinancialsWithYfinance(ticker) {
   }
 }
 
+// Basic non-LLM fallback to ensure valuations still generate when the LLM fails
+// Deprecated: do not use LLM fallbacks; keep function for potential dev diagnostics only
+function computeFallbackValuation(ticker, yf_data, method, selectedMultiple = 'auto') {
+  try {
+    const currentPrice = Number(yf_data?.market_data?.current_price || 0);
+    const fy = yf_data?.fy24_financials || {};
+    const eps = Number(fy.eps || 0);
+    // Choose a conservative default multiple if not provided
+    let multiple = 18;
+    if (selectedMultiple && typeof selectedMultiple === 'string') {
+      const m = parseFloat(selectedMultiple);
+      if (!Number.isNaN(m) && m > 0) multiple = m;
+    } else if (typeof selectedMultiple === 'number' && selectedMultiple > 0) {
+      multiple = selectedMultiple;
+    }
+
+    // Use simple P/E fallback regardless of method to guarantee output
+    const fairValue = eps > 0 ? eps * multiple : 0;
+    const years = 5;
+    const cagr = currentPrice > 0 && fairValue > 0
+      ? (Math.pow(fairValue / currentPrice, 1 / years) - 1) * 100
+      : 0;
+    const upside = currentPrice > 0 && fairValue > 0
+      ? ((fairValue - currentPrice) / currentPrice) * 100
+      : 0;
+
+    return {
+      rawForecast: null,
+      hasRawForecast: false,
+      hasFinancialAnalysis: false,
+      companyName: ticker,
+      method: method,
+      fairValue: Number(fairValue),
+      currentSharePrice: Number(currentPrice),
+      upside: Number(upside),
+      cagr: Number(cagr),
+      historicalFinancials: Array.isArray(yf_data?.historical_financials) ? yf_data.historical_financials : [],
+      sourceMetrics: {
+        eps,
+        multiple,
+      },
+    };
+  } catch (e) {
+    return {
+      error: 'Fallback valuation failed',
+    };
+  }
+}
+
 // Function to fetch latest data from Sonar
 async function fetchLatestWithSonar(ticker) {
   try {
@@ -645,7 +749,7 @@ Instructions: Focus ONLY on the latest reported quarterly results, management co
       }
     ];
     
-    const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3001';
+    const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -977,7 +1081,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       throw new Error(`Unsupported valuation method: ${method}`);
     }
 
-    const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3001';
+    const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -1000,8 +1104,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
             content: prompt,
           },
         ],
-        temperature: 0.3,
-        max_tokens: 2000
+        temperature: 0.2,
+        max_tokens: 3800
       }),
     });
 
@@ -1640,7 +1744,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       throw new Error(`Unsupported valuation method: ${method}`);
     }
 
-    const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3001';
+    const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -2785,33 +2889,44 @@ Upside: ($${calculatedFairValue.toFixed(2)} - $${currentPrice.toFixed(2)}) / $${
               break;
               
             case 'EV/EBITDA':
-              // EV/EBITDA: Fair EV = 2029 EBITDA × EV/EBITDA Multiple
+              // EV/EBITDA: Fair EV = 2029 EBITDA × EV/EBITDA Multiple (in $M)
               const ebitda2029 = finalYearProjection.ebitda || 0;
-              const fairEV = ebitda2029 * valuation.exitMultipleValue;
-              calculatedFairValue = fairEV / 1000; // Convert to millions for display
-              calculatedUpside = currentEV > 0 ? ((fairEV - currentEV) / currentEV) * 100 : 0;
+              const fairEV = ebitda2029 * valuation.exitMultipleValue; // $M
+              // Derive per-share price from EV ratio
+              let fairPricePerShare = 0;
+              if (currentEV > 0) {
+                fairPricePerShare = currentPrice * ((fairEV * 1_000_000) / currentEV);
+              }
+              calculatedFairValue = fairPricePerShare; // per-share
+              calculatedUpside = currentEV > 0 ? ((fairPricePerShare - currentPrice) / currentPrice) * 100 : 0;
               
-              calculationDetails = `Fair Value Calculation:
+              calculationDetails = `Fair Value Calculation (Per-Share from EV):
 2029 EBITDA: $${ebitda2029.toFixed(1)}M
 EV/EBITDA Multiple: ${valuation.exitMultipleValue}x
-Fair Enterprise Value: $${ebitda2029.toFixed(1)}M × ${valuation.exitMultipleValue} = $${fairEV.toFixed(1)}M
-Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
-Upside: ($${fairEV.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
+Fair Enterprise Value: $${fairEV.toFixed(1)}M
+Current Enterprise Value: $${(currentEV / 1_000_000).toFixed(1)}M
+Fair Price ≈ $${currentPrice.toFixed(2)} × ${(fairEV * 1_000_000 / currentEV).toFixed(2)} = $${fairPricePerShare.toFixed(2)}
+Upside: ($${fairPricePerShare.toFixed(2)} - $${currentPrice.toFixed(2)}) / $${currentPrice.toFixed(2)} × 100 = ${calculatedUpside.toFixed(1)}%`;
               break;
               
             case 'EV/FCF':
-              // EV/FCF: Fair EV = 2029 FCF × EV/FCF Multiple
+              // EV/FCF: Fair EV = 2029 FCF × EV/FCF Multiple (in $M)
               const fcf2029 = finalYearProjection.freeCashFlow || 0;
-              const fairEVFCF = fcf2029 * valuation.exitMultipleValue;
-              calculatedFairValue = fairEVFCF / 1000; // Convert to millions for display
-              calculatedUpside = currentEV > 0 ? ((fairEVFCF - currentEV) / currentEV) * 100 : 0;
+              const fairEVFCF = fcf2029 * valuation.exitMultipleValue; // $M
+              let fairPricePerShareFCF = 0;
+              if (currentEV > 0) {
+                fairPricePerShareFCF = currentPrice * ((fairEVFCF * 1_000_000) / currentEV);
+              }
+              calculatedFairValue = fairPricePerShareFCF; // per-share
+              calculatedUpside = currentEV > 0 ? ((fairPricePerShareFCF - currentPrice) / currentPrice) * 100 : 0;
               
-              calculationDetails = `Fair Value Calculation:
+              calculationDetails = `Fair Value Calculation (Per-Share from EV):
 2029 Free Cash Flow: $${fcf2029.toFixed(1)}M
 EV/FCF Multiple: ${valuation.exitMultipleValue}x
-Fair Enterprise Value: $${fcf2029.toFixed(1)}M × ${valuation.exitMultipleValue} = $${fairEVFCF.toFixed(1)}M
-Current Enterprise Value: $${(currentEV / 1000000).toFixed(1)}M
-Upside: ($${fairEVFCF.toFixed(1)}M - $${(currentEV / 1000000).toFixed(1)}M) / $${(currentEV / 1000000).toFixed(1)}M × 100 = ${calculatedUpside.toFixed(1)}%`;
+Fair Enterprise Value: $${fairEVFCF.toFixed(1)}M
+Current Enterprise Value: $${(currentEV / 1_000_000).toFixed(1)}M
+Fair Price ≈ $${currentPrice.toFixed(2)} × ${(fairEVFCF * 1_000_000 / currentEV).toFixed(2)} = $${fairPricePerShareFCF.toFixed(2)}
+Upside: ($${fairPricePerShareFCF.toFixed(2)} - $${currentPrice.toFixed(2)}) / $${currentPrice.toFixed(2)} × 100 = ${calculatedUpside.toFixed(1)}%`;
               break;
               
             case 'Price/Sales':

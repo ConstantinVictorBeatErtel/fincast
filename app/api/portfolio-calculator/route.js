@@ -25,7 +25,7 @@ export async function POST(request) {
     // Sequential valuation fetches to avoid rate limiting
     const baseUrl = process.env.VERCEL_URL 
       ? `https://${process.env.VERCEL_URL}` 
-      : 'http://localhost:3001';
+      : 'http://localhost:3000';
 
     const holdingResults = [];
     let totalWeightedReturn = 0;

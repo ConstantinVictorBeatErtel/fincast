@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
 
 // Force dynamic rendering
@@ -13,65 +14,112 @@ export async function GET(request) {
       return NextResponse.json({ error: 'Ticker parameter is required' }, { status: 400 });
     }
 
-    console.log(`Fetching data for ${ticker}...`);
+    console.log(`Fetching yfinance data for ${ticker}...`);
 
-    try {
-      // Fetch current quote data
-      const quote = await yahooFinance.quoteSummary(ticker, {
-        modules: ['price', 'summaryDetail', 'defaultKeyStatistics']
+    const pythonCmd = `${process.cwd()}/venv/bin/python3`;
+    const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+
+    const isDarwin = process.platform === 'darwin';
+    const isNodeRosetta = process.arch === 'x64';
+    const cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
+    const args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
+
+    const runLocalPython = async () => new Promise((resolve) => {
+      const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => { stdout += d.toString(); });
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+      child.on('close', (code) => {
+        if (code !== 0) {
+          console.error('Python yfinance script exited non-zero:', code, stderr);
+          return resolve(null);
+        }
+        try {
+          const json = JSON.parse(stdout);
+          resolve(json);
+        } catch (e) {
+          console.error('Failed to parse python output:', e);
+          resolve(null);
+        }
       });
+      child.on('error', (err) => {
+        console.error('Failed to start python process:', err);
+        resolve(null);
+      });
+    });
 
-      const currentPrice = quote.price?.regularMarketPrice || 0;
-      const marketCap = quote.summaryDetail?.marketCap || 0;
-      const sharesOutstanding = quote.defaultKeyStatistics?.sharesOutstanding || 0;
+    // On Vercel/production: prefer external Python API first
+    let result = null;
+    const isProd = !!process.env.VERCEL_URL || process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
+    const externalPyApi = process.env.PY_YF_URL;
 
-      // Fetch historical data for the last 5 years
+    if (isProd && externalPyApi) {
+      try {
+        const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
+        const response = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json' } });
+        if (response.ok) {
+          const json = await response.json();
+          if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) {
+            result = json;
+            console.log('Using external PY_YF_URL result (prod)');
+          }
+        } else {
+          console.warn('External PY_YF_URL failed:', response.status);
+        }
+      } catch (e) {
+        console.warn('External PY_YF_URL error:', e?.message);
+      }
+    }
+
+    // In dev or if external failed, try local Python script
+    if (!result && !isProd) {
+      console.log('Using local python script (dev)');
+      result = await runLocalPython();
+    }
+
+    // Final fallback: if still no result, attempt external even in dev
+    if (!result && externalPyApi) {
+      try {
+        const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
+        const response = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json' } });
+        if (response.ok) {
+          const json = await response.json();
+          if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) {
+            result = json;
+            console.log('Using external PY_YF_URL result (fallback)');
+          }
+        }
+      } catch (e) {
+        console.warn('External PY_YF_URL fallback error:', e?.message);
+      }
+    }
+
+    if (!result) return NextResponse.json({ error: 'Failed to fetch yfinance data' }, { status: 500 });
+
+    // Add 5y daily price series via yahoo-finance2 chart() only (safe for prices)
+    try {
       const endDate = new Date();
       const startDate = new Date();
       startDate.setFullYear(endDate.getFullYear() - 5);
-
-      const historical = await yahooFinance.historical(ticker, {
-        period1: startDate,
-        period2: endDate,
-        interval: '1d'
-      });
-
-      // Process historical data
-      const historicalData = historical.map(day => ({
-        date: day.date.toISOString().split('T')[0],
-        close: day.close,
-        volume: day.volume
+      const chart = await yahooFinance.chart(ticker, { period1: startDate, period2: endDate, interval: '1d' });
+      const quotes = chart?.quotes || [];
+      const historicalData = quotes.map(q => ({
+        date: new Date(q.date).toISOString().split('T')[0],
+        close: q.close,
+        volume: q.volume,
       }));
-
-      return NextResponse.json({
-        ticker: ticker,
-        currentPrice: currentPrice,
-        marketCap: marketCap,
-        sharesOutstanding: sharesOutstanding,
-        historicalData: historicalData,
-        dataPoints: historicalData.length
-      });
-
-    } catch (yfError) {
-      console.error(`Yahoo Finance error for ${ticker}:`, yfError.message);
-      
-      // Fallback: Return basic data structure
-      return NextResponse.json({
-        ticker: ticker,
-        currentPrice: 100,
-        marketCap: 1000000,
-        sharesOutstanding: 10000000,
-        historicalData: [],
-        dataPoints: 0,
-        error: `Failed to fetch data for ${ticker}: ${yfError.message}`
-      });
+      result.historicalData = historicalData;
+      result.dataPoints = historicalData.length;
+    } catch (e) {
+      console.warn('Failed to attach historical price series via chart():', e?.message);
+      result.historicalData = [];
+      result.dataPoints = 0;
     }
 
+    return NextResponse.json(result);
   } catch (error) {
     console.error('Error in yfinance-data route:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch data' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to fetch data' }, { status: 500 });
   }
 }

@@ -133,7 +133,7 @@ async function fetchHistoricalData(tickers) {
         // Use our yfinance-data endpoint for historical data
         const baseUrl = process.env.VERCEL_URL 
           ? `https://${process.env.VERCEL_URL}`
-          : 'http://localhost:3001';
+          : 'http://localhost:3000';
 
         const response = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`, {
           method: 'GET',
@@ -308,7 +308,7 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
     // Use the yfinance-data endpoint to get SPY data
     const baseUrl = process.env.VERCEL_URL 
       ? `https://${process.env.VERCEL_URL}` 
-      : 'http://localhost:3001';
+      : 'http://localhost:3000';
     
     const spyUrl = `${baseUrl}/api/yfinance-data?ticker=SPY`;
     
@@ -545,7 +545,7 @@ async function getValuationExpectedReturns(holdings, method) {
 
       const baseUrl = process.env.VERCEL_URL 
         ? `https://${process.env.VERCEL_URL}` 
-        : 'http://localhost:3001';
+        : 'http://localhost:3000';
 
       const url = `${baseUrl}/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${method}`;
       const valuationResponse = await fetchWithRetry(url, {
