@@ -66,10 +66,7 @@ export async function GET(request) {
           const samePath = /\/api\/yfinance-data\/?$/.test(ext.pathname);
           if (sameHost && samePath) {
             console.error('PY_YF_URL points to this same route, causing recursion. Update PY_YF_URL to your Python function path.');
-            // Auto-switch to dedicated python function path if available
-            const fallbackPath = `/api/py-yf`;
-            url = `${ext.protocol}//${ext.host}${fallbackPath}?ticker=${encodeURIComponent(ticker)}`;
-            console.log('Auto-switching to', url);
+            throw new Error('PY_YF_URL misconfigured (recursive)');
           }
         } catch (_) {}
 

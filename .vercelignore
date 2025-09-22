@@ -1,4 +1,13 @@
 venv/
+**/__pycache__/**
+run_dir/
+*.ipynb
+*.log
+.DS_Store
+.next/cache/
+node_modules/.cache/
+room-booking-app/**
+venv/
 ENV/
 .venv/
 node_modules/
