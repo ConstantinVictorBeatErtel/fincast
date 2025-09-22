@@ -621,7 +621,7 @@ async function calculatePortfolioBetaAlternative(returns, weights, startDate, en
     // Fetch SPY data using our yfinance-data endpoint
     const baseUrl = process.env.VERCEL_URL 
       ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3001';
+      : 'http://localhost:3000';
 
     const spyResponse = await fetch(`${baseUrl}/api/yfinance-data?ticker=SPY`, {
       method: 'GET',
