@@ -2,6 +2,7 @@ import json
 import math
 import os
 import urllib.parse
+import time
 from http.server import BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 
@@ -9,10 +10,23 @@ try:
     import yfinance as yf
     import pandas as pd
     import numpy as np
-except Exception:
+    import requests
+
+    # Configure session with better headers and timeout
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
+
+    # Set global yfinance session
+    yf.utils.get_json = lambda url, proxy=None, session=session: session.get(url, proxies=proxy, timeout=30).json()
+
+except Exception as e:
+    print(f"Import error: {str(e)}")
     yf = None
     pd = None
     np = None
+    session = None
 
 
 def _safe_float(value, default=0.0):
@@ -23,6 +37,29 @@ def _safe_float(value, default=0.0):
         return f
     except Exception:
         return default
+
+
+def _retry_yfinance_call(func, max_retries=3, delay=1):
+    """Retry yfinance calls with exponential backoff to handle rate limiting"""
+    for attempt in range(max_retries):
+        try:
+            result = func()
+            return result
+        except Exception as e:
+            error_msg = str(e).lower()
+            if '429' in error_msg or 'too many requests' in error_msg or 'rate limit' in error_msg:
+                if attempt < max_retries - 1:
+                    wait_time = delay * (2 ** attempt)  # Exponential backoff
+                    print(f"Rate limited, waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"Max retries exceeded due to rate limiting: {str(e)}")
+                    raise
+            else:
+                print(f"Non-rate-limit error: {str(e)}")
+                raise
+    return None
 
 
 def _fetch_spy_data(start_date, end_date):
@@ -38,10 +75,15 @@ def _fetch_spy_data(start_date, end_date):
             start_date = datetime.strptime(start_date, '%Y-%m-%d')
         if isinstance(end_date, str):
             end_date = datetime.strptime(end_date, '%Y-%m-%d')
-        
-        # Fetch SPY data
-        spy = yf.Ticker("SPY")
-        spy_data = spy.history(start=start_date, end=end_date)
+
+        # Fetch SPY data with retry mechanism
+        def get_spy_data():
+            spy = yf.Ticker("SPY")
+            return spy.history(start=start_date, end=end_date)
+
+        spy_data = _retry_yfinance_call(get_spy_data)
+        if spy_data is None:
+            return 500, {"error": "Failed to fetch SPY data after retries"}
         
         if spy_data.empty:
             return 404, {"error": "No SPY data found for the given date range"}
@@ -72,20 +114,33 @@ def _fetch_ticker_payload(ticker: str):
     if yf is None:
         return 500, {"error": "yfinance not available in this runtime"}
 
-    t = yf.Ticker(ticker)
+    try:
+        t = _retry_yfinance_call(lambda: yf.Ticker(ticker))
+        if t is None:
+            return 500, {"error": "Failed to create yfinance Ticker after retries"}
+    except Exception as e:
+        return 500, {"error": f"Failed to create yfinance Ticker: {str(e)}"}
 
     info = {}
     try:
-        info = t.info or {}
-    except Exception:
+        info = _retry_yfinance_call(lambda: t.info or {})
+        if info is None:
+            info = {}
+    except Exception as e:
+        print(f"Warning: Failed to get ticker info for {ticker}: {str(e)}")
         info = {}
 
     current_price = 0
     try:
-        hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
-        if hist is not None and not hist.empty:
-            current_price = _safe_float(hist['Close'].iloc[-1])
-    except Exception:
+        def get_price_history():
+            hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
+            if hist is not None and not hist.empty:
+                return _safe_float(hist['Close'].iloc[-1])
+            return 0
+
+        current_price = _retry_yfinance_call(get_price_history) or 0
+    except Exception as e:
+        print(f"Warning: Failed to get price history for {ticker}: {str(e)}")
         pass
 
     fy_data = {
@@ -104,14 +159,25 @@ def _fetch_ticker_payload(ticker: str):
     historical = []
 
     try:
-        is_df = t.income_stmt
-        try:
-            cf_df = t.cash_flow
-        except Exception:
+        def get_financial_statements():
+            is_df = t.income_stmt
+            cf_df = None
             try:
-                cf_df = t.cashflow
+                cf_df = t.cash_flow
             except Exception:
-                cf_df = None
+                try:
+                    cf_df = t.cashflow
+                except Exception as e:
+                    print(f"Warning: Failed to get cash flow data for {ticker}: {str(e)}")
+                    cf_df = None
+            return is_df, cf_df
+
+        financial_data = _retry_yfinance_call(get_financial_statements)
+        if financial_data:
+            is_df, cf_df = financial_data
+        else:
+            print(f"Warning: Failed to get financial statements for {ticker} after retries")
+            is_df, cf_df = None, None
 
         if is_df is not None and not is_df.empty:
             cols = list(is_df.columns)[:4]
@@ -209,8 +275,10 @@ def _fetch_ticker_payload(ticker: str):
             fy_data["fcf"] = fcf_latest
             if fy_data["revenue"]:
                 fy_data["fcf_margin_pct"] = (fcf_latest / fy_data["revenue"]) * 100.0
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: Failed to process financial statements for {ticker}: {str(e)}")
+        # Ensure we still have basic structure even if data processing fails
+        historical = []
 
     company_name = info.get('longName') or info.get('shortName') or ticker
     shares_outstanding = _safe_float(info.get('sharesOutstanding', 0))
@@ -272,7 +340,9 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         except Exception as e:
-            err = json.dumps({'error': str(e)}).encode('utf-8')
+            error_msg = f"Error in py-yf handler: {str(e)}"
+            print(error_msg)
+            err = json.dumps({'error': error_msg}).encode('utf-8')
             self.send_response(500)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
