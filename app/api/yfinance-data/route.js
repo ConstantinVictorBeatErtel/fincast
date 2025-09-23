@@ -26,32 +26,50 @@ async function generateFallbackFinancialData(ticker) {
     const companyName = quote.longName || quote.shortName || ticker;
     const currency = quote.currency || 'USD';
 
-    // Get financial statements
-    const fundamentals = await yahooFinance.fundamentals(ticker, {
-      modules: ['incomeStatementHistory', 'cashflowStatementHistory', 'balanceSheetHistory']
-    });
+    // Get financial statements using quoteSummary
+    const modules = [
+      'price',
+      'summaryDetail',
+      'defaultKeyStatistics',
+      'financialData',
+      'summaryProfile',
+      'incomeStatementHistory',
+      'cashflowStatementHistory'
+    ];
 
-    const incomeStatements = fundamentals?.incomeStatementHistory?.incomeStatementHistory || [];
-    const cashFlowStatements = fundamentals?.cashflowStatementHistory?.cashflowStatements || [];
+    const summary = await yahooFinance.quoteSummary(ticker, { modules });
+    const incomeStatements = summary?.incomeStatementHistory?.incomeStatementHistory || [];
+    const cashFlowStatements = summary?.cashflowStatementHistory?.cashflowStatements || [];
 
     // Process historical financial data
     const historical = [];
     const years = Math.min(4, incomeStatements.length); // Get up to 4 years of data
 
+    // Helper function to extract numeric values from yahoo-finance2 objects
+    const toNumber = (v) => {
+      if (typeof v === 'number') return v;
+      if (v && typeof v === 'object') {
+        if (typeof v.raw === 'number') return v.raw;
+        if (typeof v.longFmt === 'string') return Number(v.longFmt.replace(/[^\d.-]/g, '')) || 0;
+        if (typeof v.fmt === 'string') return Number(v.fmt.replace(/[^\d.-]/g, '')) || 0;
+      }
+      return Number(v) || 0;
+    };
+
     for (let i = 0; i < years; i++) {
       const income = incomeStatements[i] || {};
       const cashflow = cashFlowStatements[i] || {};
 
-      // Extract financial metrics
-      const revenue = safeFloat(income.totalRevenue) / 1_000_000; // Convert to millions
-      const grossProfit = safeFloat(income.grossProfit) / 1_000_000;
-      const ebitda = safeFloat(income.ebitda) / 1_000_000;
-      const netIncome = safeFloat(income.netIncome) / 1_000_000;
-      const eps = safeFloat(income.basicEPS);
+      // Extract financial metrics using toNumber helper
+      const revenue = toNumber(income.totalRevenue) / 1_000_000; // Convert to millions
+      const grossProfit = toNumber(income.grossProfit) / 1_000_000;
+      const ebitda = toNumber(income.ebitda) / 1_000_000;
+      const netIncome = toNumber(income.netIncome) / 1_000_000;
+      const eps = toNumber(income.dilutedEPS || income.basicEPS);
 
       // Free cash flow calculation
-      const operatingCashFlow = safeFloat(cashflow.totalCashFromOperatingActivities) / 1_000_000;
-      const capex = safeFloat(cashflow.capitalExpenditures) / 1_000_000;
+      const operatingCashFlow = toNumber(cashflow.totalCashFromOperatingActivities || cashflow.operatingCashflow) / 1_000_000;
+      const capex = toNumber(cashflow.capitalExpenditures) / 1_000_000;
       const fcf = operatingCashFlow + capex; // capex is usually negative
 
       // Calculate margins
@@ -94,14 +112,14 @@ async function generateFallbackFinancialData(ticker) {
     const latestIncome = incomeStatements[0] || {};
     const latestCashflow = cashFlowStatements[0] || {};
 
-    const latestRevenue = safeFloat(latestIncome.totalRevenue);
-    const latestGrossProfit = safeFloat(latestIncome.grossProfit);
-    const latestEbitda = safeFloat(latestIncome.ebitda);
-    const latestNetIncome = safeFloat(latestIncome.netIncome);
-    const latestEps = safeFloat(latestIncome.basicEPS);
+    const latestRevenue = toNumber(latestIncome.totalRevenue);
+    const latestGrossProfit = toNumber(latestIncome.grossProfit);
+    const latestEbitda = toNumber(latestIncome.ebitda);
+    const latestNetIncome = toNumber(latestIncome.netIncome);
+    const latestEps = toNumber(latestIncome.dilutedEPS || latestIncome.basicEPS);
 
-    const latestOCF = safeFloat(latestCashflow.totalCashFromOperatingActivities);
-    const latestCapex = safeFloat(latestCashflow.capitalExpenditures);
+    const latestOCF = toNumber(latestCashflow.totalCashFromOperatingActivities || latestCashflow.operatingCashflow);
+    const latestCapex = toNumber(latestCashflow.capitalExpenditures);
     const latestFCF = latestOCF + latestCapex;
 
     const fy24_financials = {
@@ -117,11 +135,15 @@ async function generateFallbackFinancialData(ticker) {
       fcf_margin_pct: latestRevenue > 0 ? (latestFCF / latestRevenue) * 100 : 0
     };
 
+    const price = summary?.price || {};
+    const summaryDetail = summary?.summaryDetail || {};
+    const keyStats = summary?.defaultKeyStatistics || {};
+
     const market_data = {
-      current_price: currentPrice,
-      market_cap: safeFloat(quote.marketCap),
-      enterprise_value: safeFloat(quote.enterpriseValue),
-      pe_ratio: safeFloat(quote.trailingPE)
+      current_price: currentPrice || toNumber(price.regularMarketPrice),
+      market_cap: toNumber(summaryDetail.marketCap || price.marketCap),
+      enterprise_value: toNumber(keyStats.enterpriseValue),
+      pe_ratio: toNumber(summaryDetail.trailingPE)
     };
 
     return {
@@ -204,10 +226,12 @@ export async function GET(request) {
           const sameHost = reqHost && (ext.host === reqHost || ext.host === reqHost?.replace(/^https?:\/\//, ''));
           const samePath = /\/api\/yfinance-data\/?$/.test(ext.pathname);
           if (sameHost && samePath) {
-            console.error('PY_YF_URL points to this same route, causing recursion. Update PY_YF_URL to your Python function path.');
-            throw new Error('PY_YF_URL misconfigured (recursive)');
+            console.error('PY_YF_URL points to this same route, causing recursion. Skipping external call.');
+            throw new Error('Recursive URL detected');
           }
-        } catch (_) {}
+        } catch (parseError) {
+          console.warn('Could not parse PY_YF_URL for recursion check:', parseError.message);
+        }
 
         // Fetch with timeout and capture body for diagnostics
         const controller = new AbortController();

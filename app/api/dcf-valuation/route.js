@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { headers as nextHeaders } from 'next/headers';
+import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
 
 // Function to get exchange rate from currency to USD
