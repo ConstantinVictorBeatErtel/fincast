@@ -229,40 +229,79 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
     // Prefer external Python API in prod
     const isProd = !!process.env.VERCEL_URL || process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
     const externalPyApi = process.env.PY_YF_URL;
+    
     if (isProd && externalPyApi) {
+      console.log(`[Vercel] Using external Python API: ${externalPyApi}`);
       const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
       const res = await fetch(url, { method: 'GET' });
+      console.log(`[Vercel] External API response: ${res.status} ${res.statusText}`);
+      
       if (res.ok) {
         const json = await res.json();
-        if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) return json;
+        console.log(`[Vercel] External API data keys:`, Object.keys(json || {}));
+        if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) {
+          console.log(`[Vercel] External API success: ${json.historical_financials.length} historical records`);
+          return json;
+        }
+      } else {
+        const errorText = await res.text();
+        console.log(`[Vercel] External API error: ${errorText.substring(0, 200)}`);
       }
+    } else if (isProd) {
+      console.log(`[Vercel] No PY_YF_URL set, falling back to local script`);
     }
 
     // Dev/local: run python script directly
+    console.log(`[Local] Running Python script for ${ticker}`);
     const pythonCmd = `${process.cwd()}/venv/bin/python3`;
     const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
     const isDarwin = process.platform === 'darwin';
     const isNodeRosetta = process.arch === 'x64';
     const cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
     const args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
+    
     const py = await new Promise((resolve) => {
       try {
         const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
         let stdout = '';
+        let stderr = '';
         child.stdout.on('data', (d) => { stdout += d.toString(); });
+        child.stderr.on('data', (d) => { stderr += d.toString(); });
         child.on('close', (code) => {
-          if (code !== 0) return resolve(null);
-          try { resolve(JSON.parse(stdout)); } catch { resolve(null); }
+          console.log(`[Local] Python script exit code: ${code}`);
+          if (code !== 0) {
+            console.log(`[Local] Python script stderr: ${stderr}`);
+            return resolve(null);
+          }
+          try { 
+            const result = JSON.parse(stdout);
+            console.log(`[Local] Python script success: ${Array.isArray(result.historical_financials) ? result.historical_financials.length : 0} historical records`);
+            resolve(result);
+          } catch (e) {
+            console.log(`[Local] Python script JSON parse error: ${e.message}`);
+            console.log(`[Local] Python script stdout: ${stdout.substring(0, 200)}`);
+            resolve(null);
+          }
         });
-        child.on('error', () => resolve(null));
-      } catch {
+        child.on('error', (err) => {
+          console.log(`[Local] Python script spawn error: ${err.message}`);
+          resolve(null);
+        });
+      } catch (e) {
+        console.log(`[Local] Python script setup error: ${e.message}`);
         resolve(null);
       }
     });
-    if (py && Array.isArray(py.historical_financials) && py.historical_financials.length > 0) return py;
+    
+    if (py && Array.isArray(py.historical_financials) && py.historical_financials.length > 0) {
+      console.log(`[Local] Python script success: ${py.historical_financials.length} historical records`);
+      return py;
+    }
 
-    // No fallback to internal route - only use external service or local script
-  } catch {}
+    console.log(`[Error] All data sources failed for ${ticker}`);
+  } catch (e) {
+    console.log(`[Error] fetchYFinanceDataDirect error: ${e.message}`);
+  }
   return null;
 }
 
