@@ -69,35 +69,69 @@ export async function GET(request) {
     if (isProd && externalPyApi) {
       try {
         let url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
-        // Prevent recursion if PY_YF_URL points to this same route on the same host
+        
+        // Check if this is an internal call (same route) and handle it directly
         try {
           const ext = new URL(url);
           const reqHost = request.headers.get('x-vercel-deployment-url') || request.headers.get('host');
           const sameHost = reqHost && (ext.host === reqHost || ext.host === reqHost?.replace(/^https?:\/\//, ''));
           const samePath = /\/api\/yfinance-data\/?$/.test(ext.pathname);
+          
           if (sameHost && samePath) {
-            console.error('PY_YF_URL points to this same route, causing recursion. Skipping external call.');
-            throw new Error('Recursive URL detected');
+            console.log('PY_YF_URL points to this same route - handling internally to avoid recursion');
+            // This is an internal call, run the Python script directly
+            result = await runLocalPython();
+            if (result) {
+              console.log('Using internal Python script result (prod)');
+            }
+          } else {
+            // External call with authentication bypass headers
+            const headers = { 'Content-Type': 'application/json' };
+            if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+              headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+            }
+            if (process.env.VERCEL_PROTECTION_BYPASS) {
+              headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+            }
+
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15000);
+            const response = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+            clearTimeout(timeout);
+            if (response.ok) {
+              const json = await response.json();
+              if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) {
+                result = json;
+                console.log('Using external PY_YF_URL result (prod)');
+              }
+            } else {
+              let bodyText = '';
+              try { bodyText = await response.text(); } catch {}
+              console.warn('External PY_YF_URL failed:', response.status, bodyText?.slice(0, 300));
+            }
           }
         } catch (parseError) {
           console.warn('Could not parse PY_YF_URL for recursion check:', parseError.message);
-        }
-
-        // Fetch with timeout and capture body for diagnostics
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000);
-        const response = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json' }, signal: controller.signal });
-        clearTimeout(timeout);
-        if (response.ok) {
-          const json = await response.json();
-          if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) {
-            result = json;
-            console.log('Using external PY_YF_URL result (prod)');
+          // Fallback to external call
+          const headers = { 'Content-Type': 'application/json' };
+          if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+            headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
           }
-        } else {
-          let bodyText = '';
-          try { bodyText = await response.text(); } catch {}
-          console.warn('External PY_YF_URL failed:', response.status, bodyText?.slice(0, 300));
+          if (process.env.VERCEL_PROTECTION_BYPASS) {
+            headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+          }
+          
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 15000);
+          const response = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+          clearTimeout(timeout);
+          if (response.ok) {
+            const json = await response.json();
+            if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) {
+              result = json;
+              console.log('Using external PY_YF_URL result (prod fallback)');
+            }
+          }
         }
       } catch (e) {
         console.warn('External PY_YF_URL error:', e?.message);

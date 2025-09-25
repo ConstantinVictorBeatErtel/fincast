@@ -233,7 +233,17 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
     if (isProd && externalPyApi) {
       console.log(`[Vercel] Using external Python API: ${externalPyApi}`);
       const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
-      const res = await fetch(url, { method: 'GET' });
+      
+      // Add authentication bypass headers for internal Vercel routes
+      const headers = { 'Content-Type': 'application/json' };
+      if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+        headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+      }
+      if (process.env.VERCEL_PROTECTION_BYPASS) {
+        headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+      }
+      
+      const res = await fetch(url, { method: 'GET', headers });
       console.log(`[Vercel] External API response: ${res.status} ${res.statusText}`);
       
       if (res.ok) {
