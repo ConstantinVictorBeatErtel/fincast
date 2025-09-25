@@ -45,12 +45,12 @@ export default function DCFValuation() {
 
   // Helper to check if critical info is missing
   const isValuationIncomplete = (data) => {
-    // You can add more fields if needed
-    return (
-      !data ||
-      !data.currentSharePrice || data.currentSharePrice === 0 ||
-      !data.fairValue || data.fairValue === 0
-    );
+    if (!data) return true;
+    // If we have parsed projections or rawForecast text, treat as complete for UI rendering
+    if (Array.isArray(data.projections) && data.projections.length > 0) return false;
+    if (typeof data.rawForecast === 'string' && data.rawForecast.trim().length > 0) return false;
+    // Fallback to legacy completeness check
+    return (!data.currentSharePrice || data.currentSharePrice === 0 || !data.fairValue || data.fairValue === 0);
   };
 
   const handleSubmit = async (e, isRetry = false) => {
@@ -66,7 +66,7 @@ export default function DCFValuation() {
     }
 
     try {
-      const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}`);
+      const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}&llm=1`);
       let data;
       
       try {
@@ -110,6 +110,117 @@ export default function DCFValuation() {
         throw new Error('Invalid data structure: Missing forecast data');
       }
 
+      // Normalize projections array for charts/tables
+      try {
+        if (!Array.isArray(data.projections) || data.projections.length === 0) {
+          // From tableData (backend older format)
+          if (Array.isArray(data.tableData) && data.tableData.length > 0) {
+            data.projections = data.tableData.map(row => {
+              const revenue = Number(row.revenue || 0);
+              const grossMargin = Number(row.grossMargin || 0);
+              const ebitdaMargin = Number(row.ebitdaMargin || 0);
+              const fcfMargin = Number(row.fcfMargin || 0);
+              const netIncome = Number(row.netIncome || 0);
+              return {
+                year: String(row.year || ''),
+                revenue,
+                revenueGrowth: Number(row.revenueGrowth || 0),
+                grossProfit: revenue * (grossMargin / 100),
+                grossMargin,
+                ebitda: revenue * (ebitdaMargin / 100),
+                ebitdaMargin,
+                freeCashFlow: revenue * (fcfMargin / 100),
+                fcf: revenue * (fcfMargin / 100),
+                fcfMargin,
+                netIncome,
+                netIncomeMargin: revenue > 0 ? (netIncome / revenue) * 100 : 0,
+                eps: Number(row.eps || 0),
+              };
+            });
+          } else if (typeof data.rawForecast === 'string') {
+            // Fallback: parse rawForecast table text
+            const lines = data.rawForecast.split('\n').map(l => l.trim()).filter(Boolean);
+            let inTable = false;
+            const parsed = [];
+            for (const line of lines) {
+              if (!inTable) {
+                if (/^Year\s*\|/i.test(line)) { inTable = true; }
+                continue;
+              }
+              if (/^-{2,}/.test(line)) continue;
+              if (/^Fair Value Calculation:/i.test(line) || /^Exit Multiple Valuation:/i.test(line)) break;
+              const cols = line.split('|').map(c => c.trim());
+              if (!cols.length || isNaN(Number(cols[0].replace(/[^\d]/g, '')))) continue;
+              const parseNum = (v) => {
+                if (!v) return 0;
+                const n = Number(String(v).replace(/[^\d.\-]/g, ''));
+                return isNaN(n) ? 0 : n;
+              };
+              const year = cols[0];
+              const revenue = parseNum(cols[1]);
+              const revenueGrowth = parseNum(cols[2]);
+              const grossMargin = parseNum(cols[3]);
+              const ebitdaMargin = parseNum(cols[4]);
+              const fcfMargin = parseNum(cols[5]);
+              const netIncome = parseNum(cols[6]);
+              const eps = parseNum(cols[7]);
+              parsed.push({
+                year,
+                revenue,
+                revenueGrowth,
+                grossProfit: revenue * (grossMargin / 100),
+                grossMargin,
+                ebitda: revenue * (ebitdaMargin / 100),
+                ebitdaMargin,
+                freeCashFlow: revenue * (fcfMargin / 100),
+                fcf: revenue * (fcfMargin / 100),
+                fcfMargin,
+                netIncome,
+                netIncomeMargin: revenue > 0 ? (netIncome / revenue) * 100 : 0,
+                eps,
+              });
+            }
+            if (parsed.length > 0) data.projections = parsed;
+          }
+        }
+      } catch (normErr) {
+        console.warn('Projection normalization failed:', normErr);
+      }
+
+      // Align 2024 forecast row with historical FY2024 data so both views match
+      try {
+        if (Array.isArray(data.projections) && data.projections.length > 0 && Array.isArray(data.historicalFinancials)) {
+          const hist24 = data.historicalFinancials.find(h => String(h.year).toUpperCase().includes('FY24') || String(h.year).includes('2024'));
+          const idx2024 = data.projections.findIndex(p => String(p.year) === '2024');
+          if (hist24 && idx2024 !== -1) {
+            const rev = Number(hist24.revenue || 0);
+            const gp = Number(hist24.grossProfit || 0);
+            const ebitda = Number(hist24.ebitda || 0);
+            const ni = Number(hist24.netIncome || 0);
+            const fcf = Number(hist24.fcf || 0);
+            const eps = Number(hist24.eps || 0);
+            data.projections[idx2024] = {
+              ...data.projections[idx2024],
+              revenue: rev,
+              grossProfit: gp,
+              grossMargin: rev > 0 ? (gp / rev) * 100 : 0,
+              ebitda: ebitda,
+              ebitdaMargin: rev > 0 ? (ebitda / rev) * 100 : 0,
+              freeCashFlow: fcf,
+              fcf: fcf,
+              fcfMargin: rev > 0 ? (fcf / rev) * 100 : 0,
+              netIncome: ni,
+              netIncomeMargin: rev > 0 ? (ni / rev) * 100 : 0,
+              eps: eps,
+              // Copy historical 2024 revenue growth if available
+              revenueGrowth: typeof hist24.revenueGrowth === 'number' ? Number(hist24.revenueGrowth) : (data.projections[idx2024].revenueGrowth || 0)
+            };
+          }
+        }
+      } catch (alignErr) {
+        console.warn('Failed to align 2024 projection with historical:', alignErr);
+      }
+
       // Check for missing critical info and retry once if needed
       if (isValuationIncomplete(data) && !hasRetried) {
         setRetrying(true);
@@ -145,7 +256,7 @@ export default function DCFValuation() {
     setError(null);
 
     try {
-      const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}`, {
+      const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}&llm=1`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -168,6 +279,115 @@ export default function DCFValuation() {
 
       // Set the new valuation - handle both direct response and nested response
       const newValuation = data.valuation || data;
+
+      // Normalize projections to ensure charts always render
+      try {
+        if (!Array.isArray(data.projections) || data.projections.length === 0) {
+          if (Array.isArray(data.tableData) && data.tableData.length > 0) {
+            data.projections = data.tableData.map(row => {
+              const revenue = Number(row.revenue || 0);
+              const grossMargin = Number(row.grossMargin || 0);
+              const ebitdaMargin = Number(row.ebitdaMargin || 0);
+              const fcfMargin = Number(row.fcfMargin || 0);
+              const netIncome = Number(row.netIncome || 0);
+              return {
+                year: String(row.year || ''),
+                revenue,
+                revenueGrowth: Number(row.revenueGrowth || 0),
+                grossProfit: revenue * (grossMargin / 100),
+                grossMargin,
+                ebitda: revenue * (ebitdaMargin / 100),
+                ebitdaMargin,
+                freeCashFlow: revenue * (fcfMargin / 100),
+                fcf: revenue * (fcfMargin / 100),
+                fcfMargin,
+                netIncome,
+                netIncomeMargin: revenue > 0 ? (netIncome / revenue) * 100 : 0,
+                eps: Number(row.eps || 0),
+              };
+            });
+          } else if (typeof data.rawForecast === 'string') {
+            const lines = data.rawForecast.split('\n').map(l => l.trim()).filter(Boolean);
+            let inTable = false;
+            const parsed = [];
+            for (const line of lines) {
+              if (!inTable) {
+                if (/^Year\s*\|/i.test(line)) { inTable = true; }
+                continue;
+              }
+              if (/^-{2,}/.test(line)) continue;
+              if (/^Fair Value Calculation:/i.test(line) || /^Exit Multiple Valuation:/i.test(line)) break;
+              const cols = line.split('|').map(c => c.trim());
+              if (!cols.length || isNaN(Number(cols[0].replace(/[^\d]/g, '')))) continue;
+              const parseNum = (v) => {
+                if (!v) return 0;
+                const n = Number(String(v).replace(/[^\d.\-]/g, ''));
+                return isNaN(n) ? 0 : n;
+              };
+              const year = cols[0];
+              const revenue = parseNum(cols[1]);
+              const revenueGrowth = parseNum(cols[2]);
+              const grossMargin = parseNum(cols[3]);
+              const ebitdaMargin = parseNum(cols[4]);
+              const fcfMargin = parseNum(cols[5]);
+              const netIncome = parseNum(cols[6]);
+              const eps = parseNum(cols[7]);
+              parsed.push({
+                year,
+                revenue,
+                revenueGrowth,
+                grossProfit: revenue * (grossMargin / 100),
+                grossMargin,
+                ebitda: revenue * (ebitdaMargin / 100),
+                ebitdaMargin,
+                freeCashFlow: revenue * (fcfMargin / 100),
+                fcf: revenue * (fcfMargin / 100),
+                fcfMargin,
+                netIncome,
+                netIncomeMargin: revenue > 0 ? (netIncome / revenue) * 100 : 0,
+                eps,
+              });
+            }
+            if (parsed.length > 0) data.projections = parsed;
+          }
+        }
+      } catch (normErr) {
+        console.warn('Projection normalization (feedback) failed:', normErr);
+      }
+
+      // Align 2024 forecast row with historical FY2024 data on feedback path
+      try {
+        if (Array.isArray(data.projections) && data.projections.length > 0 && Array.isArray(data.historicalFinancials)) {
+          const hist24 = data.historicalFinancials.find(h => String(h.year).toUpperCase().includes('FY24') || String(h.year).includes('2024'));
+          const idx2024 = data.projections.findIndex(p => String(p.year) === '2024');
+          if (hist24 && idx2024 !== -1) {
+            const rev = Number(hist24.revenue || 0);
+            const gp = Number(hist24.grossProfit || 0);
+            const ebitda = Number(hist24.ebitda || 0);
+            const ni = Number(hist24.netIncome || 0);
+            const fcf = Number(hist24.fcf || 0);
+            const eps = Number(hist24.eps || 0);
+            data.projections[idx2024] = {
+              ...data.projections[idx2024],
+              revenue: rev,
+              grossProfit: gp,
+              grossMargin: rev > 0 ? (gp / rev) * 100 : 0,
+              ebitda: ebitda,
+              ebitdaMargin: rev > 0 ? (ebitda / rev) * 100 : 0,
+              freeCashFlow: fcf,
+              fcf: fcf,
+              fcfMargin: rev > 0 ? (fcf / rev) * 100 : 0,
+              netIncome: ni,
+              netIncomeMargin: rev > 0 ? (ni / rev) * 100 : 0,
+              eps: eps,
+              // Copy historical 2024 revenue growth if available
+              revenueGrowth: typeof hist24.revenueGrowth === 'number' ? Number(hist24.revenueGrowth) : (data.projections[idx2024].revenueGrowth || 0)
+            };
+          }
+        }
+      } catch (alignErr) {
+        console.warn('Failed to align 2024 projection with historical (feedback):', alignErr);
+      }
 
       // Guard: only replace current valuation if feedback response is usable
       const hasUsableForecast = !!newValuation?.rawForecast &&
@@ -261,22 +481,36 @@ export default function DCFValuation() {
       });
       const proj = Array.isArray(valuation.projections) ? valuation.projections : [];
 
-      const headers = ['Metric', ...hist.map(h => h.year), ...proj.map(p => p.year)];
+      // Normalize year labels to FYXX format and de-duplicate 2024 between historical and projections
+      const normalizeYearLabel = (y) => {
+        const s = String(y || '');
+        const m = s.match(/(20\d{2})/);
+        if (m) {
+          return `FY${m[1].slice(2)}`;
+        }
+        if (s.toUpperCase().startsWith('FY')) return s;
+        return s;
+      };
+      const histLabels = hist.map(h => normalizeYearLabel(h.year));
+      const histLabelSet = new Set(histLabels);
+      const projFiltered = proj.filter(p => !histLabelSet.has(normalizeYearLabel(p.year)));
+
+      const headers = ['Metric', ...histLabels, ...projFiltered.map(p => normalizeYearLabel(p.year))];
 
       const fmt1 = (v) => (typeof v === 'number' ? v.toFixed(1) : '');
       const fmt2 = (v) => (typeof v === 'number' ? v.toFixed(2) : '');
 
-      const rowRevenue = ['Revenue ($M)', ...hist.map(h => fmt1(h.revenue)), ...proj.map(p => fmt1(p.revenue))];
-      const rowRevGrowth = ['Revenue Growth (%)', ...hist.map((h, i) => (i === 0 ? '/' : fmt1(h.revenueGrowth))), ...proj.map(p => fmt1(p.revenueGrowth))];
-      const rowGP = ['Gross Profit ($M)', ...hist.map(h => fmt1(h.grossProfit)), ...proj.map(p => fmt1(p.grossProfit))];
-      const rowGM = ['Gross Margin (%)', ...hist.map(h => fmt1(h.grossMargin)), ...proj.map(p => fmt1(p.grossMargin))];
-      const rowEBITDA = ['EBITDA ($M)', ...hist.map(h => fmt1(h.ebitda)), ...proj.map(p => fmt1(p.ebitda))];
-      const rowEBITDAM = ['EBITDA Margin (%)', ...hist.map(h => fmt1(h.ebitdaMargin)), ...proj.map(p => fmt1(p.ebitdaMargin))];
-      const rowNI = ['Net Income ($M)', ...hist.map(h => fmt1(h.netIncome)), ...proj.map(p => fmt1(p.netIncome))];
-      const rowNIM = ['Net Income Margin (%)', ...hist.map(h => fmt1(h.netIncomeMargin)), ...proj.map(p => fmt1(p.netIncomeMargin))];
-      const rowEPS = ['EPS ($)', ...hist.map(h => fmt2(h.eps)), ...proj.map(p => fmt2(p.eps))];
-      const rowFCF = ['FCF ($M)', ...hist.map(h => fmt1(h.fcf)), ...proj.map(p => fmt1(p.fcf))];
-      const rowFCFM = ['FCF Margin (%)', ...hist.map(h => fmt1(h.fcfMargin)), ...proj.map(p => fmt1(p.fcfMargin))];
+      const rowRevenue = ['Revenue ($M)', ...hist.map(h => fmt1(h.revenue)), ...projFiltered.map(p => fmt1(p.revenue))];
+      const rowRevGrowth = ['Revenue Growth (%)', ...hist.map((h, i) => (i === 0 ? '/' : fmt1(h.revenueGrowth))), ...projFiltered.map(p => fmt1(p.revenueGrowth))];
+      const rowGP = ['Gross Profit ($M)', ...hist.map(h => fmt1(h.grossProfit)), ...projFiltered.map(p => fmt1(p.grossProfit))];
+      const rowGM = ['Gross Margin (%)', ...hist.map(h => fmt1(h.grossMargin)), ...projFiltered.map(p => fmt1(p.grossMargin))];
+      const rowEBITDA = ['EBITDA ($M)', ...hist.map(h => fmt1(h.ebitda)), ...projFiltered.map(p => fmt1(p.ebitda))];
+      const rowEBITDAM = ['EBITDA Margin (%)', ...hist.map(h => fmt1(h.ebitdaMargin)), ...projFiltered.map(p => fmt1(p.ebitdaMargin))];
+      const rowNI = ['Net Income ($M)', ...hist.map(h => fmt1(h.netIncome)), ...projFiltered.map(p => fmt1(p.netIncome))];
+      const rowNIM = ['Net Income Margin (%)', ...hist.map(h => fmt1(h.netIncomeMargin)), ...projFiltered.map(p => fmt1(p.netIncomeMargin))];
+      const rowEPS = ['EPS ($)', ...hist.map(h => fmt2(h.eps)), ...projFiltered.map(p => fmt2(p.eps))];
+      const rowFCF = ['FCF ($M)', ...hist.map(h => fmt1(h.fcf)), ...projFiltered.map(p => fmt1(p.fcf))];
+      const rowFCFM = ['FCF Margin (%)', ...hist.map(h => fmt1(h.fcfMargin)), ...projFiltered.map(p => fmt1(p.fcfMargin))];
 
       sheets.push({
         name: 'Performance',
@@ -334,6 +568,63 @@ export default function DCFValuation() {
         name: 'Analysis',
         data: analysisData
       });
+    }
+
+    // Add Calculation Details into Summary sheet for clearer derivation to fair value
+    try {
+      const lastProj = (Array.isArray(valuation.projections) && valuation.projections.length)
+        ? valuation.projections[valuation.projections.length - 1]
+        : null;
+      const calcRows = [];
+      if (valuation.method === 'exit-multiple') {
+        const type = valuation.exitMultipleType || 'P/E';
+        const multiple = valuation.exitMultipleValue || 0;
+        if (type === 'P/E' && lastProj) {
+          const eps = Number(lastProj.eps || 0);
+          const fair = eps * multiple;
+          calcRows.push(['Calculation Details']);
+          calcRows.push([`Fair Price = 2029 EPS × Multiple`]);
+          calcRows.push([`= ${eps.toFixed(2)} × ${multiple} = $${fair.toFixed(2)} per share`]);
+        } else if (type === 'EV/EBITDA' && lastProj) {
+          const ebitda = Number(lastProj.ebitda || 0);
+          const fairEV = ebitda * multiple;
+          calcRows.push(['Calculation Details']);
+          calcRows.push([`Fair EV ($M) = 2029 EBITDA × Multiple`]);
+          calcRows.push([`= ${ebitda.toFixed(1)} × ${multiple} = $${fairEV.toFixed(1)}M`]);
+          // Try to convert to per-share using current net debt
+          const evM = Number(valuation.sourceMetrics?.enterpriseValue || 0); // $M
+          const mktCap = Number(valuation.sourceMetrics?.marketCap || 0); // $
+          const mktCapM = mktCap ? mktCap / 1_000_000 : 0;
+          const netDebtM = (evM && mktCapM) ? (evM - mktCapM) : null;
+          const shares = Number(valuation.sourceMetrics?.sharesOutstanding || 0);
+          const sharesM = shares > 1000 ? shares / 1_000_000 : shares; // normalize
+          if (netDebtM != null && sharesM > 0) {
+            const equityM = fairEV - netDebtM;
+            const price = (equityM * 1_000_000) / (sharesM * 1_000_000); // simplify -> equityM/sharesM
+            calcRows.push([`Implied Equity ($M) = Fair EV − Net Debt = ${fairEV.toFixed(1)} − ${netDebtM.toFixed(1)} = ${equityM.toFixed(1)}M`]);
+            calcRows.push([`Implied Price = Implied Equity / Shares = ${equityM.toFixed(1)}M / ${sharesM.toFixed(1)}M = $${price.toFixed(2)} per share`]);
+          }
+        } else if (type === 'EV/FCF' && lastProj) {
+          const fcf = Number(lastProj.fcf || lastProj.freeCashFlow || 0);
+          const fairEV = fcf * multiple;
+          calcRows.push(['Calculation Details']);
+          calcRows.push([`Fair EV ($M) = 2029 FCF × Multiple`]);
+          calcRows.push([`= ${fcf.toFixed(1)} × ${multiple} = $${fairEV.toFixed(1)}M`]);
+        }
+      } else if (valuation.method === 'dcf' && lastProj) {
+        // Provide simple DCF line if provided by server as fair value
+        if (typeof valuation.fairValue === 'number') {
+          calcRows.push(['Calculation Details']);
+          calcRows.push([`DCF Fair Value ($M): ${valuation.fairValue.toFixed(1)} (see app for full breakdown)`]);
+        }
+      }
+      if (calcRows.length) {
+        // Append to Summary sheet
+        sheets[0].data.push([]);
+        sheets[0].data.push(...calcRows);
+      }
+    } catch (calcErr) {
+      console.warn('Failed to add calculation details:', calcErr);
     }
 
     // Create Excel file
@@ -648,7 +939,7 @@ export default function DCFValuation() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-6">
-                    {valuation.sections?.forecastTable && (
+                    {(Array.isArray(valuation.projections) && valuation.projections.length > 0) && (
                       <div>
                         <h3 className="text-lg font-semibold mb-4 text-gray-800">Financial Projections</h3>
                         <div className="bg-white border border-gray-200 rounded-lg p-6">
@@ -1201,15 +1492,22 @@ export default function DCFValuation() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-6">
-                    {valuation.latestDevelopments && (
+                    {(valuation.sonar || valuation.latestDevelopments) && (
                       <div>
                         <h3 className="text-lg font-semibold mb-4 text-gray-800">Latest Developments & Insights</h3>
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                           <div className="prose prose-sm max-w-none">
                             <div className="text-gray-700 leading-relaxed">
-                              {filterLatestDevelopments(valuation.latestDevelopments).split('\n').map((line, index) => (
-                                line.trim() === '' ? <div key={index} className="h-3"></div> : <div key={index} className="mb-2">{line}</div>
-                              ))}
+                              {(() => {
+                                const sonarText = valuation.sonar 
+                                  ? [valuation.sonar.mgmt_summary, valuation.sonar.guidance_summary, valuation.sonar.recent_developments]
+                                      .filter(Boolean)
+                                      .join('\n\n')
+                                  : valuation.latestDevelopments || '';
+                                return sonarText.split('\n').map((line, index) => (
+                                  line.trim() === '' ? <div key={index} className="h-3"></div> : <div key={index} className="mb-2">{line}</div>
+                                ));
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -1229,7 +1527,7 @@ export default function DCFValuation() {
                           <h4 className="text-md font-semibold mb-3 text-gray-700">Revenue & Growth</h4>
                           <ResponsiveContainer width="100%" height={300}>
                             {(() => {
-                              const histChartData = (valuation.historicalFinancials || []).map((h, i) => ({
+                              const histChartData = getSortedHistorical(valuation.historicalFinancials || []).map((h, i) => ({
                                 ...h,
                                 revenueGrowth: i === 0 ? undefined : h.revenueGrowth,
                               }));
@@ -1258,7 +1556,7 @@ export default function DCFValuation() {
                         <div>
                           <h4 className="text-md font-semibold mb-3 text-gray-700">Margins (%)</h4>
                           <ResponsiveContainer width="100%" height={300}>
-                            <LineChart data={valuation.historicalFinancials}>
+                            <LineChart data={getSortedHistorical(valuation.historicalFinancials)}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                               <XAxis dataKey="year" stroke="#6b7280" />
                               <YAxis stroke="#6b7280" />
@@ -1275,7 +1573,7 @@ export default function DCFValuation() {
                         <div>
                           <h4 className="text-md font-semibold mb-3 text-gray-700">Profitability</h4>
                           <ResponsiveContainer width="100%" height={300}>
-                            <ComposedChart data={valuation.historicalFinancials}>
+                            <ComposedChart data={getSortedHistorical(valuation.historicalFinancials)}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                               <XAxis dataKey="year" stroke="#6b7280" />
                               <YAxis yAxisId="left" stroke="#3b82f6" />
@@ -1297,7 +1595,7 @@ export default function DCFValuation() {
                         <div>
                           <h4 className="text-md font-semibold mb-3 text-gray-700">Cash Flow</h4>
                           <ResponsiveContainer width="100%" height={300}>
-                            <ComposedChart data={valuation.historicalFinancials}>
+                            <ComposedChart data={getSortedHistorical(valuation.historicalFinancials)}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                               <XAxis dataKey="year" stroke="#6b7280" />
                               <YAxis yAxisId="left" stroke="#3b82f6" />
@@ -1319,7 +1617,7 @@ export default function DCFValuation() {
                         <div>
                           <h4 className="text-md font-semibold mb-3 text-gray-700">EPS</h4>
                           <ResponsiveContainer width="100%" height={300}>
-                            <LineChart data={valuation.historicalFinancials}>
+                            <LineChart data={getSortedHistorical(valuation.historicalFinancials)}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                               <XAxis dataKey="year" stroke="#6b7280" />
                               <YAxis stroke="#6b7280" />
@@ -1339,7 +1637,7 @@ export default function DCFValuation() {
                             <thead>
                               <tr className="bg-gray-50">
                                 <th className="px-3 py-2 text-left font-medium text-gray-900 border-r">Metric</th>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <th key={index} className="px-3 py-2 text-center font-medium text-gray-900 border-r">
                                     {row.year}
                                   </th>
@@ -1350,7 +1648,7 @@ export default function DCFValuation() {
                               {/* Revenue Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Revenue ($M)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.revenue?.toFixed(1)}
                                   </td>
@@ -1360,7 +1658,7 @@ export default function DCFValuation() {
                               {/* Revenue Growth Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Revenue Growth (%)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {index === 0 ? 'NA' : row.revenueGrowth?.toFixed(1)}
                                   </td>
@@ -1370,7 +1668,7 @@ export default function DCFValuation() {
                               {/* Gross Profit Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Gross Profit ($M)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.grossProfit?.toFixed(1)}
                                   </td>
@@ -1380,7 +1678,7 @@ export default function DCFValuation() {
                               {/* Gross Margin Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Gross Margin (%)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.grossMargin?.toFixed(1)}
                                   </td>
@@ -1390,7 +1688,7 @@ export default function DCFValuation() {
                               {/* EBITDA Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EBITDA ($M)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.ebitda?.toFixed(1)}
                                   </td>
@@ -1400,7 +1698,7 @@ export default function DCFValuation() {
                               {/* EBITDA Margin Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">EBITDA Margin (%)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.ebitdaMargin?.toFixed(1)}
                                   </td>
@@ -1410,7 +1708,7 @@ export default function DCFValuation() {
                               {/* Net Income Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Net Income ($M)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.netIncome?.toFixed(1)}
                                   </td>
@@ -1420,7 +1718,7 @@ export default function DCFValuation() {
                               {/* Net Income Margin Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Net Income Margin (%)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.netIncomeMargin?.toFixed(1)}
                                   </td>
@@ -1430,7 +1728,7 @@ export default function DCFValuation() {
                               {/* EPS Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EPS ($)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.eps?.toFixed(2)}
                                   </td>
@@ -1440,7 +1738,7 @@ export default function DCFValuation() {
                               {/* FCF Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">FCF ($M)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.fcf?.toFixed(1)}
                                   </td>
@@ -1450,7 +1748,7 @@ export default function DCFValuation() {
                               {/* FCF Margin Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">FCF Margin (%)</td>
-                                {valuation.historicalFinancials?.map((row, index) => (
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.fcfMargin?.toFixed(1)}
                                   </td>
