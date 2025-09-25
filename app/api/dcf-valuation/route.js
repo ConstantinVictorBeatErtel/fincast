@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { headers as nextHeaders } from 'next/headers';
 import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
+import { spawn } from 'child_process';
 
 // Helper function to make OpenRouter API calls with timeout handling
 async function makeOpenRouterRequest(body, timeoutMs = 45000) {
@@ -100,7 +101,14 @@ export async function GET(request) {
     }
 
     const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-    const yfRes = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`);
+    const yfHeaders = { 'Content-Type': 'application/json' };
+      if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+      yfHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+      }
+      if (process.env.VERCEL_PROTECTION_BYPASS) {
+      yfHeaders['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+    }
+    const yfRes = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`, { headers: yfHeaders });
     if (!yfRes.ok) {
       const text = await yfRes.text().catch(() => '');
       return NextResponse.json({ error: `yfinance-data error: ${yfRes.status} ${text?.slice(0,200)}` }, { status: 500 });
@@ -110,8 +118,8 @@ export async function GET(request) {
     if (useLLM) {
       if (!process.env.OPENROUTER_API_KEY) {
         return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 500 });
-      }
-      try {
+          }
+          try {
         const sonar = await fetchLatestWithSonar(ticker).catch(() => null);
         let lastErr = null;
         let valuation = null;
@@ -165,13 +173,10 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Ticker symbol is required' }, { status: 400 });
     }
 
-    const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-    const yfRes = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`);
-    if (!yfRes.ok) {
-      const text = await yfRes.text().catch(() => '');
-      return NextResponse.json({ error: `yfinance-data error: ${yfRes.status} ${text?.slice(0,200)}` }, { status: 500 });
+    const yf = await fetchYFinanceDataDirect(ticker, request.headers).catch(() => null);
+    if (!yf) {
+      return NextResponse.json({ error: 'yfinance-data error: 401 (protection). Switched to direct fetch but failed. Check PY_YF_URL or Python runtime.' }, { status: 500 });
     }
-    const yf = await yfRes.json();
 
     if (!process.env.OPENROUTER_API_KEY) {
       return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 500 });
@@ -229,6 +234,61 @@ async function fetchLatestWithSonar(ticker) {
   }
 }
 
+// Direct yfinance fetch to avoid protected internal route
+async function fetchYFinanceDataDirect(ticker, hdrs) {
+  try {
+    // Prefer external Python API in prod
+    const isProd = !!process.env.VERCEL_URL || process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
+    const externalPyApi = process.env.PY_YF_URL;
+    if (isProd && externalPyApi) {
+      const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
+      const res = await fetch(url, { method: 'GET' });
+      if (res.ok) {
+        const json = await res.json();
+        if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) return json;
+      }
+    }
+
+    // Dev/local: run python script directly
+    const pythonCmd = `${process.cwd()}/venv/bin/python3`;
+    const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+    const isDarwin = process.platform === 'darwin';
+    const isNodeRosetta = process.arch === 'x64';
+    const cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
+    const args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
+    const py = await new Promise((resolve) => {
+      try {
+        const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        child.stdout.on('data', (d) => { stdout += d.toString(); });
+        child.on('close', (code) => {
+          if (code !== 0) return resolve(null);
+          try { resolve(JSON.parse(stdout)); } catch { resolve(null); }
+        });
+        child.on('error', () => resolve(null));
+      } catch {
+        resolve(null);
+      }
+    });
+    if (py && Array.isArray(py.historical_financials) && py.historical_financials.length > 0) return py;
+
+    // As a last resort in prod, call internal route with automation bypass only
+    if (isProd) {
+      const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '';
+      if (baseUrl) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+        const resp = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`, { headers });
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) return json;
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
 async function generateValuation(ticker, method, selectedMultiple, yf_data, sonarFull, userFeedback = '') {
   const mkNumber = (v) => Number(v || 0);
   const fy = yf_data?.fy24_financials || {};
@@ -236,9 +296,9 @@ async function generateValuation(ticker, method, selectedMultiple, yf_data, sona
   const companyName = yf_data?.company_name || ticker;
   
   // Restore original, detailed prompts with strict output format and Sonar + yfinance context
-  let prompt;
-  if (method === 'dcf') {
-    prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
+    let prompt;
+    if (method === 'dcf') {
+      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
 
 The company you will be analyzing is: ${(companyName)}
 
@@ -270,35 +330,35 @@ FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
 ${sonarFull || 'No Sonar data available'}
 
 4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
-  - Analyze historical revenue growth rates
-  - Consider industry trends and market conditions
-  - Estimate year-over-year revenue growth rates until 2029
-  - Calculate projected revenue figures for each year
+   - Analyze historical revenue growth rates
+   - Consider industry trends and market conditions
+   - Estimate year-over-year revenue growth rates until 2029
+   - Calculate projected revenue figures for each year
 
 5. Estimate gross margin:
-  - Review historical gross margin trends
-  - Consider factors that may impact future gross margins (e.g., cost of goods sold, pricing strategies)
-  - Project gross margin percentages for each year until 2029
+   - Review historical gross margin trends
+   - Consider factors that may impact future gross margins (e.g., cost of goods sold, pricing strategies)
+   - Project gross margin percentages for each year until 2029
 
 6. Calculate EBITDA margin:
-  - Analyze historical EBITDA margin trends
-  - Consider factors that may impact future EBITDA margins (e.g., operating expenses, efficiency improvements)
-  - Project EBITDA margin percentages for each year until 2029
+   - Analyze historical EBITDA margin trends
+   - Consider factors that may impact future EBITDA margins (e.g., operating expenses, efficiency improvements)
+   - Project EBITDA margin percentages for each year until 2029
 
 7. Determine FCF margin:
-  - Review historical FCF margin trends
-  - Consider factors that may impact future FCF margins (e.g., capital expenditures, working capital changes)
-  - Project FCF margin percentages for each year until 2029
+   - Review historical FCF margin trends
+   - Consider factors that may impact future FCF margins (e.g., capital expenditures, working capital changes)
+   - Project FCF margin percentages for each year until 2029
 
 8. Project net income:
-  - Use the projected revenue and margin figures to calculate net income for each year
-  - Consider factors such as tax rates and non-operating income/expenses
+   - Use the projected revenue and margin figures to calculate net income for each year
+   - Consider factors such as tax rates and non-operating income/expenses
 
 9. Calculate fair value:
-  - Use a discounted cash flow (DCF) model to determine the fair value of the company
-  - Consider an appropriate discount rate based on the company's risk profile and industry standards
-  - Calculate the terminal value using a perpetual growth rate method
-  - Sum the present values of projected cash flows and terminal value to derive the fair value
+   - Use a discounted cash flow (DCF) model to determine the fair value of the company
+   - Consider an appropriate discount rate based on the company's risk profile and industry standards
+   - Calculate the terminal value using a perpetual growth rate method
+   - Sum the present values of projected cash flows and terminal value to derive the fair value
 
 For each step, use <financial_analysis> tags to show your thought process and calculations. Within these tags:
 
@@ -342,8 +402,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
 - EV/FCF: Software (mature stage), Industrial compounders, Capital-light consumer businesses
 - EV/EBITDA: Industrial conglomerates, Telecoms, Infrastructure, Manufacturing, high-growth tech firms
 - Price/Sales: High-growth firms with negative or erratic earnings` : `Use ${selectedMultiple} multiple. For P/E multiples, set enterpriseValue to 0.`;
-
-    prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
+      
+      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
 
 The company you will be analyzing is: ${(companyName)}
 
@@ -377,36 +437,36 @@ FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
 ${sonarFull || 'No Sonar data available'}
 
 4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
-  - Analyze historical revenue growth rates
-  - Consider industry trends and market conditions
-  - Estimate year-over-year revenue growth rates until 2029
-  - Calculate projected revenue figures for each year
+   - Analyze historical revenue growth rates
+   - Consider industry trends and market conditions
+   - Estimate year-over-year revenue growth rates until 2029
+   - Calculate projected revenue figures for each year
 
 5. Estimate gross margin:
-  - Review historical gross margin trends
-  - Consider factors that may impact future gross margins (e.g., cost of goods sold, pricing strategies)
-  - Project gross margin percentages for each year until 2029
+   - Review historical gross margin trends
+   - Consider factors that may impact future gross margins (e.g., cost of goods sold, pricing strategies)
+   - Project gross margin percentages for each year until 2029
 
 6. Calculate EBITDA margin:
-  - Analyze historical EBITDA margin trends
-  - Consider factors that may impact future EBITDA margins (e.g., operating expenses, efficiency improvements)
-  - Project EBITDA margin percentages for each year until 2029
+   - Analyze historical EBITDA margin trends
+   - Consider factors that may impact future EBITDA margins (e.g., operating expenses, efficiency improvements)
+   - Project EBITDA margin percentages for each year until 2029
 
 7. Determine FCF margin:
-  - Review historical FCF margin trends
-  - Consider factors that may impact future FCF margins (e.g., capital expenditures, working capital changes)
-  - Project FCF margin percentages for each year until 2029
+   - Review historical FCF margin trends
+   - Consider factors that may impact future FCF margins (e.g., capital expenditures, working capital changes)
+   - Project FCF margin percentages for each year until 2029
 
 8. Project net income and EPS:
-  - Use the projected revenue and margin figures to calculate net income for each year
-  - Consider factors such as tax rates and non-operating income/expenses
-  - Calculate EPS based on projected net income and current share count
+   - Use the projected revenue and margin figures to calculate net income for each year
+   - Consider factors such as tax rates and non-operating income/expenses
+   - Calculate EPS based on projected net income and current share count
 
 9. Determine appropriate exit multiple:
-  - Research comparable company multiples in the industry
-  - Consider the company's growth profile, profitability, and risk factors
-  - Choose between P/E, EV/EBITDA, or EV/FCF based on industry standards
-  - Select an appropriate multiple value based on historical ranges and forward-looking expectations
+   - Research comparable company multiples in the industry
+   - Consider the company's growth profile, profitability, and risk factors
+   - Choose between P/E, EV/EBITDA, or EV/FCF based on industry standards
+   - Select an appropriate multiple value based on historical ranges and forward-looking expectations
 
 10. Calculate fair value:
     - Apply the selected exit multiple to the 2029 projected financial metric
@@ -453,7 +513,7 @@ Assumptions and Justifications:
 </forecast>
 
 Return ONLY the <forecast> section as specified above, without any additional commentary or explanations outside of the designated areas within the forecast.`;
-  }
+    }
 
   const body = {
       model: 'x-ai/grok-code-fast-1',
@@ -478,7 +538,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
 
   // Parse simple forecast table into projections for the UI charts
   const lines = forecastText.split('\n').map(l => l.trim()).filter(Boolean);
-  let inTable = false;
+      let inTable = false;
   let header = null;
   let headerIdx = {};
   const splitRow = (line) => line.split('|').map(c => c.trim()).filter(c => c.length > 0);
@@ -578,7 +638,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
     projections.push({
       year: (yearLabel.match(/\b(20\d{2})\b/)?.[1]) || yearLabel,
       revenue,
-      revenueGrowth,
+        revenueGrowth,
       grossProfit,
       grossMargin,
       ebitda: revenue * (ebitdaMargin / 100),
@@ -599,7 +659,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       // Recompute revenue growth from series (ignore LLM-provided value)
       if (i === 0) {
         p.revenueGrowth = 0;
-      } else {
+    } else {
         const prev = projections[i - 1];
         const prevRev = Number(prev?.revenue || 0);
         const curRev = Number(p?.revenue || 0);
@@ -744,7 +804,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       upside = ((fairValue - currentPrice) / currentPrice) * 100;
       cagr = (Math.pow(fairValue / currentPrice, 1 / 5) - 1) * 100;
     }
-  } else {
+        } else {
     if (fvMillionMatch) fairValue = parseFloat(fvMillionMatch[1].replace(/,/g, ''));
     const marketCapM = mkNumber(md.market_cap) / 1_000_000;
     if (marketCapM > 0 && fairValue > 0) {
