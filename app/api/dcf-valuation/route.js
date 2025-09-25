@@ -99,20 +99,10 @@ export async function GET(request) {
       return NextResponse.json({ error: 'Ticker symbol is required' }, { status: 400 });
     }
 
-    const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-    const yfHeaders = { 'Content-Type': 'application/json' };
-      if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
-      yfHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-      }
-      if (process.env.VERCEL_PROTECTION_BYPASS) {
-      yfHeaders['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+    const yf = await fetchYFinanceDataDirect(ticker, request.headers).catch(() => null);
+    if (!yf) {
+      return NextResponse.json({ error: 'yfinance-data error: 401 (protection). Switched to direct fetch but failed. Check PY_YF_URL or Python runtime.' }, { status: 500 });
     }
-    const yfRes = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`, { headers: yfHeaders });
-    if (!yfRes.ok) {
-      const text = await yfRes.text().catch(() => '');
-      return NextResponse.json({ error: `yfinance-data error: ${yfRes.status} ${text?.slice(0,200)}` }, { status: 500 });
-    }
-    const yf = await yfRes.json();
 
     if (useLLM) {
       if (!process.env.OPENROUTER_API_KEY) {
@@ -271,19 +261,7 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
     });
     if (py && Array.isArray(py.historical_financials) && py.historical_financials.length > 0) return py;
 
-    // As a last resort in prod, call internal route with automation bypass only
-    if (isProd) {
-      const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '';
-      if (baseUrl) {
-        const headers = { 'Content-Type': 'application/json' };
-        if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-        const resp = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}`, { headers });
-        if (resp.ok) {
-          const json = await resp.json();
-          if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) return json;
-        }
-      }
-    }
+    // No fallback to internal route - only use external service or local script
   } catch {}
   return null;
 }
