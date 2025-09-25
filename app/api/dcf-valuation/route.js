@@ -232,89 +232,57 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
     
     if (isProd && externalPyApi) {
       console.log(`[Vercel] Using external Python API: ${externalPyApi}`);
-      const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
       
-      // Check if this is an internal call (same Vercel deployment) and handle it directly
-      try {
-        const ext = new URL(url);
-        const currentHost = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '';
-        const sameHost = currentHost && (ext.host === process.env.VERCEL_URL || ext.host === process.env.VERCEL_URL?.replace(/^https?:\/\//, ''));
-        const samePath = /\/api\/yfinance-data\/?$/.test(ext.pathname);
+      // Check if PY_YF_URL points to yfinance-data route (internal call) and handle directly
+      if (externalPyApi.includes('/api/yfinance-data')) {
+        console.log(`[Vercel] PY_YF_URL points to yfinance-data route - running Python script directly to avoid 401`);
+        // This is an internal call, run the Python script directly instead of HTTP call
+        const pythonCmd = `${process.cwd()}/venv/bin/python3`;
+        const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+        const isDarwin = process.platform === 'darwin';
+        const isNodeRosetta = process.arch === 'x64';
+        const cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
+        const args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
         
-        if (sameHost && samePath) {
-          console.log(`[Vercel] PY_YF_URL points to same deployment - running Python script directly to avoid 401`);
-          // This is an internal call, run the Python script directly instead of HTTP call
-          const pythonCmd = `${process.cwd()}/venv/bin/python3`;
-          const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
-          const isDarwin = process.platform === 'darwin';
-          const isNodeRosetta = process.arch === 'x64';
-          const cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
-          const args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
-          
-          const py = await new Promise((resolve) => {
-            try {
-              const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
-              let stdout = '';
-              let stderr = '';
-              child.stdout.on('data', (d) => { stdout += d.toString(); });
-              child.stderr.on('data', (d) => { stderr += d.toString(); });
-              child.on('close', (code) => {
-                console.log(`[Vercel] Internal Python script exit code: ${code}`);
-                if (code !== 0) {
-                  console.log(`[Vercel] Internal Python script stderr: ${stderr}`);
-                  return resolve(null);
-                }
-                try { 
-                  const result = JSON.parse(stdout);
-                  console.log(`[Vercel] Internal Python script success: ${Array.isArray(result.historical_financials) ? result.historical_financials.length : 0} historical records`);
-                  resolve(result);
-                } catch (e) {
-                  console.log(`[Vercel] Internal Python script JSON parse error: ${e.message}`);
-                  resolve(null);
-                }
-              });
-              child.on('error', (err) => {
-                console.log(`[Vercel] Internal Python script spawn error: ${err.message}`);
+        const py = await new Promise((resolve) => {
+          try {
+            const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
+            let stdout = '';
+            let stderr = '';
+            child.stdout.on('data', (d) => { stdout += d.toString(); });
+            child.stderr.on('data', (d) => { stderr += d.toString(); });
+            child.on('close', (code) => {
+              console.log(`[Vercel] Internal Python script exit code: ${code}`);
+              if (code !== 0) {
+                console.log(`[Vercel] Internal Python script stderr: ${stderr}`);
+                return resolve(null);
+              }
+              try { 
+                const result = JSON.parse(stdout);
+                console.log(`[Vercel] Internal Python script success: ${Array.isArray(result.historical_financials) ? result.historical_financials.length : 0} historical records`);
+                resolve(result);
+              } catch (e) {
+                console.log(`[Vercel] Internal Python script JSON parse error: ${e.message}`);
                 resolve(null);
-              });
-            } catch (e) {
-              console.log(`[Vercel] Internal Python script setup error: ${e.message}`);
+              }
+            });
+            child.on('error', (err) => {
+              console.log(`[Vercel] Internal Python script spawn error: ${err.message}`);
               resolve(null);
-            }
-          });
-          
-          if (py && Array.isArray(py.historical_financials) && py.historical_financials.length > 0) {
-            console.log(`[Vercel] Internal Python script success: ${py.historical_financials.length} historical records`);
-            return py;
+            });
+          } catch (e) {
+            console.log(`[Vercel] Internal Python script setup error: ${e.message}`);
+            resolve(null);
           }
-        } else {
-          // External call with authentication bypass headers
-          const headers = { 'Content-Type': 'application/json' };
-          if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
-            headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-          }
-          if (process.env.VERCEL_PROTECTION_BYPASS) {
-            headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
-          }
-          
-          const res = await fetch(url, { method: 'GET', headers });
-          console.log(`[Vercel] External API response: ${res.status} ${res.statusText}`);
-          
-          if (res.ok) {
-            const json = await res.json();
-            console.log(`[Vercel] External API data keys:`, Object.keys(json || {}));
-            if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) {
-              console.log(`[Vercel] External API success: ${json.historical_financials.length} historical records`);
-              return json;
-            }
-          } else {
-            const errorText = await res.text();
-            console.log(`[Vercel] External API error: ${errorText.substring(0, 200)}`);
-          }
+        });
+        
+        if (py && Array.isArray(py.historical_financials) && py.historical_financials.length > 0) {
+          console.log(`[Vercel] Internal Python script success: ${py.historical_financials.length} historical records`);
+          return py;
         }
-      } catch (parseError) {
-        console.log(`[Vercel] Could not parse PY_YF_URL for internal call detection: ${parseError.message}`);
-        // Fallback to external call
+      } else {
+        // External call with authentication bypass headers
+        const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
         const headers = { 'Content-Type': 'application/json' };
         if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
           headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
