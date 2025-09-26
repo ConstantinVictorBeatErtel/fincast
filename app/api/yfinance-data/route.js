@@ -16,6 +16,7 @@ function safeFloat(value, defaultValue = 0) {
 }
 
 
+
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -28,30 +29,52 @@ export async function GET(request) {
 
     console.log(`Fetching yfinance data for ${ticker}...`);
 
-    const pythonCmd = `${process.cwd()}/venv/bin/python3`;
-    const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
-
-    const isDarwin = process.platform === 'darwin';
-    const isNodeRosetta = process.arch === 'x64';
-    const cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
-    const args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
+    // Try different Python paths for Vercel vs local
+    const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
+    let pythonCmd, scriptPath, cmd, args;
+    
+    if (isVercel) {
+      // On Vercel, try different Python paths
+      pythonCmd = 'python3'; // Vercel should have python3 in PATH
+      scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+      cmd = pythonCmd;
+      args = [scriptPath, ticker];
+    } else {
+      // Local development
+      pythonCmd = `${process.cwd()}/venv/bin/python3`;
+      scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+      const isDarwin = process.platform === 'darwin';
+      const isNodeRosetta = process.arch === 'x64';
+      cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
+      args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
+    }
 
     const runLocalPython = async () => new Promise((resolve) => {
+      console.log(`Running Python script: ${cmd} ${args.join(' ')}`);
+      console.log(`Working directory: ${process.cwd()}`);
+      console.log(`Script exists: ${require('fs').existsSync(scriptPath)}`);
+      
       const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (d) => { stdout += d.toString(); });
       child.stderr.on('data', (d) => { stderr += d.toString(); });
       child.on('close', (code) => {
+        console.log(`Python script exit code: ${code}`);
+        console.log(`Python stdout: ${stdout.substring(0, 500)}`);
+        console.log(`Python stderr: ${stderr.substring(0, 500)}`);
+        
         if (code !== 0) {
           console.error('Python yfinance script exited non-zero:', code, stderr);
           return resolve(null);
         }
         try {
           const json = JSON.parse(stdout);
+          console.log('Python script returned valid JSON');
           resolve(json);
         } catch (e) {
           console.error('Failed to parse python output:', e);
+          console.error('Raw stdout:', stdout);
           resolve(null);
         }
       });
