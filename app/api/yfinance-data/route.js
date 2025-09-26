@@ -91,7 +91,12 @@ export async function GET(request) {
 
     if (isProd && externalPyApi) {
       try {
-        let url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
+        // If PY_YF_URL points to /api/yfinance-data, redirect to /api/py-yf/ instead
+        let url = externalPyApi;
+        if (url.includes('/api/yfinance-data')) {
+          url = url.replace('/api/yfinance-data', '/api/py-yf/');
+        }
+        url = `${url}?ticker=${encodeURIComponent(ticker)}`;
         
         // Check if this is an internal call (same route) and handle it directly
         try {
