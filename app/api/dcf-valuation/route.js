@@ -237,15 +237,31 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
       if (externalPyApi.includes('/api/yfinance-data')) {
         console.log(`[Vercel] PY_YF_URL points to yfinance-data route - running Python script directly to avoid 401`);
         // This is an internal call, run the Python script directly instead of HTTP call
-        const pythonCmd = `${process.cwd()}/venv/bin/python3`;
-        const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
-        const isDarwin = process.platform === 'darwin';
-        const isNodeRosetta = process.arch === 'x64';
-        const cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
-        const args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
+        const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
+        let pythonCmd, scriptPath, cmd, args;
+        
+        if (isVercel) {
+          // On Vercel, try different Python paths
+          pythonCmd = 'python3'; // Vercel should have python3 in PATH
+          scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+          cmd = pythonCmd;
+          args = [scriptPath, ticker];
+        } else {
+          // Local development
+          pythonCmd = `${process.cwd()}/venv/bin/python3`;
+          scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+          const isDarwin = process.platform === 'darwin';
+          const isNodeRosetta = process.arch === 'x64';
+          cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
+          args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
+        }
         
         const py = await new Promise((resolve) => {
           try {
+            console.log(`[Vercel] Running Python script: ${cmd} ${args.join(' ')}`);
+            console.log(`[Vercel] Working directory: ${process.cwd()}`);
+            console.log(`[Vercel] Script exists: ${require('fs').existsSync(scriptPath)}`);
+            
             const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
             let stdout = '';
             let stderr = '';
@@ -253,6 +269,9 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
             child.stderr.on('data', (d) => { stderr += d.toString(); });
             child.on('close', (code) => {
               console.log(`[Vercel] Internal Python script exit code: ${code}`);
+              console.log(`[Vercel] Python stdout: ${stdout.substring(0, 500)}`);
+              console.log(`[Vercel] Python stderr: ${stderr.substring(0, 500)}`);
+              
               if (code !== 0) {
                 console.log(`[Vercel] Internal Python script stderr: ${stderr}`);
                 return resolve(null);
@@ -263,6 +282,7 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
                 resolve(result);
               } catch (e) {
                 console.log(`[Vercel] Internal Python script JSON parse error: ${e.message}`);
+                console.log(`[Vercel] Raw stdout: ${stdout}`);
                 resolve(null);
               }
             });
