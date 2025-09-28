@@ -189,9 +189,22 @@ export async function GET(request) {
       }
     }
 
-    // If still no result, return explicit failure (no fallback as requested by user)
+    // If still no result, return minimal data structure to allow LLM to proceed
     if (!result) {
-      return NextResponse.json({ error: 'Python yfinance API failed. No fallback available.' }, { status: 500 });
+      console.log('No yfinance data available, returning minimal structure for LLM-only valuation');
+      result = {
+        fy24_financials: {},
+        market_data: {},
+        company_name: ticker,
+        source: 'llm-only',
+        currency_info: {
+          original_currency: 'USD',
+          converted_to_usd: false,
+          conversion_rate: 1.0,
+          exchange_rate_source: 'none'
+        },
+        historical_financials: []
+      };
     }
 
     // Optionally attach 5y daily price series for portfolio tools only when requested

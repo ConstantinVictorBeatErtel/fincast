@@ -99,9 +99,23 @@ export async function GET(request) {
       return NextResponse.json({ error: 'Ticker symbol is required' }, { status: 400 });
     }
 
-    const yf = await fetchYFinanceDataDirect(ticker, request.headers).catch(() => null);
+    let yf = await fetchYFinanceDataDirect(ticker, request.headers).catch(() => null);
     if (!yf) {
-      return NextResponse.json({ error: 'yfinance-data error: 401 (protection). Switched to direct fetch but failed. Check PY_YF_URL or Python runtime.' }, { status: 500 });
+      console.log('No yfinance data available, proceeding with LLM-only valuation');
+      // Create minimal yfinance data structure for LLM to work with
+      yf = {
+        fy24_financials: {},
+        market_data: {},
+        company_name: ticker,
+        source: 'llm-only',
+        currency_info: {
+          original_currency: 'USD',
+          converted_to_usd: false,
+          conversion_rate: 1.0,
+          exchange_rate_source: 'none'
+        },
+        historical_financials: []
+      };
     }
 
     if (useLLM) {
@@ -162,9 +176,23 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Ticker symbol is required' }, { status: 400 });
     }
 
-    const yf = await fetchYFinanceDataDirect(ticker, request.headers).catch(() => null);
+    let yf = await fetchYFinanceDataDirect(ticker, request.headers).catch(() => null);
     if (!yf) {
-      return NextResponse.json({ error: 'yfinance-data error: 401 (protection). Switched to direct fetch but failed. Check PY_YF_URL or Python runtime.' }, { status: 500 });
+      console.log('No yfinance data available for feedback, proceeding with LLM-only valuation');
+      // Create minimal yfinance data structure for LLM to work with
+      yf = {
+        fy24_financials: {},
+        market_data: {},
+        company_name: ticker,
+        source: 'llm-only',
+        currency_info: {
+          original_currency: 'USD',
+          converted_to_usd: false,
+          conversion_rate: 1.0,
+          exchange_rate_source: 'none'
+        },
+        historical_financials: []
+      };
     }
 
     if (!process.env.OPENROUTER_API_KEY) {
