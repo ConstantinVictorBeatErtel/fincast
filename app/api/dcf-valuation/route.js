@@ -131,18 +131,42 @@ export async function GET(request) {
         const sonar = await fetchLatestWithSonar(ticker).catch(() => null);
         let lastErr = null;
         let valuation = null;
-        for (let attempt = 1; attempt <= 3; attempt++) {
+        // Try different models with exponential backoff
+        const models = [
+          'x-ai/grok-code-fast-1',
+          'x-ai/grok-beta',
+          'openai/gpt-4o-mini',
+          'meta-llama/llama-3.1-8b-instruct:free',
+          'microsoft/phi-3-medium-128k-instruct:free'
+        ];
+        
+        for (let attempt = 1; attempt <= 5; attempt++) {
           try {
-            console.log(`[LLM] Attempt ${attempt}/3 for ${ticker}`);
-            valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '');
+            const model = models[Math.min(attempt - 1, models.length - 1)];
+            console.log(`[LLM] Attempt ${attempt}/5 for ${ticker} using model: ${model}`);
+            
+            // Add exponential backoff delay
+            if (attempt > 1) {
+              const delay = Math.min(1000 * Math.pow(2, attempt - 2), 10000); // Max 10 seconds
+              console.log(`[LLM] Waiting ${delay}ms before retry...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+            }
+            
+            valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', '', model);
             if (valuation && Array.isArray(valuation.projections) && valuation.projections.length > 0) {
-              console.log(`[LLM] Success on attempt ${attempt} with ${valuation.projections.length} projections`);
+              console.log(`[LLM] Success on attempt ${attempt} with ${valuation.projections.length} projections using ${model}`);
               break;
             }
             lastErr = new Error('Missing projections');
           } catch (e) {
             console.log(`[LLM] Attempt ${attempt} failed:`, e.message);
             lastErr = e;
+            
+            // If it's a rate limit error, try next model immediately
+            if (e.message.includes('429') || e.message.includes('rate limit') || e.message.includes('Too Many Requests')) {
+              console.log(`[LLM] Rate limit detected, trying next model...`);
+              continue;
+            }
           }
         }
         if (!valuation) {
@@ -237,18 +261,42 @@ export async function POST(request) {
       const sonar = await fetchLatestWithSonar(ticker).catch(() => null);
       let lastErr = null;
       let valuation = null;
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      // Try different models with exponential backoff
+      const models = [
+        'x-ai/grok-code-fast-1',
+        'x-ai/grok-beta',
+        'openai/gpt-4o-mini',
+        'meta-llama/llama-3.1-8b-instruct:free',
+        'microsoft/phi-3-medium-128k-instruct:free'
+      ];
+      
+      for (let attempt = 1; attempt <= 5; attempt++) {
         try {
-          console.log(`[LLM] POST Attempt ${attempt}/3 for ${ticker} with feedback`);
-          valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', feedback || '');
+          const model = models[Math.min(attempt - 1, models.length - 1)];
+          console.log(`[LLM] POST Attempt ${attempt}/5 for ${ticker} with feedback using model: ${model}`);
+          
+          // Add exponential backoff delay
+          if (attempt > 1) {
+            const delay = Math.min(1000 * Math.pow(2, attempt - 2), 10000); // Max 10 seconds
+            console.log(`[LLM] POST Waiting ${delay}ms before retry...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+          
+          valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', feedback || '', model);
           if (valuation && Array.isArray(valuation.projections) && valuation.projections.length > 0) {
-            console.log(`[LLM] POST Success on attempt ${attempt} with ${valuation.projections.length} projections`);
+            console.log(`[LLM] POST Success on attempt ${attempt} with ${valuation.projections.length} projections using ${model}`);
             break;
           }
           lastErr = new Error('Missing projections');
         } catch (e) {
           console.log(`[LLM] POST Attempt ${attempt} failed:`, e.message);
           lastErr = e;
+          
+          // If it's a rate limit error, try next model immediately
+          if (e.message.includes('429') || e.message.includes('rate limit') || e.message.includes('Too Many Requests')) {
+            console.log(`[LLM] POST Rate limit detected, trying next model...`);
+            continue;
+          }
         }
       }
       if (!valuation) {
@@ -477,7 +525,7 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
   return null;
 }
 
-async function generateValuation(ticker, method, selectedMultiple, yf_data, sonarFull, userFeedback = '') {
+async function generateValuation(ticker, method, selectedMultiple, yf_data, sonarFull, userFeedback = '', model = 'x-ai/grok-code-fast-1') {
   const mkNumber = (v) => Number(v || 0);
   const fy = yf_data?.fy24_financials || {};
   const md = yf_data?.market_data || {};
@@ -704,7 +752,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
     }
 
   const body = {
-      model: 'x-ai/grok-code-fast-1',
+      model: model,
       messages: [
       { role: 'system', content: 'You are a skilled financial analyst. You MUST return your response in the EXACT format specified in the user prompt. The response MUST start with <forecast> and end with </forecast>. Do not include any text outside these tags.' },
       { role: 'user', content: prompt }
