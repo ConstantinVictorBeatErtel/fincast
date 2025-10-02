@@ -2,6 +2,8 @@
 Vercel serverless function for yfinance data fetching.
 This wraps the existing fetch_yfinance.py script.
 """
+from http.server import BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 import sys
 import json
 from pathlib import Path
@@ -13,35 +15,42 @@ sys.path.insert(0, str(project_root))
 from scripts.fetch_yfinance import fetch_financials
 
 
-def handler(request):
-    """Vercel serverless function handler."""
-    try:
-        # Get ticker from query params
-        ticker = request.args.get('ticker')
+class handler(BaseHTTPRequestHandler):
+    """Vercel serverless function handler using BaseHTTPRequestHandler."""
 
-        if not ticker:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({'error': 'Ticker parameter is required'})
-            }
+    def do_GET(self):
+        try:
+            # Parse query parameters
+            parsed_path = urlparse(self.path)
+            query_params = parse_qs(parsed_path.query)
 
-        # Fetch the data
-        data = fetch_financials(ticker)
+            # Get ticker from query params
+            ticker = query_params.get('ticker', [None])[0]
 
-        return {
-            'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Cache-Control': 's-maxage=3600, stale-while-revalidate=86400'
-            },
-            'body': json.dumps(data)
-        }
+            if not ticker:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'error': 'Ticker parameter is required'
+                }).encode())
+                return
 
-    except Exception as e:
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
+            # Fetch the data
+            data = fetch_financials(ticker)
+
+            # Send successful response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Cache-Control', 's-maxage=3600, stale-while-revalidate=86400')
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+
+        except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
                 'error': 'Failed to fetch data',
                 'message': str(e)
-            })
-        }
+            }).encode())
