@@ -127,11 +127,21 @@ async function fetchHistoricalData(tickers) {
       ? `https://${process.env.VERCEL_URL}`
       : 'http://localhost:3000';
 
+    // Add internal bypass headers for Vercel protection
+    const internalHeaders = {
+      'Content-Type': 'application/json',
+    };
+    
+    if (process.env.VERCEL_PROTECTION_BYPASS) {
+      internalHeaders['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+    }
+    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+      internalHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    }
+
     const response = await fetch(`${baseUrl}/api/portfolio-prices`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: internalHeaders,
       body: JSON.stringify({ tickers })
     });
 
@@ -161,6 +171,7 @@ async function fetchHistoricalData(tickers) {
     return {};
   }
 }
+
 
 
 function calculateReturns(historicalData) {
