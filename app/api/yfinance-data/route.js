@@ -166,7 +166,25 @@ export async function GET(request) {
       }
     }
 
-    // In dev or if external failed, try local Python script
+    // In dev or if external failed, try external API first, then local Python script
+    if (!result && !isProd && externalPyApi) {
+      console.log('Trying external PY_YF_URL in dev mode');
+      try {
+        const url = `${externalPyApi}?ticker=${encodeURIComponent(ticker)}`;
+        const response = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json' } });
+        if (response.ok) {
+          const json = await response.json();
+          if (json && Array.isArray(json.historical_financials) && json.historical_financials.length > 0) {
+            result = json;
+            console.log('Using external PY_YF_URL result (dev)');
+          }
+        }
+      } catch (e) {
+        console.warn('External PY_YF_URL dev error:', e?.message);
+      }
+    }
+
+    // If external API failed, try local Python script
     if (!result && !isProd) {
       console.log('Using local python script (dev)');
       result = await runLocalPython();
