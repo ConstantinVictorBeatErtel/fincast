@@ -120,50 +120,40 @@ export async function POST(request) {
 
 async function fetchHistoricalData(tickers) {
   try {
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setFullYear(endDate.getFullYear() - 5); // 5 years of data
+    console.log(`Fetching historical data for ${tickers.length} tickers...`);
 
-    const historicalData = {};
+    // Use our Python portfolio-prices endpoint for historical data
+    const baseUrl = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : 'http://localhost:3000';
 
-    for (const ticker of tickers) {
-      try {
-        console.log(`Fetching historical data for ${ticker}...`);
-        
-        // Use our yfinance-data endpoint for historical data
-        const baseUrl = process.env.VERCEL_URL 
-          ? `https://${process.env.VERCEL_URL}`
-          : 'http://localhost:3000';
+    const response = await fetch(`${baseUrl}/api/portfolio-prices`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ tickers })
+    });
 
-        const response = await fetch(`${baseUrl}/api/yfinance-data?ticker=${encodeURIComponent(ticker)}&prices=1`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch data for ${ticker}: ${response.status}`);
-        }
-
-        const dataResult = await response.json();
-        const quote = dataResult.historicalData || [];
-
-        if (quote && quote.length > 0) {
-          // Convert to object with dates as keys and close prices as values
-          const priceData = {};
-          quote.forEach(day => {
-            if (day.close) {
-              priceData[day.date] = day.close; // day.date is already formatted as YYYY-MM-DD
-            }
-          });
-          historicalData[ticker] = priceData;
-        }
-      } catch (error) {
-        console.error(`Error fetching data for ${ticker}:`, error.message);
-        // Continue with other tickers even if one fails
-      }
+    if (!response.ok) {
+      throw new Error(`Failed to fetch historical data: ${response.status}`);
     }
+
+    const pricesByTicker = await response.json();
+
+    // Convert to the format expected by the rest of the code
+    const historicalData = {};
+    Object.entries(pricesByTicker).forEach(([ticker, prices]) => {
+      if (prices && prices.length > 0) {
+        const priceData = {};
+        prices.forEach(day => {
+          if (day.close) {
+            priceData[day.date] = day.close;
+          }
+        });
+        historicalData[ticker] = priceData;
+      }
+    });
 
     return historicalData;
   } catch (error) {
@@ -171,6 +161,7 @@ async function fetchHistoricalData(tickers) {
     return {};
   }
 }
+
 
 function calculateReturns(historicalData) {
   const allDates = new Set();
