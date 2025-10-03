@@ -84,9 +84,28 @@ export async function POST(request) {
 
     // Calculate portfolio statistics (only for full analysis)
     const portfolioStats = calculatePortfolioStatistics(returns, weights);
-    
+
     // Get valuation-based expected returns for more accurate forward-looking analysis
     const valuationExpectedReturns = await getValuationExpectedReturns(holdings, method);
+
+    // Calculate portfolio CAGR from individual holdings
+    // Weighted average of individual CAGR values (assuming we have them from valuation)
+    let portfolioCagr = 0;
+    Object.entries(valuationExpectedReturns.individualReturns).forEach(([ticker, data]) => {
+      const holding = holdings.find(h => h.ticker === ticker);
+      const weight = holding ? holding.weight / 100 : 0;
+
+      // Calculate CAGR from upside: CAGR = (1 + upside/100)^(1/5) - 1
+      // Assuming 5-year projection period
+      const upside = data.upside || 0;
+      const cagr = upside > 0 ? (Math.pow(1 + upside / 100, 1 / 5) - 1) : 0;
+      portfolioCagr += weight * cagr;
+    });
+
+    // Calculate forward-looking Sharpe ratio using CAGR and historical volatility
+    const riskFreeRate = 0.045; // 4.5% annually
+    const excessReturn = portfolioCagr - riskFreeRate;
+    const forwardSharpeRatio = portfolioStats.portfolioVolatility === 0 ? 0 : excessReturn / portfolioStats.portfolioVolatility;
 
     const analysisResult = {
       correlationMatrix: correlationData.correlationMatrix,
@@ -96,7 +115,12 @@ export async function POST(request) {
       stockBetas: betaData.stockBetas,
       topBetaContributors: betaData.topBetaContributors,
       bottomBetaContributors: betaData.bottomBetaContributors,
-      portfolioStats: portfolioStats,
+      portfolioStats: {
+        ...portfolioStats,
+        historicalReturn: portfolioStats.portfolioReturn, // Keep historical for reference
+        portfolioReturn: portfolioCagr, // Use CAGR as annualized return
+        portfolioSharpeRatio: forwardSharpeRatio // Use CAGR-based Sharpe with historical vol
+      },
       valuationExpectedReturns: valuationExpectedReturns,
       valuationMethod: method,
       dataPeriod: {
