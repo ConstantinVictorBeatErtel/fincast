@@ -1,4 +1,3 @@
-import { spawn } from 'child_process';
 import { NextResponse } from 'next/server';
 import yahooFinance from 'yahoo-finance2';
 
@@ -123,73 +122,69 @@ async function fetchHistoricalData(tickers) {
   try {
     console.log(`Fetching historical data for ${tickers.length} tickers...`);
 
-    // Use spawn to call Python script directly (like yfinance-data does)
-    
-    const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
-    let pythonCmd, scriptPath, cmd, args;
-    
-    if (isVercel) {
-      pythonCmd = 'python3';
-      scriptPath = `${process.cwd()}/scripts/fetch_portfolio_prices.py`;
-      cmd = pythonCmd;
-      args = [scriptPath, ...tickers];
-    } else {
-      pythonCmd = `${process.cwd()}/venv/bin/python3`;
-      scriptPath = `${process.cwd()}/scripts/fetch_portfolio_prices.py`;
-      const isDarwin = process.platform === 'darwin';
-      const isNodeRosetta = process.arch === 'x64';
-      cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
-      args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ...tickers] : [scriptPath, ...tickers];
-    }
+    // Use the proven /api/py-yf endpoint which works on Vercel
+    const baseUrl = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : 'http://localhost:3000';
 
-    const pricesByTicker = await new Promise((resolve, reject) => {
-      console.log(`Running Python script: ${cmd} ${args.join(' ')}`);
-      
-      const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      
-      child.stdout.on('data', (d) => { stdout += d.toString(); });
-      child.stderr.on('data', (d) => { stderr += d.toString(); });
-      
-      child.on('close', (code) => {
-        console.log(`Python script exit code: ${code}`);
-        if (stderr) console.log(`Python stderr: ${stderr.substring(0, 500)}`);
-        
-        if (code !== 0) {
-          console.error('Python portfolio prices script exited non-zero:', code, stderr);
-          return resolve({});
-        }
-        
-        try {
-          const json = JSON.parse(stdout);
-          console.log(`Successfully fetched prices for ${Object.keys(json).length} tickers`);
-          resolve(json);
-        } catch (e) {
-          console.error('Failed to parse python output:', e);
-          resolve({});
-        }
-      });
-      
-      child.on('error', (err) => {
-        console.error('Failed to start python process:', err);
-        resolve({});
-      });
-    });
-
-    // Convert to the format expected by the rest of the code
     const historicalData = {};
-    Object.entries(pricesByTicker).forEach(([ticker, prices]) => {
-      if (prices && prices.length > 0) {
-        const priceData = {};
-        prices.forEach(day => {
-          if (day.close) {
-            priceData[day.date] = day.close;
-          }
+
+    // Fetch each ticker sequentially to avoid rate limiting
+    for (const ticker of tickers) {
+      try {
+        console.log(`Fetching price data for ${ticker}...`);
+        
+        // Call the working py-yf endpoint
+        const response = await fetch(`${baseUrl}/api/py-yf?ticker=${encodeURIComponent(ticker)}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         });
-        historicalData[ticker] = priceData;
+
+        if (!response.ok) {
+          console.error(`Failed to fetch data for ${ticker}: ${response.status}`);
+          continue;
+        }
+
+        const data = await response.json();
+        
+        // Extract historical financials which contain yearly data, but we need price data
+        // For now, use a simple approach: download daily prices using yfinance npm package
+        // as fallback since py-yf doesn't return daily prices
+        
+        // Use yahoo-finance2 npm package for daily prices (already imported)
+        const endDate = new Date();
+        const startDate = new Date();
+        startDate.setFullYear(endDate.getFullYear() - 5);
+        
+        const chart = await yahooFinance.chart(ticker, { 
+          period1: startDate, 
+          period2: endDate, 
+          interval: '1d' 
+        });
+        
+        const quotes = chart?.quotes || [];
+        
+        if (quotes && quotes.length > 0) {
+          const priceData = {};
+          quotes.forEach(q => {
+            const date = new Date(q.date).toISOString().split('T')[0];
+            if (q.close) {
+              priceData[date] = q.close;
+            }
+          });
+          historicalData[ticker] = priceData;
+          console.log(`Fetched ${quotes.length} price points for ${ticker}`);
+        }
+        
+        // Small delay between requests
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+      } catch (error) {
+        console.error(`Error fetching data for ${ticker}:`, error.message);
       }
-    });
+    }
 
     return historicalData;
   } catch (error) {
@@ -197,6 +192,7 @@ async function fetchHistoricalData(tickers) {
     return {};
   }
 }
+
 
 
 
