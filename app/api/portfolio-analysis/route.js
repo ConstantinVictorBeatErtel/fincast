@@ -122,41 +122,15 @@ async function fetchHistoricalData(tickers) {
   try {
     console.log(`Fetching historical data for ${tickers.length} tickers...`);
 
-    // Use the proven /api/py-yf endpoint which works on Vercel
-    const baseUrl = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3000';
-
     const historicalData = {};
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(endDate.getFullYear() - 5); // 5 years of data
 
-    // Fetch each ticker sequentially to avoid rate limiting
+    // Fetch each ticker using yahoo-finance2 directly
     for (const ticker of tickers) {
       try {
-        console.log(`Fetching price data for ${ticker}...`);
-        
-        // Call the working py-yf endpoint
-        const response = await fetch(`${baseUrl}/api/py-yf?ticker=${encodeURIComponent(ticker)}`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (!response.ok) {
-          console.error(`Failed to fetch data for ${ticker}: ${response.status}`);
-          continue;
-        }
-
-        const data = await response.json();
-        
-        // Extract historical financials which contain yearly data, but we need price data
-        // For now, use a simple approach: download daily prices using yfinance npm package
-        // as fallback since py-yf doesn't return daily prices
-        
-        // Use yahoo-finance2 npm package for daily prices (already imported)
-        const endDate = new Date();
-        const startDate = new Date();
-        startDate.setFullYear(endDate.getFullYear() - 5);
+        console.log(`Fetching price data for ${ticker} using yahoo-finance2...`);
         
         const chart = await yahooFinance.chart(ticker, { 
           period1: startDate, 
@@ -176,9 +150,11 @@ async function fetchHistoricalData(tickers) {
           });
           historicalData[ticker] = priceData;
           console.log(`Fetched ${quotes.length} price points for ${ticker}`);
+        } else {
+          console.log(`No price data found for ${ticker}`);
         }
         
-        // Small delay between requests
+        // Small delay between requests to avoid rate limiting
         await new Promise(resolve => setTimeout(resolve, 200));
         
       } catch (error) {
@@ -192,6 +168,7 @@ async function fetchHistoricalData(tickers) {
     return {};
   }
 }
+
 
 
 
