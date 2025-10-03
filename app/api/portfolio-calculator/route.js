@@ -37,12 +37,30 @@ export async function POST(request) {
         const mockUrl = new URL(`http://localhost/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${encodeURIComponent(method)}`);
         const mockRequest = { url: mockUrl.toString() };
         
-        // Call the dcf-valuation GET function directly
-        const valuationResponse = await dcfValuationGET(mockRequest);
+        // Call the dcf-valuation GET function directly with timeout
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Valuation timeout')), 55000) // 55 second timeout
+        );
         
-        if (!valuationResponse.ok && valuationResponse.status !== 200) {
-          const status = valuationResponse.status || 500;
-          console.error(`Failed to fetch valuation for ${holding.ticker}:`, status);
+        const valuationResponse = await Promise.race([
+          dcfValuationGET(mockRequest),
+          timeoutPromise
+        ]);
+        
+        // Handle NextResponse object
+        let valuationData;
+        try {
+          if (valuationResponse && typeof valuationResponse.json === 'function') {
+            valuationData = await valuationResponse.json();
+          } else if (valuationResponse && valuationResponse.body) {
+            // Try to parse response body
+            const text = await valuationResponse.text();
+            valuationData = JSON.parse(text);
+          } else {
+            throw new Error('Invalid response format');
+          }
+        } catch (parseError) {
+          console.error(`Failed to parse valuation response for ${holding.ticker}:`, parseError.message);
           holdingResults.push({
             ticker: holding.ticker,
             weight: holding.weight,
@@ -50,13 +68,12 @@ export async function POST(request) {
             upside: 0,
             currentPrice: 0,
             method: method,
-            error: `HTTP ${status}`
+            error: 'Invalid response format'
           });
           continue;
         }
 
-        const valuationData = await valuationResponse.json();
-        if (!valuationData.fairValue || valuationData.upside === undefined || valuationData.upside === null) {
+        if (!valuationData || !valuationData.fairValue || valuationData.upside === undefined || valuationData.upside === null) {
           console.error(`Invalid valuation data for ${holding.ticker}:`, valuationData);
           holdingResults.push({
             ticker: holding.ticker,
@@ -65,7 +82,7 @@ export async function POST(request) {
             upside: 0,
             currentPrice: 0,
             method: method,
-            error: 'Invalid valuation data'
+            error: valuationData?.error || 'Invalid valuation data'
           });
           continue;
         }
