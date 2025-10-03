@@ -299,49 +299,27 @@ function calculateCorrelation(returns1, returns2) {
 
 async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
   try {
-    // Always use the yfinance-data endpoint for consistency
-    console.log('Calculating portfolio beta using yfinance-data endpoint...');
+    console.log('Calculating portfolio beta using yahoo-finance2 directly...');
     
-    // Convert dates to YYYY-MM-DD format for API call
-    const startDateStr = startDate.toISOString().split('T')[0];
-    const endDateStr = endDate.toISOString().split('T')[0];
+    // Fetch SPY data using yahoo-finance2 directly (no API calls)
+    const chart = await yahooFinance.chart('SPY', { 
+      period1: startDate, 
+      period2: endDate, 
+      interval: '1d' 
+    });
     
-    console.log(`Fetching SPY data from ${startDateStr} to ${endDateStr}`);
+    const spyQuotes = chart?.quotes || [];
+    console.log(`Fetched ${spyQuotes.length} SPY data points`);
     
-    // Use the yfinance-data endpoint to get SPY data
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : 'http://localhost:3000';
-    
-    const spyUrl = `${baseUrl}/api/yfinance-data?ticker=SPY&prices=1`;
-    
-    const internalHeaders = {};
-    if (process.env.VERCEL_PROTECTION_BYPASS) {
-      internalHeaders['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
-    }
-    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
-      internalHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-    }
-
-    const response = await fetch(spyUrl, { headers: internalHeaders });
-    if (!response.ok) {
-      throw new Error(`SPY API request failed: ${response.status} ${response.statusText}`);
+    if (spyQuotes.length === 0) {
+      throw new Error('No SPY data available');
     }
     
-    const spyData = await response.json();
-    
-    if (spyData.error) {
-      throw new Error(`SPY API error: ${spyData.error}`);
-    }
-    
-    console.log(`SPY API returned ${spyData.historicalData?.length || 0} data points`);
-    
-    // Process SPY data to calculate returns
-    const spyHistoricalData = spyData.historicalData || [];
+    // Calculate SPY returns
     const spyReturns = [];
-    for (let i = 1; i < spyHistoricalData.length; i++) {
-      const prevPrice = spyHistoricalData[i - 1].close;
-      const currPrice = spyHistoricalData[i].close;
+    for (let i = 1; i < spyQuotes.length; i++) {
+      const prevPrice = spyQuotes[i - 1].close;
+      const currPrice = spyQuotes[i].close;
       if (prevPrice && currPrice && prevPrice > 0) {
         spyReturns.push((currPrice - prevPrice) / prevPrice);
       }
@@ -350,17 +328,15 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
     const marketVariance = calculateVariance(spyReturns);
     
     console.log(`SPY returns sample:`, spyReturns.slice(0, 5));
-    console.log(`SPY variance from API: ${marketVariance}`);
+    console.log(`SPY variance: ${marketVariance}`);
 
     const tickers = Object.keys(returns).filter(key => key !== 'index');
-    console.log(`DEBUG: Processing tickers: ${tickers.join(', ')}`);
-    console.log(`DEBUG: Stock returns lengths:`, tickers.map(t => ({ticker: t, length: returns[t].length})));
-    console.log(`DEBUG: SPY returns length: ${spyReturns.length}`);
+    console.log(`Processing tickers for beta: ${tickers.join(', ')}`);
     
     const stockBetas = {};
     const weightedBetas = {};
 
-    // Calculate individual stock betas using API SPY data
+    // Calculate individual stock betas
     tickers.forEach((ticker, index) => {
       const stockReturns = returns[ticker];
       // Align stock returns with SPY returns (use shorter length)
@@ -368,20 +344,12 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
       const alignedStockReturns = stockReturns.slice(0, minLength);
       const alignedSpyReturns = spyReturns.slice(0, minLength);
       
-      // Debug: show some sample data
-      console.log(`${ticker} sample data (first 5):`);
-      console.log(`  Stock: ${alignedStockReturns.slice(0, 5).map(r => r.toFixed(4)).join(', ')}`);
-      console.log(`  SPY:   ${alignedSpyReturns.slice(0, 5).map(r => r.toFixed(4)).join(', ')}`);
-      
-      // Calculate means for debugging
-      const stockMean = alignedStockReturns.reduce((sum, val) => sum + val, 0) / alignedStockReturns.length;
-      const spyMean = alignedSpyReturns.reduce((sum, val) => sum + val, 0) / alignedSpyReturns.length;
-      console.log(`  Stock mean: ${stockMean.toFixed(6)}, SPY mean: ${spyMean.toFixed(6)}`);
+      console.log(`${ticker}: ${alignedStockReturns.length} aligned data points`);
       
       const covariance = calculateCovariance(alignedStockReturns, alignedSpyReturns);
       const beta = marketVariance === 0 ? 0 : covariance / marketVariance;
       
-      console.log(`${ticker}: covariance=${covariance.toFixed(6)}, beta=${beta.toFixed(4)}, marketVariance=${marketVariance.toFixed(6)}`);
+      console.log(`${ticker}: beta=${beta.toFixed(4)}`);
       
       stockBetas[ticker] = beta;
       weightedBetas[ticker] = beta * weights[index];
@@ -396,6 +364,8 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
 
     const topBetaContributors = sortedContributors.slice(0, 5);
     const bottomBetaContributors = sortedContributors.slice(-5);
+
+    console.log(`Portfolio beta calculated: ${portfolioBeta.toFixed(4)}`);
 
     return {
       portfolioBeta,
@@ -414,6 +384,7 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
     };
   }
 }
+
 
 function calculateVariance(returns) {
   if (returns.length === 0) return 0;
