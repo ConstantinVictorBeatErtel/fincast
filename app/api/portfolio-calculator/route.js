@@ -51,10 +51,22 @@ export async function POST(request) {
         let valuationData;
         try {
           if (valuationResponse && typeof valuationResponse.json === 'function') {
+            // Get the response text first to check if it's HTML or JSON
+            const responseClone = valuationResponse.clone();
+            const responseText = await responseClone.text();
+
+            // Check if response is HTML (Vercel timeout error page)
+            if (responseText.trim().startsWith('<') || responseText.includes('An error occurred')) {
+              throw new Error('Valuation request timed out or returned HTML error');
+            }
+
+            // Try to parse as JSON
             valuationData = await valuationResponse.json();
           } else if (valuationResponse && valuationResponse.body) {
-            // Try to parse response body
             const text = await valuationResponse.text();
+            if (text.trim().startsWith('<') || text.includes('An error occurred')) {
+              throw new Error('Valuation request timed out or returned HTML error');
+            }
             valuationData = JSON.parse(text);
           } else {
             throw new Error('Invalid response format');
@@ -68,7 +80,7 @@ export async function POST(request) {
             upside: 0,
             currentPrice: 0,
             method: method,
-            error: 'Invalid response format'
+            error: parseError.message.includes('timeout') ? 'Valuation timeout' : 'Invalid response format'
           });
           continue;
         }
