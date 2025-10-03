@@ -23,30 +23,27 @@ export async function POST(request) {
 
     console.log(`Calculating portfolio for ${holdings.length} holdings:`, holdings.map(h => `${h.ticker} (${h.weight}%)`));
 
-    const holdingResults = [];
-    let totalWeightedReturn = 0;
-    let totalWeightedFairValue = 0;
+    console.log('Running valuations in parallel for all holdings...');
 
-    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-    for (const holding of holdings) {
+    // Process all holdings in parallel
+    const valuationPromises = holdings.map(async (holding) => {
       try {
-        console.log(`Fetching valuation for ${holding.ticker} (direct call)...`);
-        
+        console.log(`Starting valuation for ${holding.ticker}...`);
+
         // Create a mock request object for the dcf-valuation GET handler
         const mockUrl = new URL(`http://localhost/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${encodeURIComponent(method)}`);
         const mockRequest = { url: mockUrl.toString() };
-        
+
         // Call the dcf-valuation GET function directly with timeout
-        const timeoutPromise = new Promise((_, reject) => 
+        const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Valuation timeout')), 55000) // 55 second timeout
         );
-        
+
         const valuationResponse = await Promise.race([
           dcfValuationGET(mockRequest),
           timeoutPromise
         ]);
-        
+
         // Handle NextResponse object
         let valuationData;
         try {
@@ -73,7 +70,7 @@ export async function POST(request) {
           }
         } catch (parseError) {
           console.error(`Failed to parse valuation response for ${holding.ticker}:`, parseError.message);
-          holdingResults.push({
+          return {
             ticker: holding.ticker,
             weight: holding.weight,
             fairValue: 0,
@@ -81,13 +78,12 @@ export async function POST(request) {
             currentPrice: 0,
             method: method,
             error: parseError.message.includes('timeout') ? 'Valuation timeout' : 'Invalid response format'
-          });
-          continue;
+          };
         }
 
         if (!valuationData || !valuationData.fairValue || valuationData.upside === undefined || valuationData.upside === null) {
           console.error(`Invalid valuation data for ${holding.ticker}:`, valuationData);
-          holdingResults.push({
+          return {
             ticker: holding.ticker,
             weight: holding.weight,
             fairValue: 0,
@@ -95,8 +91,7 @@ export async function POST(request) {
             currentPrice: 0,
             method: method,
             error: valuationData?.error || 'Invalid valuation data'
-          });
-          continue;
+          };
         }
 
         let fairValuePerShare = valuationData.fairValue;
@@ -106,7 +101,7 @@ export async function POST(request) {
           fairValuePerShare = valuationData.exitMultipleCalculation.fairValue;
         }
 
-        const res = {
+        return {
           ticker: holding.ticker,
           weight: holding.weight,
           fairValue: fairValuePerShare,
@@ -114,19 +109,9 @@ export async function POST(request) {
           currentPrice: valuationData.currentSharePrice,
           method: valuationData.method,
         };
-        holdingResults.push(res);
-
-        const weightedReturn = (res.weight / 100) * res.upside;
-        const weightedFairValue = (res.weight / 100) * res.fairValue;
-        totalWeightedReturn += weightedReturn;
-        totalWeightedFairValue += weightedFairValue;
-        console.log(`${res.ticker}: Fair Value $${res.fairValue.toFixed(2)}, Upside ${res.upside.toFixed(1)}%, Weighted Return ${weightedReturn.toFixed(2)}%`);
-
-        // Small delay between calls to avoid provider rate limits
-        await sleep(500);
       } catch (error) {
         console.error(`Error processing ${holding.ticker}:`, error.message);
-        holdingResults.push({
+        return {
           ticker: holding.ticker,
           weight: holding.weight,
           fairValue: 0,
@@ -134,9 +119,24 @@ export async function POST(request) {
           currentPrice: 0,
           method: method,
           error: error.message
-        });
+        };
       }
-    }
+    });
+
+    // Wait for all valuations to complete
+    const holdingResults = await Promise.all(valuationPromises);
+
+    // Calculate totals
+    let totalWeightedReturn = 0;
+    let totalWeightedFairValue = 0;
+
+    holdingResults.forEach(res => {
+      const weightedReturn = (res.weight / 100) * res.upside;
+      const weightedFairValue = (res.weight / 100) * res.fairValue;
+      totalWeightedReturn += weightedReturn;
+      totalWeightedFairValue += weightedFairValue;
+      console.log(`${res.ticker}: Fair Value $${res.fairValue.toFixed(2)}, Upside ${res.upside.toFixed(1)}%, Weighted Return ${weightedReturn.toFixed(2)}%`);
+    });
 
     const portfolioResult = {
       expectedReturn: totalWeightedReturn,
