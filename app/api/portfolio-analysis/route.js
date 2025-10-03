@@ -1,3 +1,4 @@
+import { spawn } from 'child_process';
 import { NextResponse } from 'next/server';
 import yahooFinance from 'yahoo-finance2';
 
@@ -122,34 +123,59 @@ async function fetchHistoricalData(tickers) {
   try {
     console.log(`Fetching historical data for ${tickers.length} tickers...`);
 
-    // Use our Python portfolio-prices endpoint for historical data
-    const baseUrl = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3000';
-
-    // Add internal bypass headers for Vercel protection
-    const internalHeaders = {
-      'Content-Type': 'application/json',
-    };
+    // Use spawn to call Python script directly (like yfinance-data does)
     
-    if (process.env.VERCEL_PROTECTION_BYPASS) {
-      internalHeaders['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
-    }
-    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
-      internalHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
+    let pythonCmd, scriptPath, cmd, args;
+    
+    if (isVercel) {
+      pythonCmd = 'python3';
+      scriptPath = `${process.cwd()}/scripts/fetch_portfolio_prices.py`;
+      cmd = pythonCmd;
+      args = [scriptPath, ...tickers];
+    } else {
+      pythonCmd = `${process.cwd()}/venv/bin/python3`;
+      scriptPath = `${process.cwd()}/scripts/fetch_portfolio_prices.py`;
+      const isDarwin = process.platform === 'darwin';
+      const isNodeRosetta = process.arch === 'x64';
+      cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
+      args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ...tickers] : [scriptPath, ...tickers];
     }
 
-    const response = await fetch(`${baseUrl}/api/portfolio-prices`, {
-      method: 'POST',
-      headers: internalHeaders,
-      body: JSON.stringify({ tickers })
+    const pricesByTicker = await new Promise((resolve, reject) => {
+      console.log(`Running Python script: ${cmd} ${args.join(' ')}`);
+      
+      const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      
+      child.stdout.on('data', (d) => { stdout += d.toString(); });
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+      
+      child.on('close', (code) => {
+        console.log(`Python script exit code: ${code}`);
+        if (stderr) console.log(`Python stderr: ${stderr.substring(0, 500)}`);
+        
+        if (code !== 0) {
+          console.error('Python portfolio prices script exited non-zero:', code, stderr);
+          return resolve({});
+        }
+        
+        try {
+          const json = JSON.parse(stdout);
+          console.log(`Successfully fetched prices for ${Object.keys(json).length} tickers`);
+          resolve(json);
+        } catch (e) {
+          console.error('Failed to parse python output:', e);
+          resolve({});
+        }
+      });
+      
+      child.on('error', (err) => {
+        console.error('Failed to start python process:', err);
+        resolve({});
+      });
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch historical data: ${response.status}`);
-    }
-
-    const pricesByTicker = await response.json();
 
     // Convert to the format expected by the rest of the code
     const historicalData = {};
@@ -171,6 +197,7 @@ async function fetchHistoricalData(tickers) {
     return {};
   }
 }
+
 
 
 
