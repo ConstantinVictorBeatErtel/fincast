@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { GET as dcfValuationGET } from '../dcf-valuation/route.js';
 
 export async function POST(request) {
   try {
@@ -22,53 +23,25 @@ export async function POST(request) {
 
     console.log(`Calculating portfolio for ${holdings.length} holdings:`, holdings.map(h => `${h.ticker} (${h.weight}%)`));
 
-    // Sequential valuation fetches to avoid rate limiting
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : 'http://localhost:3000';
-
     const holdingResults = [];
     let totalWeightedReturn = 0;
     let totalWeightedFairValue = 0;
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-    const fetchWithRetry = async (url, options, attempts = 3, baseDelayMs = 800) => {
-      for (let i = 0; i < attempts; i++) {
-        const res = await fetch(url, options);
-        if (res.ok) return res;
-        if (![401, 429, 500, 502, 503, 504].includes(res.status)) return res;
-        const delay = baseDelayMs * Math.pow(2, i);
-        await sleep(delay);
-      }
-      return fetch(url, options);
-    };
-
-    const internalHeaders = {};
-    if (process.env.VERCEL_PROTECTION_BYPASS) {
-      internalHeaders['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
-    }
-    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
-      internalHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-    }
-    
-    // For local testing, always add a test bypass header
-    if (!process.env.VERCEL_URL) {
-      internalHeaders['x-vercel-automation-bypass'] = 'local-test-token';
-    }
-    
-    console.log('Portfolio Calculator - Internal headers:', internalHeaders);
 
     for (const holding of holdings) {
       try {
-        console.log(`Fetching valuation for ${holding.ticker} (sequential)...`);
-        const url = `${baseUrl}/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${encodeURIComponent(method)}`;
-        const valuationResponse = await fetchWithRetry(url, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...internalHeaders },
-        });
-
-        if (!valuationResponse.ok) {
-          const status = `${valuationResponse.status}`;
+        console.log(`Fetching valuation for ${holding.ticker} (direct call)...`);
+        
+        // Create a mock request object for the dcf-valuation GET handler
+        const mockUrl = new URL(`http://localhost/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${encodeURIComponent(method)}`);
+        const mockRequest = { url: mockUrl.toString() };
+        
+        // Call the dcf-valuation GET function directly
+        const valuationResponse = await dcfValuationGET(mockRequest);
+        
+        if (!valuationResponse.ok && valuationResponse.status !== 200) {
+          const status = valuationResponse.status || 500;
           console.error(`Failed to fetch valuation for ${holding.ticker}:`, status);
           holdingResults.push({
             ticker: holding.ticker,
