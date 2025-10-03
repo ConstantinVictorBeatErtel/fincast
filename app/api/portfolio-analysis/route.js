@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import yahooFinance from 'yahoo-finance2';
+import { GET as dcfValuationGET } from '../dcf-valuation/route.js';
 
 export async function POST(request) {
   try {
@@ -510,72 +511,68 @@ function calculatePortfolioStatistics(returns, weights) {
 }
 
 async function getValuationExpectedReturns(holdings, method) {
-  const valuationReturns = {};
-  let totalWeightedReturn = 0;
+  console.log('Running valuations in parallel for portfolio analysis...');
 
-  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-  const fetchWithRetry = async (url, options, attempts = 3, baseDelayMs = 800) => {
-    for (let i = 0; i < attempts; i++) {
-      const res = await fetch(url, options);
-      if (res.ok) return res;
-      if (![401, 429, 500, 502, 503, 504].includes(res.status)) return res;
-      const delay = baseDelayMs * Math.pow(2, i);
-      await sleep(delay);
-    }
-    return fetch(url, options);
-  };
-
-  const internalHeaders = {};
-  if (process.env.VERCEL_PROTECTION_BYPASS) {
-    internalHeaders['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
-  }
-  if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
-    internalHeaders['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-  }
-  
-  // For local testing, always add a test bypass header
-  if (!process.env.VERCEL_URL) {
-    internalHeaders['x-vercel-automation-bypass'] = 'local-test-token';
-  }
-  
-  console.log('Portfolio Analysis - Internal headers:', internalHeaders);
-
-  for (const holding of holdings) {
+  // Process all holdings in parallel
+  const valuationPromises = holdings.map(async (holding) => {
     try {
-      console.log(`Fetching ${method} valuation for ${holding.ticker} (sequential)...`);
+      console.log(`Starting valuation for ${holding.ticker}...`);
 
-      const baseUrl = process.env.VERCEL_URL 
-        ? `https://${process.env.VERCEL_URL}` 
-        : 'http://localhost:3000';
+      // Create a mock request object for the dcf-valuation GET handler
+      const mockUrl = new URL(`http://localhost/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${encodeURIComponent(method)}`);
+      const mockRequest = { url: mockUrl.toString() };
 
-      const url = `${baseUrl}/api/dcf-valuation?ticker=${encodeURIComponent(holding.ticker)}&method=${method}`;
-      const valuationResponse = await fetchWithRetry(url, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...internalHeaders },
-      });
+      // Call the dcf-valuation GET function directly with timeout
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Valuation timeout')), 55000)
+      );
 
-      if (!valuationResponse.ok) {
-        console.error(`Failed to fetch ${method} valuation for ${holding.ticker}:`, valuationResponse.status);
-        valuationReturns[holding.ticker] = {
+      const valuationResponse = await Promise.race([
+        dcfValuationGET(mockRequest),
+        timeoutPromise
+      ]);
+
+      // Handle NextResponse object
+      let valuationData;
+      try {
+        if (valuationResponse && typeof valuationResponse.json === 'function') {
+          const responseClone = valuationResponse.clone();
+          const responseText = await responseClone.text();
+
+          if (responseText.trim().startsWith('<') || responseText.includes('An error occurred')) {
+            throw new Error('Valuation request timed out or returned HTML error');
+          }
+
+          valuationData = await valuationResponse.json();
+        } else if (valuationResponse && valuationResponse.body) {
+          const text = await valuationResponse.text();
+          if (text.trim().startsWith('<') || text.includes('An error occurred')) {
+            throw new Error('Valuation request timed out or returned HTML error');
+          }
+          valuationData = JSON.parse(text);
+        } else {
+          throw new Error('Invalid response format');
+        }
+      } catch (parseError) {
+        console.error(`Failed to parse valuation response for ${holding.ticker}:`, parseError.message);
+        return {
+          ticker: holding.ticker,
           upside: 0,
           fairValue: 0,
           currentPrice: 0,
-          error: `Failed to fetch valuation (${valuationResponse.status})`
+          error: parseError.message.includes('timeout') ? 'Valuation timeout' : 'Invalid response format'
         };
-        continue;
       }
 
-      const valuationData = await valuationResponse.json();
-      if (!valuationData.fairValue || valuationData.upside === undefined || valuationData.upside === null) {
-        console.error(`Invalid ${method} valuation data for ${holding.ticker}:`, valuationData);
-        valuationReturns[holding.ticker] = {
+      if (!valuationData || !valuationData.fairValue || valuationData.upside === undefined || valuationData.upside === null) {
+        console.error(`Invalid valuation data for ${holding.ticker}:`, valuationData);
+        return {
+          ticker: holding.ticker,
           upside: 0,
           fairValue: 0,
           currentPrice: 0,
-          error: 'Invalid valuation data'
+          error: valuationData?.error || 'Invalid valuation data'
         };
-        continue;
       }
 
       let fairValuePerShare = valuationData.fairValue;
@@ -585,35 +582,45 @@ async function getValuationExpectedReturns(holdings, method) {
         fairValuePerShare = valuationData.exitMultipleCalculation.fairValue;
       }
 
-      valuationReturns[holding.ticker] = {
+      return {
+        ticker: holding.ticker,
         upside: valuationData.upside,
         fairValue: fairValuePerShare,
         currentPrice: valuationData.currentSharePrice,
         method: valuationData.method
       };
-
-      const weightedReturn = (holding.weight / 100) * valuationData.upside;
-      totalWeightedReturn += weightedReturn;
-      console.log(`${holding.ticker}: ${method.toUpperCase()} Upside ${valuationData.upside.toFixed(1)}%, Weighted Return ${weightedReturn.toFixed(2)}%`);
-
-      // Small delay between calls to avoid provider rate limits
-      await sleep(500);
     } catch (error) {
-      console.error(`Error fetching ${method} data for ${holding.ticker}:`, error.message);
-      valuationReturns[holding.ticker] = {
+      console.error(`Error processing ${holding.ticker}:`, error.message);
+      return {
+        ticker: holding.ticker,
         upside: 0,
         fairValue: 0,
         currentPrice: 0,
         error: error.message
       };
     }
-  }
+  });
+
+  // Wait for all valuations to complete
+  const results = await Promise.all(valuationPromises);
+
+  // Convert array to object and calculate total
+  const valuationReturns = {};
+  let totalWeightedReturn = 0;
+
+  results.forEach((result, index) => {
+    valuationReturns[result.ticker] = result;
+    const weightedReturn = (holdings[index].weight / 100) * result.upside;
+    totalWeightedReturn += weightedReturn;
+    console.log(`${result.ticker}: ${method.toUpperCase()} Upside ${result.upside.toFixed(1)}%, Weighted Return ${weightedReturn.toFixed(2)}%`);
+  });
 
   return {
     individualReturns: valuationReturns,
     portfolioExpectedReturn: totalWeightedReturn
   };
 }
+
 
 async function calculatePortfolioBetaAlternative(returns, weights, startDate, endDate) {
   try {
