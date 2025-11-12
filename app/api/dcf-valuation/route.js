@@ -133,8 +133,8 @@ export async function GET(request) {
         let valuation = null;
         // Try different models with exponential backoff
         const models = [
-          'x-ai/grok-code-fast-1',
-          'x-ai/grok-beta',
+          'google/gemini-2.5-flash',
+          'google/gemini-2.5-flash',
           'openai/gpt-4o-mini',
           'meta-llama/llama-3.1-8b-instruct:free',
           'microsoft/phi-3-medium-128k-instruct:free'
@@ -263,8 +263,8 @@ export async function POST(request) {
       let valuation = null;
       // Try different models with exponential backoff
       const models = [
-        'x-ai/grok-code-fast-1',
-        'x-ai/grok-beta',
+        'google/gemini-2.5-flash',
+        'google/gemini-2.5-flash',
         'openai/gpt-4o-mini',
         'meta-llama/llama-3.1-8b-instruct:free',
         'microsoft/phi-3-medium-128k-instruct:free'
@@ -525,7 +525,7 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
   return null;
 }
 
-async function generateValuation(ticker, method, selectedMultiple, yf_data, sonarFull, userFeedback = '', model = 'x-ai/grok-code-fast-1') {
+async function generateValuation(ticker, method, selectedMultiple, yf_data, sonarFull, userFeedback = '', model = 'google/gemini-2.5-flash') {
   const mkNumber = (v) => Number(v || 0);
   const fy = yf_data?.fy24_financials || {};
   const md = yf_data?.market_data || {};
