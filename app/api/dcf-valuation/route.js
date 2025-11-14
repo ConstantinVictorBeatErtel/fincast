@@ -2,58 +2,71 @@ import { NextResponse } from 'next/server';
 import { headers as nextHeaders } from 'next/headers';
 import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
+import { initializePhoenix, isPhoenixInitialized } from '@/lib/phoenix';
+import { traceOpenRouterRequest } from '@/lib/phoenix-openrouter';
+
+// Initialize Phoenix tracing on module load
+if (!isPhoenixInitialized()) {
+  initializePhoenix();
+}
 
 // Helper function to make OpenRouter API calls with timeout handling
 async function makeOpenRouterRequest(body, timeoutMs = 45000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  // Wrap the actual HTTP request in a function for Phoenix tracing
+  const executeRequest = async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  try {
-    const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+    try {
+      const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': referer,
-        'Referer': referer,
-        'Origin': referer,
-        'X-Title': 'Fincast Valuation App'
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: { message: 'Failed to parse error response' } }));
-      console.error('OpenRouter API error:', {
-        status: response.status,
-        statusText: response.statusText,
-        error: error,
-        body: body
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': referer,
+          'Referer': referer,
+          'Origin': referer,
+          'X-Title': 'Fincast Valuation App'
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
       });
 
-      if (response.status === 404) {
-        throw new Error('Unable to find data. Please verify the ticker symbol.');
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: { message: 'Failed to parse error response' } }));
+        console.error('OpenRouter API error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: error,
+          body: body
+        });
+
+        if (response.status === 404) {
+          throw new Error('Unable to find data. Please verify the ticker symbol.');
+        }
+
+        throw new Error(`Provider returned error: ${error.error?.message || error.message || 'Unknown error'}`);
       }
 
-      throw new Error(`Provider returned error: ${error.error?.message || error.message || 'Unknown error'}`);
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+
+      if (error.name === 'AbortError') {
+        console.error('OpenRouter API request timed out after', timeoutMs / 1000, 'seconds');
+        throw new Error('Request timed out. Please try again.');
+      }
+
+      throw error;
     }
+  };
 
-    return await response.json();
-  } catch (error) {
-    clearTimeout(timeoutId);
-
-    if (error.name === 'AbortError') {
-      console.error('OpenRouter API request timed out after', timeoutMs / 1000, 'seconds');
-      throw new Error('Request timed out. Please try again.');
-    }
-
-    throw error;
-  }
+  // Trace the request with Phoenix
+  return await traceOpenRouterRequest(body, executeRequest);
 }
 
 // Function to get exchange rate from currency to USD

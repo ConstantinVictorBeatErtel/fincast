@@ -14,6 +14,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run py:serve` - Start local Python FastAPI server (requires virtual environment)
 - `npm run py:tunnel` - Start localtunnel for Python API (development tunneling)
 
+### LLM Observability (Phoenix)
+- Phoenix server for LLM tracing: `docker run -p 6006:6006 -p 4317:4317 arizephoenix/phoenix:latest`
+- Phoenix UI available at http://localhost:6006
+- See PHOENIX.md for detailed configuration and usage
+
 ### Manual Python Setup
 ```bash
 source venv/bin/activate
@@ -27,7 +32,8 @@ uvicorn python_api:app --host 127.0.0.1 --port 8000
 - **Styling**: Tailwind CSS with shadcn/ui components (Radix UI primitives)
 - **Backend**: Hybrid Next.js API routes + Python FastAPI
 - **Data Sources**: Yahoo Finance via `yfinance` (Python) and `yahoo-finance2` (Node.js)
-- **AI Integration**: Claude AI (Anthropic) for financial analysis and projections
+- **AI Integration**: OpenRouter API for financial analysis and projections (Grok, GPT-4o-mini, etc.)
+- **Observability**: Arize Phoenix for LLM tracing and monitoring
 - **Deployment**: Vercel with serverless functions
 
 ### Key Components
@@ -53,7 +59,9 @@ uvicorn python_api:app --host 127.0.0.1 --port 8000
 ### Environment Configuration
 
 Required environment variables (see `env.example`):
-- `ANTHROPIC_API_KEY` - Claude AI API key for financial analysis
+- `OPENROUTER_API_KEY` - OpenRouter API key for LLM financial analysis
+- `PHOENIX_ENABLED` - Enable/disable Phoenix LLM tracing (default: true)
+- `PHOENIX_COLLECTOR_ENDPOINT` - Phoenix collector endpoint (default: http://localhost:6006/v1/traces)
 - `DATABASE_URL` - PostgreSQL connection (planned)
 - `NEXTAUTH_*` - Authentication configuration (planned)
 - `GOOGLE_CLIENT_*` - OAuth configuration (planned)
@@ -82,8 +90,9 @@ Required environment variables (see `env.example`):
 1. Frontend requests financial data
 2. Next.js API routes coordinate between services
 3. Python services fetch from Yahoo Finance
-4. Claude AI analyzes and projects financial data
-5. Results formatted and returned to frontend
+4. OpenRouter LLM (Grok, GPT-4o-mini, etc.) analyzes and projects financial data
+5. Phoenix traces all LLM calls for observability
+6. Results formatted and returned to frontend
 
 ### Special Considerations
 
@@ -109,3 +118,6 @@ Required environment variables (see `env.example`):
 - `/scripts` - Python utilities for financial data
 - `/api` - Vercel serverless functions (Python)
 - `/lib` - Utility functions and configurations
+  - `phoenix.js` - Phoenix tracing initialization
+  - `phoenix-openrouter.js` - OpenRouter instrumentation
+  - `phoenix_python.py` - Python Phoenix configuration
