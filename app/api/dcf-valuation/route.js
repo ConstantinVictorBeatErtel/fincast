@@ -187,6 +187,7 @@ export async function GET(request) {
           const fallbackYears = Array.from({length: 6}, (_, i) => fallbackStartYear + i);
 
           // Create a basic fallback valuation if LLM completely fails
+          const fallbackYearsToFinal = fallbackYears[5] - currentYear;
           valuation = {
             rawForecast: `Basic financial forecast for ${ticker}:\n\nYear | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M) | EPS\n---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | --------------- | ---\n${fallbackYears[0]} | 100000 | N/A | 40.0 | 25.0 | 20.0 | 20000 | 5.00\n${fallbackYears[1]} | 105000 | 5.0 | 40.0 | 25.0 | 20.0 | 21000 | 5.25\n${fallbackYears[2]} | 110250 | 5.0 | 40.0 | 25.0 | 20.0 | 22050 | 5.51\n${fallbackYears[3]} | 115763 | 5.0 | 40.0 | 25.0 | 20.0 | 23153 | 5.79\n${fallbackYears[4]} | 121551 | 5.0 | 40.0 | 25.0 | 20.0 | 24310 | 6.08\n${fallbackYears[5]} | 127628 | 5.0 | 40.0 | 25.0 | 20.0 | 25526 | 6.38`,
             companyName: yf?.company_name || ticker,
@@ -196,7 +197,12 @@ export async function GET(request) {
             exitMultipleType: 'P/E',
             exitMultipleValue: 20,
             upside: 11.11,
-            cagr: 2.13,
+            cagr: fallbackYearsToFinal > 0 ? (Math.pow(100 / 90, 1 / fallbackYearsToFinal) - 1) * 100 : 2.13,
+            discountedUpside: 8.0,
+            finalYear: fallbackYears[5],
+            yearsToFinal: fallbackYearsToFinal,
+            periodLabel: fy.period_label || 'FY2024',
+            latestQuarter: fy.latest_quarter || '',
             projections: [
               { year: String(fallbackYears[0]), revenue: 100000, revenueGrowth: 0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 20000, eps: 5.00 },
               { year: String(fallbackYears[1]), revenue: 105000, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 21000, eps: 5.25 },
@@ -332,6 +338,7 @@ export async function POST(request) {
         const fallbackYears = Array.from({length: 6}, (_, i) => fallbackStartYear + i);
 
         // Create a basic fallback valuation if LLM completely fails
+        const fallbackYearsToFinal = fallbackYears[5] - currentYear;
         valuation = {
           rawForecast: `Basic financial forecast for ${ticker} (with feedback: ${feedback || 'none'}):\n\nYear | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M) | EPS\n---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | --------------- | ---\n${fallbackYears[0]} | 100000 | N/A | 40.0 | 25.0 | 20.0 | 20000 | 5.00\n${fallbackYears[1]} | 105000 | 5.0 | 40.0 | 25.0 | 20.0 | 21000 | 5.25\n${fallbackYears[2]} | 110250 | 5.0 | 40.0 | 25.0 | 20.0 | 22050 | 5.51\n${fallbackYears[3]} | 115763 | 5.0 | 40.0 | 25.0 | 20.0 | 23153 | 5.79\n${fallbackYears[4]} | 121551 | 5.0 | 40.0 | 25.0 | 20.0 | 24310 | 6.08\n${fallbackYears[5]} | 127628 | 5.0 | 40.0 | 25.0 | 20.0 | 25526 | 6.38`,
           companyName: yf?.company_name || ticker,
@@ -341,7 +348,12 @@ export async function POST(request) {
           exitMultipleType: 'P/E',
           exitMultipleValue: 20,
           upside: 11.11,
-          cagr: 2.13,
+          cagr: fallbackYearsToFinal > 0 ? (Math.pow(100 / 90, 1 / fallbackYearsToFinal) - 1) * 100 : 2.13,
+          discountedUpside: 8.0,
+          finalYear: fallbackYears[5],
+          yearsToFinal: fallbackYearsToFinal,
+          periodLabel: fy.period_label || 'FY2024',
+          latestQuarter: fy.latest_quarter || '',
           projections: [
             { year: String(fallbackYears[0]), revenue: 100000, revenueGrowth: 0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 20000, eps: 5.00 },
             { year: String(fallbackYears[1]), revenue: 105000, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 21000, eps: 5.25 },
@@ -1069,10 +1081,17 @@ Return ONLY the <forecast> section as specified above, without any additional co
   const currentPrice = mkNumber(md.current_price);
   let upside = 0;
   let cagr = 0;
+  let discountedUpside = 0;
   let exitMultipleType = exitTypeMatch ? exitTypeMatch[1].trim() : null;
   let exitMultipleValue = exitValueMatch ? parseFloat(exitValueMatch[1]) : null;
   let discountRate = discountMatch ? parseFloat(discountMatch[1]) : null;
   let terminalGrowth = terminalMatch ? parseFloat(terminalMatch[1]) : null;
+
+  // Determine final year and years to final year
+  const finalYear = projections.length > 0 ? parseInt(projections[projections.length - 1].year) : (startYear + 5);
+  const currentDate = new Date();
+  const currentYearNow = currentDate.getFullYear();
+  const yearsToFinal = finalYear - currentYearNow;
 
   if (method === 'exit-multiple') {
     if (fvShareMatch) fairValue = parseFloat(fvShareMatch[1].replace(/,/g, ''));
@@ -1089,14 +1108,33 @@ Return ONLY the <forecast> section as specified above, without any additional co
     }
     if (currentPrice > 0 && fairValue > 0) {
       upside = ((fairValue - currentPrice) / currentPrice) * 100;
-      cagr = (Math.pow(fairValue / currentPrice, 1 / 5) - 1) * 100;
+      // CAGR using actual time to final year
+      if (yearsToFinal > 0) {
+        cagr = (Math.pow(fairValue / currentPrice, 1 / yearsToFinal) - 1) * 100;
+      } else {
+        cagr = 0;
+      }
+      // Discounted upside: discount the fair value back to present using discount rate
+      // Use discount rate from DCF if available, otherwise use 10% default
+      const discRate = discountRate || 10.0;
+      const discountedFairValue = fairValue / Math.pow(1 + (discRate / 100), yearsToFinal);
+      discountedUpside = ((discountedFairValue - currentPrice) / currentPrice) * 100;
     }
         } else {
     if (fvMillionMatch) fairValue = parseFloat(fvMillionMatch[1].replace(/,/g, ''));
     const marketCapM = mkNumber(md.market_cap) / 1_000_000;
     if (marketCapM > 0 && fairValue > 0) {
       upside = ((fairValue - marketCapM) / marketCapM) * 100;
-      cagr = (Math.pow(fairValue / marketCapM, 1 / 5) - 1) * 100;
+      // CAGR using actual time to final year
+      if (yearsToFinal > 0) {
+        cagr = (Math.pow(fairValue / marketCapM, 1 / yearsToFinal) - 1) * 100;
+      } else {
+        cagr = 0;
+      }
+      // Discounted upside for DCF method
+      const discRate = discountRate || 10.0;
+      const discountedFairValue = fairValue / Math.pow(1 + (discRate / 100), yearsToFinal);
+      discountedUpside = ((discountedFairValue - marketCapM) / marketCapM) * 100;
     }
   }
 
@@ -1113,6 +1151,11 @@ Return ONLY the <forecast> section as specified above, without any additional co
     exitMultipleValue,
     upside,
     cagr,
+    discountedUpside,
+    finalYear,
+    yearsToFinal,
+    periodLabel: fy.period_label || 'FY2024',
+    latestQuarter: fy.latest_quarter || '',
     sections: {
       forecastTable: forecastText,
       fairValueCalculation: fairValueCalcText,

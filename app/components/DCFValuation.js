@@ -443,7 +443,8 @@ export default function DCFValuation() {
         : `$${valuation.fairValue?.toLocaleString()} million`
       ],
       ['Upside', `${valuation.upside?.toFixed(1) || 0}%`],
-      ['2029 Upside', `${valuation.upside?.toFixed(1) || 0}%`],
+      [`${valuation.finalYear || 2029} Upside`, `${valuation.upside?.toFixed(1) || 0}%`],
+      ['Discounted Upside (PV)', `${valuation.discountedUpside?.toFixed(1) || 0}%`],
       ['Upside CAGR', `${valuation.cagr?.toFixed(1) || 0}%`],
       ['Confidence', valuation.confidence || 'Medium'],
       []
@@ -583,13 +584,13 @@ export default function DCFValuation() {
           const eps = Number(lastProj.eps || 0);
           const fair = eps * multiple;
           calcRows.push(['Calculation Details']);
-          calcRows.push([`Fair Price = 2029 EPS × Multiple`]);
+          calcRows.push([`Fair Price = ${valuation.finalYear || 2029} EPS × Multiple`]);
           calcRows.push([`= ${eps.toFixed(2)} × ${multiple} = $${fair.toFixed(2)} per share`]);
         } else if (type === 'EV/EBITDA' && lastProj) {
           const ebitda = Number(lastProj.ebitda || 0);
           const fairEV = ebitda * multiple;
           calcRows.push(['Calculation Details']);
-          calcRows.push([`Fair EV ($M) = 2029 EBITDA × Multiple`]);
+          calcRows.push([`Fair EV ($M) = ${valuation.finalYear || 2029} EBITDA × Multiple`]);
           calcRows.push([`= ${ebitda.toFixed(1)} × ${multiple} = $${fairEV.toFixed(1)}M`]);
           // Try to convert to per-share using current net debt
           const evM = Number(valuation.sourceMetrics?.enterpriseValue || 0); // $M
@@ -608,7 +609,7 @@ export default function DCFValuation() {
           const fcf = Number(lastProj.fcf || lastProj.freeCashFlow || 0);
           const fairEV = fcf * multiple;
           calcRows.push(['Calculation Details']);
-          calcRows.push([`Fair EV ($M) = 2029 FCF × Multiple`]);
+          calcRows.push([`Fair EV ($M) = ${valuation.finalYear || 2029} FCF × Multiple`]);
           calcRows.push([`= ${fcf.toFixed(1)} × ${multiple} = $${fairEV.toFixed(1)}M`]);
         }
       } else if (valuation.method === 'dcf' && lastProj) {
@@ -894,9 +895,12 @@ export default function DCFValuation() {
                     </p>
                   </div>
                   <div>
-                    <h3 className="text-sm font-medium text-gray-500">2029 Upside</h3>
+                    <h3 className="text-sm font-medium text-gray-500">{valuation.finalYear || 2029} Upside</h3>
                     <p className="text-xl font-bold text-green-600">
                       {valuation.upside?.toFixed(1) || 0}%
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Discounted (PV): {valuation.discountedUpside?.toFixed(1) || 0}%
                     </p>
                   </div>
                   <div>
@@ -935,7 +939,14 @@ export default function DCFValuation() {
             <TabsContent value="forecast">
               <Card>
                 <CardHeader>
-                  <CardTitle>Financial Forecast</CardTitle>
+                  <CardTitle>
+                    Financial Forecast
+                    {valuation.periodLabel && (
+                      <span className="text-sm font-normal text-gray-600 ml-2">
+                        (Starting from {valuation.periodLabel})
+                      </span>
+                    )}
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-6">
@@ -1518,7 +1529,9 @@ export default function DCFValuation() {
 
                     {/* Historical Financials Section */}
                     <div className="mt-8">
-                      <h3 className="text-xl font-bold mb-4 text-gray-800">Historical Financials (FY21-FY24)</h3>
+                      <h3 className="text-xl font-bold mb-4 text-gray-800">
+                        Historical Financials {valuation.periodLabel ? `(Latest: ${valuation.periodLabel})` : '(FY21-FY24)'}
+                      </h3>
                       
                       {/* Historical Charts */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
