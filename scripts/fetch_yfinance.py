@@ -69,14 +69,133 @@ def convert_currency(value, from_currency, to_currency='USD'):
     return value * rate
 
 
+def calculate_ttm_from_quarterly(quarterly_income, quarterly_cashflow=None):
+    """Calculate TTM (Trailing Twelve Months) figures from quarterly data."""
+    ttm_data = {
+        "revenue": 0,
+        "gross_profit": 0,
+        "gross_margin_pct": 0,
+        "ebitda": 0,
+        "ebitda_margin_pct": 0,
+        "net_income": 0,
+        "eps": 0,
+        "shares_outstanding": 0,
+        "fcf": 0,
+        "fcf_margin_pct": 0,
+        "period_label": "TTM",
+        "latest_quarter": None
+    }
+
+    if quarterly_income is None or quarterly_income.empty or len(quarterly_income.columns) < 4:
+        debug("Insufficient quarterly data for TTM calculation")
+        return None
+
+    # Get last 4 quarters (most recent first in yfinance)
+    last_4_quarters = list(quarterly_income.columns[:4])
+    debug(f"Calculating TTM from quarters: {[str(q) for q in last_4_quarters]}")
+
+    # Identify latest quarter for labeling
+    latest_q = last_4_quarters[0]
+    try:
+        # Extract quarter info (e.g., "2024-09-30" -> "Q3 2024")
+        quarter_date = str(latest_q)[:10]
+        year = quarter_date[:4]
+        month = int(quarter_date[5:7])
+        quarter_num = (month - 1) // 3 + 1
+        ttm_data["period_label"] = f"TTM Q{quarter_num} {year}"
+        ttm_data["latest_quarter"] = quarter_date
+        debug(f"TTM period: {ttm_data['period_label']}")
+    except Exception as e:
+        debug(f"Could not parse quarter date: {e}")
+
+    # Sum up metrics from last 4 quarters
+    try:
+        # Revenue
+        if 'Total Revenue' in quarterly_income.index:
+            ttm_data["revenue"] = sum(safe_float(quarterly_income.loc['Total Revenue', q]) for q in last_4_quarters)
+            debug(f"TTM Revenue: ${ttm_data['revenue']:,.0f}")
+
+        # Gross Profit
+        if 'Gross Profit' in quarterly_income.index:
+            ttm_data["gross_profit"] = sum(safe_float(quarterly_income.loc['Gross Profit', q]) for q in last_4_quarters)
+            if ttm_data["revenue"] > 0:
+                ttm_data["gross_margin_pct"] = (ttm_data["gross_profit"] / ttm_data["revenue"]) * 100
+            debug(f"TTM Gross Profit: ${ttm_data['gross_profit']:,.0f}, Margin: {ttm_data['gross_margin_pct']:.1f}%")
+
+        # EBITDA
+        if 'EBITDA' in quarterly_income.index:
+            ttm_data["ebitda"] = sum(safe_float(quarterly_income.loc['EBITDA', q]) for q in last_4_quarters)
+            if ttm_data["revenue"] > 0:
+                ttm_data["ebitda_margin_pct"] = (ttm_data["ebitda"] / ttm_data["revenue"]) * 100
+            debug(f"TTM EBITDA: ${ttm_data['ebitda']:,.0f}, Margin: {ttm_data['ebitda_margin_pct']:.1f}%")
+
+        # Net Income
+        if 'Net Income' in quarterly_income.index:
+            ttm_data["net_income"] = sum(safe_float(quarterly_income.loc['Net Income', q]) for q in last_4_quarters)
+            debug(f"TTM Net Income: ${ttm_data['net_income']:,.0f}")
+
+        # EPS (use most recent quarter's diluted shares for calculation)
+        if 'Diluted Average Shares' in quarterly_income.index:
+            # Get shares from most recent quarter
+            ttm_data["shares_outstanding"] = safe_float(quarterly_income.loc['Diluted Average Shares', last_4_quarters[0]])
+            if ttm_data["shares_outstanding"] > 0 and ttm_data["net_income"] != 0:
+                ttm_data["eps"] = ttm_data["net_income"] / ttm_data["shares_outstanding"]
+            debug(f"TTM EPS: ${ttm_data['eps']:.2f}")
+
+        # FCF from quarterly cash flow statement
+        if quarterly_cashflow is not None and not quarterly_cashflow.empty:
+            try:
+                ocf_labels = ['Operating Cash Flow', 'Total Cash From Operating Activities', 'Cash Flow From Operating Activities']
+                capex_labels = ['Capital Expenditure', 'Capital Expenditures']
+
+                ttm_ocf = 0
+                ttm_capex = 0
+
+                for q in last_4_quarters:
+                    if q in quarterly_cashflow.columns:
+                        # Get OCF for this quarter
+                        for ocf_label in ocf_labels:
+                            if ocf_label in quarterly_cashflow.index:
+                                ttm_ocf += safe_float(quarterly_cashflow.loc[ocf_label, q])
+                                break
+                        # Get CapEx for this quarter
+                        for capex_label in capex_labels:
+                            if capex_label in quarterly_cashflow.index:
+                                ttm_capex += safe_float(quarterly_cashflow.loc[capex_label, q])
+                                break
+
+                ttm_data["fcf"] = ttm_ocf + ttm_capex  # CapEx is negative
+                if ttm_data["revenue"] > 0:
+                    ttm_data["fcf_margin_pct"] = (ttm_data["fcf"] / ttm_data["revenue"]) * 100
+                debug(f"TTM FCF: ${ttm_data['fcf']:,.0f}, Margin: {ttm_data['fcf_margin_pct']:.1f}%")
+            except Exception as fcf_err:
+                debug(f"TTM FCF calculation failed: {fcf_err}")
+                # Fallback to 25% estimate
+                if ttm_data["revenue"] > 0:
+                    ttm_data["fcf"] = ttm_data["revenue"] * 0.25
+                    ttm_data["fcf_margin_pct"] = 25.0
+        else:
+            # No cash flow data, use 25% estimate
+            if ttm_data["revenue"] > 0:
+                ttm_data["fcf"] = ttm_data["revenue"] * 0.25
+                ttm_data["fcf_margin_pct"] = 25.0
+                debug(f"TTM FCF (estimated): ${ttm_data['fcf']:,.0f}")
+
+    except Exception as e:
+        debug(f"Error calculating TTM metrics: {e}")
+        return None
+
+    return ttm_data
+
+
 def fetch_financials(ticker):
     """Fetch financial data from yfinance for a given ticker."""
     try:
         debug(f"Fetching data for {ticker}...")
-        
+
         # Create ticker object
         company = yf.Ticker(ticker)
-        
+
         # Get current price from download method
         current_price = 0
         try:
@@ -88,7 +207,7 @@ def fetch_financials(ticker):
                 debug("Download returned empty data")
         except Exception as e:
             debug(f"Download failed: {e}")
-        
+
         # Get financial data using the working methods
         fy24_financials = {
             "revenue": 0,
@@ -98,19 +217,29 @@ def fetch_financials(ticker):
             "eps": 0,
             "shares_outstanding": 0
         }
-        
+
         market_data = {
             "current_price": current_price,
             "market_cap": 0,
             "enterprise_value": 0,
             "pe_ratio": 0
         }
-        
+
         historical_financials = []
+        ttm_financials = None
 
         try:
-            # Get income statement data
+            # Get income statement data (annual)
             income_stmt = company.income_stmt
+            # Get quarterly income statement for TTM calculation
+            quarterly_income = None
+            quarterly_cashflow = None
+            try:
+                quarterly_income = company.quarterly_income_stmt
+                debug(f"Fetched quarterly income statement with {len(quarterly_income.columns) if quarterly_income is not None and not quarterly_income.empty else 0} quarters")
+            except Exception as qe:
+                debug(f"Could not fetch quarterly income statement: {qe}")
+
             # Try to get cash flow statement (newer yfinance uses cash_flow)
             cash_flow = None
             try:
@@ -120,16 +249,54 @@ def fetch_financials(ticker):
                     cash_flow = company.cashflow
                 except Exception:
                     cash_flow = None
-            if income_stmt is not None and not income_stmt.empty and len(income_stmt.columns) > 0:
+
+            # Get quarterly cash flow for TTM calculation
+            try:
+                quarterly_cashflow = company.quarterly_cashflow
+                debug(f"Fetched quarterly cash flow with {len(quarterly_cashflow.columns) if quarterly_cashflow is not None and not quarterly_cashflow.empty else 0} quarters")
+            except Exception:
+                try:
+                    quarterly_cashflow = company.quarterly_cash_flow
+                except Exception:
+                    quarterly_cashflow = None
+
+            # Calculate TTM financials from quarterly data
+            if quarterly_income is not None and not quarterly_income.empty:
+                ttm_financials = calculate_ttm_from_quarterly(quarterly_income, quarterly_cashflow)
+                if ttm_financials:
+                    debug(f"Successfully calculated TTM financials for {ttm_financials['period_label']}")
+                    # Use TTM as the primary financials instead of annual
+                    fy24_financials = {
+                        "revenue": ttm_financials["revenue"],
+                        "gross_profit": ttm_financials["gross_profit"],
+                        "gross_margin_pct": ttm_financials["gross_margin_pct"],
+                        "ebitda": ttm_financials["ebitda"],
+                        "ebitda_margin_pct": ttm_financials.get("ebitda_margin_pct", 0),
+                        "net_income": ttm_financials["net_income"],
+                        "eps": ttm_financials["eps"],
+                        "shares_outstanding": ttm_financials["shares_outstanding"],
+                        "fcf": ttm_financials["fcf"],
+                        "fcf_margin_pct": ttm_financials["fcf_margin_pct"],
+                        "period_label": ttm_financials["period_label"],
+                        "latest_quarter": ttm_financials["latest_quarter"]
+                    }
+                    debug(f"Using TTM financials as primary data source")
+                else:
+                    debug("TTM calculation failed, falling back to annual data")
+            else:
+                debug("No quarterly data available, using annual data")
+
+            # If TTM calculation failed or no quarterly data, fall back to annual data
+            if not ttm_financials and income_stmt is not None and not income_stmt.empty and len(income_stmt.columns) > 0:
                 latest_year = income_stmt.columns[0]
                 debug(f"Latest financial year: {latest_year}")
-                
-                # Extract key metrics
+
+                # Extract key metrics from annual data
                 if 'Total Revenue' in income_stmt.index:
                     revenue = income_stmt.loc['Total Revenue', latest_year]
                     fy24_financials["revenue"] = safe_float(revenue)
                     debug(f"Revenue: ${fy24_financials['revenue']:,.0f}")
-                
+
                 if 'Gross Profit' in income_stmt.index and 'Total Revenue' in income_stmt.index:
                     gross_profit = income_stmt.loc['Gross Profit', latest_year]
                     revenue = income_stmt.loc['Total Revenue', latest_year]
@@ -138,7 +305,7 @@ def fetch_financials(ticker):
                     if revenue != 0:
                         fy24_financials["gross_margin_pct"] = (safe_float(gross_profit) / safe_float(revenue)) * 100
                         debug(f"Gross Margin: {fy24_financials['gross_margin_pct']:.1f}%")
-                
+
                 if 'EBITDA' in income_stmt.index:
                     ebitda = income_stmt.loc['EBITDA', latest_year]
                     fy24_financials["ebitda"] = safe_float(ebitda)
@@ -149,17 +316,17 @@ def fetch_financials(ticker):
                         if revenue != 0:
                             fy24_financials["ebitda_margin_pct"] = (safe_float(ebitda) / revenue) * 100
                             debug(f"EBITDA Margin: {fy24_financials['ebitda_margin_pct']:.1f}%")
-                
+
                 if 'Net Income' in income_stmt.index:
                     net_income = income_stmt.loc['Net Income', latest_year]
                     fy24_financials["net_income"] = safe_float(net_income)
                     debug(f"Net Income: ${fy24_financials['net_income']:,.0f}")
-                
+
                 if 'Diluted EPS' in income_stmt.index:
                     eps = income_stmt.loc['Diluted EPS', latest_year]
                     fy24_financials["eps"] = safe_float(eps)
                     debug(f"EPS: ${fy24_financials['eps']:.2f}")
-                
+
                 if 'Diluted Average Shares' in income_stmt.index:
                     shares = income_stmt.loc['Diluted Average Shares', latest_year]
                     fy24_financials["shares_outstanding"] = safe_float(shares)

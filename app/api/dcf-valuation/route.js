@@ -171,9 +171,21 @@ export async function GET(request) {
         }
         if (!valuation) {
           console.log('[LLM] All attempts failed, creating fallback valuation');
+          // Determine starting year from TTM data
+          const fy = yf?.fy24_financials || {};
+          const latestQuarter = fy.latest_quarter || '';
+          let fallbackStartYear = 2024;
+          if (latestQuarter) {
+            const quarterYear = parseInt(latestQuarter.substring(0, 4));
+            if (!isNaN(quarterYear) && quarterYear >= 2024) {
+              fallbackStartYear = quarterYear;
+            }
+          }
+          const fallbackYears = Array.from({length: 6}, (_, i) => fallbackStartYear + i);
+
           // Create a basic fallback valuation if LLM completely fails
           valuation = {
-            rawForecast: `Basic financial forecast for ${ticker}:\n\nYear | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M) | EPS\n---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | --------------- | ---\n2024 | 100000 | N/A | 40.0 | 25.0 | 20.0 | 20000 | 5.00\n2025 | 105000 | 5.0 | 40.0 | 25.0 | 20.0 | 21000 | 5.25\n2026 | 110250 | 5.0 | 40.0 | 25.0 | 20.0 | 22050 | 5.51\n2027 | 115763 | 5.0 | 40.0 | 25.0 | 20.0 | 23153 | 5.79\n2028 | 121551 | 5.0 | 40.0 | 25.0 | 20.0 | 24310 | 6.08\n2029 | 127628 | 5.0 | 40.0 | 25.0 | 20.0 | 25526 | 6.38`,
+            rawForecast: `Basic financial forecast for ${ticker}:\n\nYear | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M) | EPS\n---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | --------------- | ---\n${fallbackYears[0]} | 100000 | N/A | 40.0 | 25.0 | 20.0 | 20000 | 5.00\n${fallbackYears[1]} | 105000 | 5.0 | 40.0 | 25.0 | 20.0 | 21000 | 5.25\n${fallbackYears[2]} | 110250 | 5.0 | 40.0 | 25.0 | 20.0 | 22050 | 5.51\n${fallbackYears[3]} | 115763 | 5.0 | 40.0 | 25.0 | 20.0 | 23153 | 5.79\n${fallbackYears[4]} | 121551 | 5.0 | 40.0 | 25.0 | 20.0 | 24310 | 6.08\n${fallbackYears[5]} | 127628 | 5.0 | 40.0 | 25.0 | 20.0 | 25526 | 6.38`,
             companyName: yf?.company_name || ticker,
             method: method,
             fairValue: 100,
@@ -183,12 +195,12 @@ export async function GET(request) {
             upside: 11.11,
             cagr: 2.13,
             projections: [
-              { year: '2024', revenue: 100000, revenueGrowth: 0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 20000, eps: 5.00 },
-              { year: '2025', revenue: 105000, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 21000, eps: 5.25 },
-              { year: '2026', revenue: 110250, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 22050, eps: 5.51 },
-              { year: '2027', revenue: 115763, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 23153, eps: 5.79 },
-              { year: '2028', revenue: 121551, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 24310, eps: 6.08 },
-              { year: '2029', revenue: 127628, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 25526, eps: 6.38 }
+              { year: String(fallbackYears[0]), revenue: 100000, revenueGrowth: 0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 20000, eps: 5.00 },
+              { year: String(fallbackYears[1]), revenue: 105000, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 21000, eps: 5.25 },
+              { year: String(fallbackYears[2]), revenue: 110250, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 22050, eps: 5.51 },
+              { year: String(fallbackYears[3]), revenue: 115763, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 23153, eps: 5.79 },
+              { year: String(fallbackYears[4]), revenue: 121551, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 24310, eps: 6.08 },
+              { year: String(fallbackYears[5]), revenue: 127628, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 25526, eps: 6.38 }
             ],
             historicalFinancials: yf?.historical_financials || [],
             latestDevelopments: 'LLM service temporarily unavailable. Showing basic financial projections.',
@@ -301,9 +313,21 @@ export async function POST(request) {
       }
       if (!valuation) {
         console.log('[LLM] POST All attempts failed, creating fallback valuation');
+        // Determine starting year from TTM data
+        const fy = yf?.fy24_financials || {};
+        const latestQuarter = fy.latest_quarter || '';
+        let fallbackStartYear = 2024;
+        if (latestQuarter) {
+          const quarterYear = parseInt(latestQuarter.substring(0, 4));
+          if (!isNaN(quarterYear) && quarterYear >= 2024) {
+            fallbackStartYear = quarterYear;
+          }
+        }
+        const fallbackYears = Array.from({length: 6}, (_, i) => fallbackStartYear + i);
+
         // Create a basic fallback valuation if LLM completely fails
         valuation = {
-          rawForecast: `Basic financial forecast for ${ticker} (with feedback: ${feedback || 'none'}):\n\nYear | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M) | EPS\n---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | --------------- | ---\n2024 | 100000 | N/A | 40.0 | 25.0 | 20.0 | 20000 | 5.00\n2025 | 105000 | 5.0 | 40.0 | 25.0 | 20.0 | 21000 | 5.25\n2026 | 110250 | 5.0 | 40.0 | 25.0 | 20.0 | 22050 | 5.51\n2027 | 115763 | 5.0 | 40.0 | 25.0 | 20.0 | 23153 | 5.79\n2028 | 121551 | 5.0 | 40.0 | 25.0 | 20.0 | 24310 | 6.08\n2029 | 127628 | 5.0 | 40.0 | 25.0 | 20.0 | 25526 | 6.38`,
+          rawForecast: `Basic financial forecast for ${ticker} (with feedback: ${feedback || 'none'}):\n\nYear | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M) | EPS\n---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | --------------- | ---\n${fallbackYears[0]} | 100000 | N/A | 40.0 | 25.0 | 20.0 | 20000 | 5.00\n${fallbackYears[1]} | 105000 | 5.0 | 40.0 | 25.0 | 20.0 | 21000 | 5.25\n${fallbackYears[2]} | 110250 | 5.0 | 40.0 | 25.0 | 20.0 | 22050 | 5.51\n${fallbackYears[3]} | 115763 | 5.0 | 40.0 | 25.0 | 20.0 | 23153 | 5.79\n${fallbackYears[4]} | 121551 | 5.0 | 40.0 | 25.0 | 20.0 | 24310 | 6.08\n${fallbackYears[5]} | 127628 | 5.0 | 40.0 | 25.0 | 20.0 | 25526 | 6.38`,
           companyName: yf?.company_name || ticker,
           method: method,
           fairValue: 100,
@@ -313,12 +337,12 @@ export async function POST(request) {
           upside: 11.11,
           cagr: 2.13,
           projections: [
-            { year: '2024', revenue: 100000, revenueGrowth: 0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 20000, eps: 5.00 },
-            { year: '2025', revenue: 105000, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 21000, eps: 5.25 },
-            { year: '2026', revenue: 110250, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 22050, eps: 5.51 },
-            { year: '2027', revenue: 115763, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 23153, eps: 5.79 },
-            { year: '2028', revenue: 121551, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 24310, eps: 6.08 },
-            { year: '2029', revenue: 127628, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 25526, eps: 6.38 }
+            { year: String(fallbackYears[0]), revenue: 100000, revenueGrowth: 0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 20000, eps: 5.00 },
+            { year: String(fallbackYears[1]), revenue: 105000, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 21000, eps: 5.25 },
+            { year: String(fallbackYears[2]), revenue: 110250, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 22050, eps: 5.51 },
+            { year: String(fallbackYears[3]), revenue: 115763, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 23153, eps: 5.79 },
+            { year: String(fallbackYears[4]), revenue: 121551, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 24310, eps: 6.08 },
+            { year: String(fallbackYears[5]), revenue: 127628, revenueGrowth: 5.0, grossMargin: 40, ebitdaMargin: 25, fcfMargin: 20, netIncome: 25526, eps: 6.38 }
           ],
           historicalFinancials: yf?.historical_financials || [],
           latestDevelopments: `LLM service temporarily unavailable. Showing basic financial projections.${feedback ? ` User feedback: ${feedback}` : ''}`,
@@ -530,11 +554,28 @@ async function generateValuation(ticker, method, selectedMultiple, yf_data, sona
   const fy = yf_data?.fy24_financials || {};
   const md = yf_data?.market_data || {};
   const companyName = yf_data?.company_name || ticker;
-  
+
+  // Extract TTM period label and calculate forecast years
+  const periodLabel = fy.period_label || 'FY2024';
+  const latestQuarter = fy.latest_quarter || '';
+
+  // Determine starting year for forecast (current year based on latest quarter or default to 2024)
+  let startYear = 2024;
+  if (latestQuarter) {
+    const quarterYear = parseInt(latestQuarter.substring(0, 4));
+    if (!isNaN(quarterYear) && quarterYear >= 2024) {
+      startYear = quarterYear;
+    }
+  }
+
+  // Calculate forecast years (starting year + 5 years)
+  const forecastYears = Array.from({length: 6}, (_, i) => startYear + i);
+  const forecastRange = `${forecastYears[0]}-${forecastYears[5]}`;
+
   // Restore original, detailed prompts with strict output format and Sonar + yfinance context
     let prompt;
     if (method === 'dcf') {
-      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
+      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year ${forecastYears[5]}. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
 
 The company you will be analyzing is: ${(companyName)}
 
@@ -543,12 +584,12 @@ ${userFeedback && userFeedback.trim().length ? `\nUSER FEEDBACK: ${userFeedback.
 To complete this task, follow these steps:
 IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
 
-Use the FY2024 actuals as your starting point and project forward based on:
+Use the ${periodLabel} actuals as your starting point and project forward based on:
 1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
 2. The yfinance data below (which provides the most current financial metrics)
 3. Your financial analysis expertise to interpret trends and project future performance
 
-1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
+1. ${periodLabel.toUpperCase()} ACTUAL FINANCIALS (from yfinance - most updated):
 - Revenue: ${(mkNumber(fy.revenue)/1_000_000).toLocaleString()}M
 - Gross Margin: ${mkNumber(fy.gross_margin_pct).toFixed(1)}%
 - EBITDA: ${(mkNumber(fy.ebitda)/1_000_000).toLocaleString()}M
@@ -565,26 +606,26 @@ Use the FY2024 actuals as your starting point and project forward based on:
 FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
 ${sonarFull || 'No Sonar data available'}
 
-4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
+4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to ${forecastYears[5]}.
    - Analyze historical revenue growth rates
    - Consider industry trends and market conditions
-   - Estimate year-over-year revenue growth rates until 2029
+   - Estimate year-over-year revenue growth rates until ${forecastYears[5]}
    - Calculate projected revenue figures for each year
 
 5. Estimate gross margin:
    - Review historical gross margin trends
    - Consider factors that may impact future gross margins (e.g., cost of goods sold, pricing strategies)
-   - Project gross margin percentages for each year until 2029
+   - Project gross margin percentages for each year until ${forecastYears[5]}
 
 6. Calculate EBITDA margin:
    - Analyze historical EBITDA margin trends
    - Consider factors that may impact future EBITDA margins (e.g., operating expenses, efficiency improvements)
-   - Project EBITDA margin percentages for each year until 2029
+   - Project EBITDA margin percentages for each year until ${forecastYears[5]}
 
 7. Determine FCF margin:
    - Review historical FCF margin trends
    - Consider factors that may impact future FCF margins (e.g., capital expenditures, working capital changes)
-   - Project FCF margin percentages for each year until 2029
+   - Project FCF margin percentages for each year until ${forecastYears[5]}
 
 8. Project net income:
    - Use the projected revenue and margin figures to calculate net income for each year
@@ -608,16 +649,16 @@ After completing all steps, present your final forecast in the following format:
 <forecast>
 Company Name: ${(companyName)}
 
-Financial Forecast 2024-2029:
+Financial Forecast ${forecastRange}:
 
 Year | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M)
 ---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | ---------------
-2024 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2025 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2026 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2027 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2028 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2029 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
+${forecastYears[0]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
+${forecastYears[1]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
+${forecastYears[2]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
+${forecastYears[3]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
+${forecastYears[4]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
+${forecastYears[5]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
 
 Fair Value Calculation:
 Discount Rate: [Value]%
@@ -627,7 +668,7 @@ Fair Value: $[Value] million
 Current Share Price: $${mkNumber(md.current_price).toFixed(2)}
 
 Assumptions and Justifications:
-[Provide a detailed, company-specific explanation of key assumptions. Reference concrete figures from the Sonar insights (latest quarter trends, guidance) and yfinance actuals (FY2024 metrics, current price/market cap). Include at least 6-10 bullet points covering growth drivers, product/segment dynamics, margin levers, capital intensity, competitive landscape, and risks.]
+[Provide a detailed, company-specific explanation of key assumptions. Reference concrete figures from the Sonar insights (latest quarter trends, guidance) and yfinance actuals (${periodLabel} metrics, current price/market cap). Include at least 6-10 bullet points covering growth drivers, product/segment dynamics, margin levers, capital intensity, competitive landscape, and risks.]
 
 </forecast>
 
@@ -638,8 +679,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
 - EV/FCF: Software (mature stage), Industrial compounders, Capital-light consumer businesses
 - EV/EBITDA: Industrial conglomerates, Telecoms, Infrastructure, Manufacturing, high-growth tech firms
 - Price/Sales: High-growth firms with negative or erratic earnings` : `Use ${selectedMultiple} multiple. For P/E multiples, set enterpriseValue to 0.`;
-      
-      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
+
+      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year ${forecastYears[5]}. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
 
 The company you will be analyzing is: ${(companyName)}
 
@@ -650,12 +691,12 @@ ${userFeedback && userFeedback.trim().length ? `\nUSER FEEDBACK: ${userFeedback.
 To complete this task, follow these steps:
 IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
 
-Use the FY2024 actuals as your starting point and project forward based on:
+Use the ${periodLabel} actuals as your starting point and project forward based on:
 1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
 2. The yfinance data below (which provides the most current financial metrics)
 3. Your financial analysis expertise to interpret trends and project future performance
 
-1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
+1. ${periodLabel.toUpperCase()} ACTUAL FINANCIALS (from yfinance - most updated):
 - Revenue: ${(mkNumber(fy.revenue)/1_000_000).toLocaleString()}M
 - Gross Margin: ${mkNumber(fy.gross_margin_pct).toFixed(1)}%
 - EBITDA: ${(mkNumber(fy.ebitda)/1_000_000).toLocaleString()}M
@@ -672,26 +713,26 @@ Use the FY2024 actuals as your starting point and project forward based on:
 FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
 ${sonarFull || 'No Sonar data available'}
 
-4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
+4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to ${forecastYears[5]}.
    - Analyze historical revenue growth rates
    - Consider industry trends and market conditions
-   - Estimate year-over-year revenue growth rates until 2029
+   - Estimate year-over-year revenue growth rates until ${forecastYears[5]}
    - Calculate projected revenue figures for each year
 
 5. Estimate gross margin:
    - Review historical gross margin trends
    - Consider factors that may impact future gross margins (e.g., cost of goods sold, pricing strategies)
-   - Project gross margin percentages for each year until 2029
+   - Project gross margin percentages for each year until ${forecastYears[5]}
 
 6. Calculate EBITDA margin:
    - Analyze historical EBITDA margin trends
    - Consider factors that may impact future EBITDA margins (e.g., operating expenses, efficiency improvements)
-   - Project EBITDA margin percentages for each year until 2029
+   - Project EBITDA margin percentages for each year until ${forecastYears[5]}
 
 7. Determine FCF margin:
    - Review historical FCF margin trends
    - Consider factors that may impact future FCF margins (e.g., capital expenditures, working capital changes)
-   - Project FCF margin percentages for each year until 2029
+   - Project FCF margin percentages for each year until ${forecastYears[5]}
 
 8. Project net income and EPS:
    - Use the projected revenue and margin figures to calculate net income for each year
@@ -705,10 +746,10 @@ ${sonarFull || 'No Sonar data available'}
    - Select an appropriate multiple value based on historical ranges and forward-looking expectations
 
 10. Calculate fair value:
-    - Apply the selected exit multiple to the 2029 projected financial metric
-    - For P/E: Fair Value = 2029 EPS × P/E Multiple
-    - For EV/EBITDA: Enterprise Value = 2029 EBITDA × EV/EBITDA Multiple
-    - For EV/FCF: Enterprise Value = 2029 FCF × EV/FCF Multiple
+    - Apply the selected exit multiple to the ${forecastYears[5]} projected financial metric
+    - For P/E: Fair Value = ${forecastYears[5]} EPS × P/E Multiple
+    - For EV/EBITDA: Enterprise Value = ${forecastYears[5]} EBITDA × EV/EBITDA Multiple
+    - For EV/FCF: Enterprise Value = ${forecastYears[5]} FCF × EV/FCF Multiple
     - Convert enterprise value to equity value if using EV multiples
 
 For each step, use <financial_analysis> tags to show your thought process and calculations. Within these tags:
@@ -724,27 +765,27 @@ After completing all steps, present your final forecast in the following format:
 <forecast>
 Company Name: ${(companyName)}
 
-Financial Forecast 2024-2029:
+Financial Forecast ${forecastRange}:
 
 Year | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M) | EPS
 ---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | --------------- | ---
-2024 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
-2025 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
-2026 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
-2027 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
-2028 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
-2029 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+${forecastYears[0]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+${forecastYears[1]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+${forecastYears[2]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+${forecastYears[3]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+${forecastYears[4]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+${forecastYears[5]} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
 
 Exit Multiple Valuation:
 Exit Multiple Type: [P/E, EV/EBITDA, or EV/FCF]
 Exit Multiple Value: [Value]
-2029 Metric Value: [Value]
+${forecastYears[5]} Metric Value: [Value]
 Fair Value: $[Value] per share
 
 Current Share Price: $${mkNumber(md.current_price).toFixed(2)}
 
 Assumptions and Justifications:
-[Provide a detailed, company-specific explanation of key assumptions. Reference concrete figures from the Sonar insights (latest quarter trends, guidance) and yfinance actuals (FY2024 metrics, current price/market cap). Include at least 6-10 bullet points covering growth drivers, product/segment dynamics, margin levers, capital intensity, competitive landscape, and risks.]
+[Provide a detailed, company-specific explanation of key assumptions. Reference concrete figures from the Sonar insights (latest quarter trends, guidance) and yfinance actuals (${periodLabel} metrics, current price/market cap). Include at least 6-10 bullet points covering growth drivers, product/segment dynamics, margin levers, capital intensity, competitive landscape, and risks.]
 
 </forecast>
 
@@ -793,8 +834,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
   };
   const projections = [];
   let prevRevenue = null;
-  // Capture FY2024 FCF margin anchor from yfinance (in %)
-  const fy24Anchor = (() => {
+  // Capture TTM/Latest Period FCF margin anchor from yfinance (in %)
+  const ttmAnchor = (() => {
     try {
       const fy = yf_data?.fy24_financials || {};
       const rev = Number(fy.revenue || 0) / 1_000_000; // convert to $M for consistency
@@ -926,11 +967,11 @@ Return ONLY the <forecast> section as specified above, without any additional co
       }
       if (!p.fcf && p.freeCashFlow) p.fcf = p.freeCashFlow;
       if (!p.freeCashFlow && p.fcf) p.freeCashFlow = p.fcf;
-      // Soft-clamp FCF margin near FY2024 anchor to avoid unrealistic jumps
-      if (typeof p.fcfMargin === 'number' && isFinite(p.fcfMargin) && fy24Anchor != null) {
-        // Allow drift of ±10 percentage points from FY2024
-        const min = fy24Anchor - 10;
-        const max = fy24Anchor + 10;
+      // Soft-clamp FCF margin near TTM/Latest Period anchor to avoid unrealistic jumps
+      if (typeof p.fcfMargin === 'number' && isFinite(p.fcfMargin) && ttmAnchor != null) {
+        // Allow drift of ±10 percentage points from TTM/Latest Period
+        const min = ttmAnchor - 10;
+        const max = ttmAnchor + 10;
         if (p.fcfMargin < min || p.fcfMargin > max) {
           // Nudge into range but keep direction
           p.fcfMargin = Math.max(min, Math.min(max, p.fcfMargin));
