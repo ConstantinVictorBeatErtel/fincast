@@ -97,12 +97,13 @@ def calculate_ttm_from_quarterly(quarterly_income, quarterly_cashflow=None):
     # Identify latest quarter for labeling
     latest_q = last_4_quarters[0]
     try:
-        # Extract quarter info (e.g., "2024-09-30" -> "Q3 2024")
-        quarter_date = str(latest_q)[:10]
+        # Extract quarter info (e.g., "2024-09-30" -> "TTM ending 9/30/2024")
+        quarter_date = str(latest_q)[:10]  # "2024-09-30"
         year = quarter_date[:4]
-        month = int(quarter_date[5:7])
-        quarter_num = (month - 1) // 3 + 1
-        ttm_data["period_label"] = f"TTM Q{quarter_num} {year}"
+        month = quarter_date[5:7]
+        day = quarter_date[8:10]
+        # Format as "TTM ending 9/30/2024"
+        ttm_data["period_label"] = f"TTM ending {month}/{day}/{year}"
         ttm_data["latest_quarter"] = quarter_date
         debug(f"TTM period: {ttm_data['period_label']}")
     except Exception as e:

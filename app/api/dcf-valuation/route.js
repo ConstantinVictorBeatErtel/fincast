@@ -171,14 +171,17 @@ export async function GET(request) {
         }
         if (!valuation) {
           console.log('[LLM] All attempts failed, creating fallback valuation');
-          // Determine starting year from TTM data
+          // Determine starting year from TTM data using calendar year
           const fy = yf?.fy24_financials || {};
           const latestQuarter = fy.latest_quarter || '';
-          let fallbackStartYear = 2024;
+          const currentYear = new Date().getFullYear();
+          let fallbackStartYear = currentYear;
+
           if (latestQuarter) {
             const quarterYear = parseInt(latestQuarter.substring(0, 4));
-            if (!isNaN(quarterYear) && quarterYear >= 2024) {
-              fallbackStartYear = quarterYear;
+            if (!isNaN(quarterYear)) {
+              // Use the quarter's calendar year, but ensure it's not in the past
+              fallbackStartYear = Math.max(quarterYear, currentYear);
             }
           }
           const fallbackYears = Array.from({length: 6}, (_, i) => fallbackStartYear + i);
@@ -313,14 +316,17 @@ export async function POST(request) {
       }
       if (!valuation) {
         console.log('[LLM] POST All attempts failed, creating fallback valuation');
-        // Determine starting year from TTM data
+        // Determine starting year from TTM data using calendar year
         const fy = yf?.fy24_financials || {};
         const latestQuarter = fy.latest_quarter || '';
-        let fallbackStartYear = 2024;
+        const currentYear = new Date().getFullYear();
+        let fallbackStartYear = currentYear;
+
         if (latestQuarter) {
           const quarterYear = parseInt(latestQuarter.substring(0, 4));
-          if (!isNaN(quarterYear) && quarterYear >= 2024) {
-            fallbackStartYear = quarterYear;
+          if (!isNaN(quarterYear)) {
+            // Use the quarter's calendar year, but ensure it's not in the past
+            fallbackStartYear = Math.max(quarterYear, currentYear);
           }
         }
         const fallbackYears = Array.from({length: 6}, (_, i) => fallbackStartYear + i);
@@ -559,12 +565,16 @@ async function generateValuation(ticker, method, selectedMultiple, yf_data, sona
   const periodLabel = fy.period_label || 'FY2024';
   const latestQuarter = fy.latest_quarter || '';
 
-  // Determine starting year for forecast (current year based on latest quarter or default to 2024)
-  let startYear = 2024;
+  // Determine starting year for forecast based on calendar year of latest quarter end
+  const currentYear = new Date().getFullYear();
+  let startYear = currentYear;
+
   if (latestQuarter) {
+    // latestQuarter is in format "2025-09-30", extract the calendar year
     const quarterYear = parseInt(latestQuarter.substring(0, 4));
-    if (!isNaN(quarterYear) && quarterYear >= 2024) {
-      startYear = quarterYear;
+    if (!isNaN(quarterYear)) {
+      // Use the quarter's calendar year, but ensure it's not in the past
+      startYear = Math.max(quarterYear, currentYear);
     }
   }
 
