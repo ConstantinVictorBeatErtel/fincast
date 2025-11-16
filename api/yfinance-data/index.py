@@ -179,6 +179,19 @@ def _fetch_ticker_payload(ticker: str):
                 roic = 0.0
                 try:
                     if bs_df is not None and not bs_df.empty and col in bs_df.columns:
+                        # ROIC = EBIT / Invested Capital
+                        # Try to get EBIT, fallback to EBITDA as approximation
+                        ebit = None
+                        try:
+                            # Try to get EBIT directly
+                            if 'EBIT' in is_df.index:
+                                ebit = _safe_float(is_df.loc['EBIT', col])
+                            # Fallback: use EBITDA as approximation
+                            elif ebitda > 0:
+                                ebit = ebitda
+                        except Exception:
+                            ebit = ebitda if ebitda > 0 else None
+
                         total_equity = None
                         total_debt = None
                         cash = None
@@ -202,15 +215,15 @@ def _fetch_ticker_payload(ticker: str):
                                 break
 
                         # Calculate invested capital
-                        if total_equity is not None:
+                        if total_equity is not None and ebit is not None and ebit > 0:
                             invested_capital = total_equity
                             if total_debt is not None:
                                 invested_capital += total_debt
                             if cash is not None:
                                 invested_capital -= cash
 
-                            if invested_capital > 0 and ni > 0:
-                                roic = (ni / invested_capital) * 100.0
+                            if invested_capital > 0:
+                                roic = (ebit / invested_capital) * 100.0
                 except Exception:
                     pass
 

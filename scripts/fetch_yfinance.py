@@ -298,9 +298,19 @@ def fetch_financials(ticker):
                             roic = 0.0
                             try:
                                 if balance_sheet is not None and not balance_sheet.empty and col in balance_sheet.columns:
-                                    # ROIC = NOPAT / Invested Capital
-                                    # Simplified: ROIC = EBIT(1-tax) / (Total Assets - Current Liabilities)
-                                    # Or even simpler: Net Income / (Total Equity + Total Debt - Cash)
+                                    # ROIC = EBIT / Invested Capital
+                                    # Try to get EBIT, fallback to EBITDA as approximation
+                                    ebit = None
+                                    try:
+                                        # Try to get EBIT directly
+                                        if 'EBIT' in income_stmt.index:
+                                            ebit = safe_float(income_stmt.loc['EBIT', col])
+                                        # Fallback: use EBITDA as approximation
+                                        elif ebitda_val > 0:
+                                            ebit = ebitda_val
+                                    except Exception:
+                                        ebit = ebitda_val if ebitda_val > 0 else None
+
                                     total_equity = None
                                     total_debt = None
                                     cash = None
@@ -324,15 +334,15 @@ def fetch_financials(ticker):
                                             break
 
                                     # Calculate invested capital
-                                    if total_equity is not None:
+                                    if total_equity is not None and ebit is not None and ebit > 0:
                                         invested_capital = total_equity
                                         if total_debt is not None:
                                             invested_capital += total_debt
                                         if cash is not None:
                                             invested_capital -= cash
 
-                                        if invested_capital > 0 and ni > 0:
-                                            roic = (ni / invested_capital) * 100.0
+                                        if invested_capital > 0:
+                                            roic = (ebit / invested_capital) * 100.0
                             except Exception as roic_err:
                                 debug(f"ROIC calculation failed for {col}: {roic_err}")
 
