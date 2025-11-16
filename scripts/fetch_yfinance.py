@@ -120,6 +120,17 @@ def fetch_financials(ticker):
                     cash_flow = company.cashflow
                 except Exception:
                     cash_flow = None
+
+            # Try to get balance sheet
+            balance_sheet = None
+            try:
+                balance_sheet = company.balance_sheet
+            except Exception:
+                try:
+                    balance_sheet = company.balancesheet
+                except Exception:
+                    balance_sheet = None
+
             if income_stmt is not None and not income_stmt.empty and len(income_stmt.columns) > 0:
                 latest_year = income_stmt.columns[0]
                 debug(f"Latest financial year: {latest_year}")
@@ -283,6 +294,109 @@ def fetch_financials(ticker):
                                 rev_growth = 0.0
                             prev_revenue_m = rev_m
 
+                            # Calculate ROIC from balance sheet data
+                            roic = 0.0
+                            try:
+                                if balance_sheet is not None and not balance_sheet.empty and col in balance_sheet.columns:
+                                    # ROIC = NOPAT / Invested Capital
+                                    # Simplified: ROIC = EBIT(1-tax) / (Total Assets - Current Liabilities)
+                                    # Or even simpler: Net Income / (Total Equity + Total Debt - Cash)
+                                    total_equity = None
+                                    total_debt = None
+                                    cash = None
+
+                                    # Try to get stockholder equity
+                                    for equity_label in ['Stockholders Equity', 'Total Equity', 'Stockholders\' Equity', 'Total Stockholder Equity']:
+                                        if equity_label in balance_sheet.index:
+                                            total_equity = safe_float(balance_sheet.loc[equity_label, col])
+                                            break
+
+                                    # Try to get total debt
+                                    for debt_label in ['Total Debt', 'Long Term Debt', 'Net Debt']:
+                                        if debt_label in balance_sheet.index:
+                                            total_debt = safe_float(balance_sheet.loc[debt_label, col])
+                                            break
+
+                                    # Try to get cash
+                                    for cash_label in ['Cash And Cash Equivalents', 'Cash', 'Cash Cash Equivalents And Short Term Investments']:
+                                        if cash_label in balance_sheet.index:
+                                            cash = safe_float(balance_sheet.loc[cash_label, col])
+                                            break
+
+                                    # Calculate invested capital
+                                    if total_equity is not None:
+                                        invested_capital = total_equity
+                                        if total_debt is not None:
+                                            invested_capital += total_debt
+                                        if cash is not None:
+                                            invested_capital -= cash
+
+                                        if invested_capital > 0 and ni > 0:
+                                            roic = (ni / invested_capital) * 100.0
+                            except Exception as roic_err:
+                                debug(f"ROIC calculation failed for {col}: {roic_err}")
+
+                            # Calculate valuation metrics
+                            pe_ratio = 0.0
+                            ev_ebitda = 0.0
+                            ps_ratio = 0.0
+
+                            try:
+                                # Get historical price for this fiscal year end
+                                # Approximate fiscal year end date
+                                if year_num:
+                                    # Try to get price data around fiscal year end (assume December 31)
+                                    year_end_date = f"{year_num}-12-31"
+                                    try:
+                                        # Get historical prices around year end
+                                        hist_prices = yf.download(ticker, start=f"{year_num}-11-01", end=f"{year_num+1}-01-31", progress=False, ignore_tz=True)
+                                        if hist_prices is not None and not hist_prices.empty:
+                                            historical_price = safe_float(hist_prices['Close'].iloc[-1])
+
+                                            # Get shares outstanding for this period
+                                            shares_outstanding = None
+                                            if 'Diluted Average Shares' in income_stmt.index and col in income_stmt.columns:
+                                                shares_outstanding = safe_float(income_stmt.loc['Diluted Average Shares', col])
+
+                                            if shares_outstanding and shares_outstanding > 0:
+                                                historical_market_cap = historical_price * shares_outstanding
+                                                historical_market_cap_m = historical_market_cap / 1_000_000.0
+
+                                                # Calculate P/E
+                                                if ni > 0:
+                                                    pe_ratio = historical_market_cap / ni
+
+                                                # Calculate P/S
+                                                if rev > 0:
+                                                    ps_ratio = historical_market_cap / rev
+
+                                                # Calculate EV/EBITDA
+                                                if ebitda_val > 0:
+                                                    # EV = Market Cap + Total Debt - Cash
+                                                    ev = historical_market_cap
+                                                    if balance_sheet is not None and not balance_sheet.empty and col in balance_sheet.columns:
+                                                        debt = None
+                                                        cash_bs = None
+                                                        for debt_label in ['Total Debt', 'Long Term Debt']:
+                                                            if debt_label in balance_sheet.index:
+                                                                debt = safe_float(balance_sheet.loc[debt_label, col])
+                                                                break
+                                                        for cash_label in ['Cash And Cash Equivalents', 'Cash', 'Cash Cash Equivalents And Short Term Investments']:
+                                                            if cash_label in balance_sheet.index:
+                                                                cash_bs = safe_float(balance_sheet.loc[cash_label, col])
+                                                                break
+
+                                                        if debt is not None:
+                                                            ev += debt
+                                                        if cash_bs is not None:
+                                                            ev -= cash_bs
+
+                                                    ev_ebitda = ev / ebitda_val
+                                    except Exception as price_err:
+                                        debug(f"Historical price fetch failed for {year_num}: {price_err}")
+                            except Exception as val_err:
+                                debug(f"Valuation metrics calculation failed for {col}: {val_err}")
+
                             historical_financials.append({
                                 "year": fy_label,
                                 "revenue": rev_m,
@@ -295,7 +409,11 @@ def fetch_financials(ticker):
                                 "fcfMargin": fcf_margin,
                                 "netIncome": ni_m,
                                 "netIncomeMargin": ni_margin,
-                                "eps": eps_val
+                                "eps": eps_val,
+                                "roic": roic,
+                                "peRatio": pe_ratio,
+                                "evEbitda": ev_ebitda,
+                                "psRatio": ps_ratio
                             })
                 except Exception as he:
                     debug(f"Failed to build historical financials: {he}")

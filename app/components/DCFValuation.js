@@ -1516,9 +1516,9 @@ export default function DCFValuation() {
 
                     {/* Debug info removed */}
 
-                    {/* Historical Financials Section */}
+                    {/* Financial Metrics Section */}
                     <div className="mt-8">
-                      <h3 className="text-xl font-bold mb-4 text-gray-800">Historical Financials (FY21-FY24)</h3>
+                      <h3 className="text-xl font-bold mb-4 text-gray-800">Financial Metrics (FY21-FY24)</h3>
                       
                       {/* Historical Charts */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -1627,11 +1627,26 @@ export default function DCFValuation() {
                             </LineChart>
                           </ResponsiveContainer>
                         </div>
+
+                        {/* ROIC Chart */}
+                        <div>
+                          <h4 className="text-md font-semibold mb-3 text-gray-700">ROIC (%)</h4>
+                          <ResponsiveContainer width="100%" height={300}>
+                            <LineChart data={getSortedHistorical(valuation.historicalFinancials)}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis dataKey="year" stroke="#6b7280" />
+                              <YAxis stroke="#6b7280" />
+                              <Tooltip formatter={(value) => [`${formatOneDecimal(value)}%`, 'ROIC']} />
+                              <Legend />
+                              <Line type="monotone" dataKey="roic" stroke="#06b6d4" strokeWidth={2} name="ROIC (%)" />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
                       </div>
 
-                      {/* Historical Summary Table */}
+                      {/* Financial Metrics Summary Table */}
                       <div className="mt-6">
-                        <h4 className="text-lg font-semibold mb-3 text-gray-700">Historical Summary Table</h4>
+                        <h4 className="text-lg font-semibold mb-3 text-gray-700">Financial Metrics Summary Table</h4>
                         <div className="overflow-x-auto">
                           <table className="min-w-full bg-white border border-gray-300 rounded-lg">
                             <thead>
@@ -1751,6 +1766,119 @@ export default function DCFValuation() {
                                 {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
                                   <td key={index} className="px-3 py-2 text-center border-r">
                                     {row.fcfMargin?.toFixed(1)}
+                                  </td>
+                                ))}
+                              </tr>
+
+                              {/* ROIC Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">ROIC (%)</td>
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.roic ? row.roic.toFixed(1) : 'N/A'}
+                                  </td>
+                                ))}
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Valuation Metrics Section */}
+                    <div className="mt-8">
+                      <h3 className="text-xl font-bold mb-4 text-gray-800">Valuation Metrics (FY21-FY24)</h3>
+
+                      {/* Valuation Charts */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                        {/* P/E Ratio Chart */}
+                        <div>
+                          <h4 className="text-md font-semibold mb-3 text-gray-700">P/E Ratio</h4>
+                          <ResponsiveContainer width="100%" height={300}>
+                            <LineChart data={getSortedHistorical(valuation.historicalFinancials)}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis dataKey="year" stroke="#6b7280" />
+                              <YAxis stroke="#6b7280" />
+                              <Tooltip formatter={(value) => [formatOneDecimal(value), 'P/E Ratio']} />
+                              <Legend />
+                              <Line type="monotone" dataKey="peRatio" stroke="#8b5cf6" strokeWidth={2} name="P/E Ratio" />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* EV/EBITDA Chart */}
+                        <div>
+                          <h4 className="text-md font-semibold mb-3 text-gray-700">EV/EBITDA</h4>
+                          <ResponsiveContainer width="100%" height={300}>
+                            <LineChart data={getSortedHistorical(valuation.historicalFinancials)}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis dataKey="year" stroke="#6b7280" />
+                              <YAxis stroke="#6b7280" />
+                              <Tooltip formatter={(value) => [formatOneDecimal(value), 'EV/EBITDA']} />
+                              <Legend />
+                              <Line type="monotone" dataKey="evEbitda" stroke="#f59e0b" strokeWidth={2} name="EV/EBITDA" />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        {/* P/S Ratio Chart */}
+                        <div>
+                          <h4 className="text-md font-semibold mb-3 text-gray-700">Price-to-Sales Ratio</h4>
+                          <ResponsiveContainer width="100%" height={300}>
+                            <LineChart data={getSortedHistorical(valuation.historicalFinancials)}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                              <XAxis dataKey="year" stroke="#6b7280" />
+                              <YAxis stroke="#6b7280" />
+                              <Tooltip formatter={(value) => [formatOneDecimal(value), 'P/S Ratio']} />
+                              <Legend />
+                              <Line type="monotone" dataKey="psRatio" stroke="#ef4444" strokeWidth={2} name="P/S Ratio" />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                      {/* Valuation Metrics Summary Table */}
+                      <div className="mt-6">
+                        <h4 className="text-lg font-semibold mb-3 text-gray-700">Valuation Metrics Summary Table</h4>
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full bg-white border border-gray-300 rounded-lg">
+                            <thead>
+                              <tr className="bg-gray-50">
+                                <th className="px-3 py-2 text-left font-medium text-gray-900 border-r">Metric</th>
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
+                                  <th key={index} className="px-3 py-2 text-center font-medium text-gray-900 border-r">
+                                    {row.year}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {/* P/E Ratio Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-purple-50">P/E Ratio</td>
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.peRatio ? row.peRatio.toFixed(1) : 'N/A'}
+                                  </td>
+                                ))}
+                              </tr>
+
+                              {/* EV/EBITDA Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-yellow-50">EV/EBITDA</td>
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.evEbitda ? row.evEbitda.toFixed(1) : 'N/A'}
+                                  </td>
+                                ))}
+                              </tr>
+
+                              {/* P/S Ratio Row */}
+                              <tr>
+                                <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-red-50">Price-to-Sales</td>
+                                {getSortedHistorical(valuation.historicalFinancials)?.map((row, index) => (
+                                  <td key={index} className="px-3 py-2 text-center border-r">
+                                    {row.psRatio ? row.psRatio.toFixed(1) : 'N/A'}
                                   </td>
                                 ))}
                               </tr>
