@@ -425,6 +425,7 @@ def fetch_financials(ticker):
                                 "evEbitda": ev_ebitda,
                                 "psRatio": ps_ratio
                             })
+                            debug(f"Added historical record for {fy_label}: roic={roic}, peRatio={pe_ratio}, evEbitda={ev_ebitda}, psRatio={ps_ratio}")
                 except Exception as he:
                     debug(f"Failed to build historical financials: {he}")
             
