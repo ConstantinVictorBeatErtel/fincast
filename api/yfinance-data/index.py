@@ -113,6 +113,16 @@ def _fetch_ticker_payload(ticker: str):
             except Exception:
                 cf_df = None
 
+        # Try to get balance sheet
+        bs_df = None
+        try:
+            bs_df = t.balance_sheet
+        except Exception:
+            try:
+                bs_df = t.balancesheet
+            except Exception:
+                bs_df = None
+
         if is_df is not None and not is_df.empty:
             cols = list(is_df.columns)[:4]
             cols_rev = cols[::-1]
@@ -165,6 +175,100 @@ def _fetch_ticker_payload(ticker: str):
                     rev_g = None
                 prev_rev_m = rev_m
 
+                # Calculate ROIC from balance sheet data
+                roic = 0.0
+                try:
+                    if bs_df is not None and not bs_df.empty and col in bs_df.columns:
+                        total_equity = None
+                        total_debt = None
+                        cash = None
+
+                        # Try to get stockholder equity
+                        for equity_label in ['Stockholders Equity', 'Total Equity', 'Stockholders\' Equity', 'Total Stockholder Equity']:
+                            if equity_label in bs_df.index:
+                                total_equity = _safe_float(bs_df.loc[equity_label, col])
+                                break
+
+                        # Try to get total debt
+                        for debt_label in ['Total Debt', 'Long Term Debt', 'Net Debt']:
+                            if debt_label in bs_df.index:
+                                total_debt = _safe_float(bs_df.loc[debt_label, col])
+                                break
+
+                        # Try to get cash
+                        for cash_label in ['Cash And Cash Equivalents', 'Cash', 'Cash Cash Equivalents And Short Term Investments']:
+                            if cash_label in bs_df.index:
+                                cash = _safe_float(bs_df.loc[cash_label, col])
+                                break
+
+                        # Calculate invested capital
+                        if total_equity is not None:
+                            invested_capital = total_equity
+                            if total_debt is not None:
+                                invested_capital += total_debt
+                            if cash is not None:
+                                invested_capital -= cash
+
+                            if invested_capital > 0 and ni > 0:
+                                roic = (ni / invested_capital) * 100.0
+                except Exception:
+                    pass
+
+                # Calculate valuation metrics
+                pe_ratio = 0.0
+                ev_ebitda = 0.0
+                ps_ratio = 0.0
+
+                try:
+                    if year_num:
+                        # Try to get price data around fiscal year end
+                        try:
+                            hist_prices = yf.download(ticker, start=f"{year_num}-11-01", end=f"{year_num+1}-01-31", progress=False, ignore_tz=True)
+                            if hist_prices is not None and not hist_prices.empty:
+                                historical_price = _safe_float(hist_prices['Close'].iloc[-1])
+
+                                # Get shares outstanding for this period
+                                shares_outstanding = None
+                                if 'Diluted Average Shares' in is_df.index and col in is_df.columns:
+                                    shares_outstanding = _safe_float(is_df.loc['Diluted Average Shares', col])
+
+                                if shares_outstanding and shares_outstanding > 0:
+                                    historical_market_cap = historical_price * shares_outstanding
+
+                                    # Calculate P/E
+                                    if ni > 0:
+                                        pe_ratio = historical_market_cap / ni
+
+                                    # Calculate P/S
+                                    if rev > 0:
+                                        ps_ratio = historical_market_cap / rev
+
+                                    # Calculate EV/EBITDA
+                                    if ebitda > 0:
+                                        ev = historical_market_cap
+                                        if bs_df is not None and not bs_df.empty and col in bs_df.columns:
+                                            debt = None
+                                            cash_bs = None
+                                            for debt_label in ['Total Debt', 'Long Term Debt']:
+                                                if debt_label in bs_df.index:
+                                                    debt = _safe_float(bs_df.loc[debt_label, col])
+                                                    break
+                                            for cash_label in ['Cash And Cash Equivalents', 'Cash', 'Cash Cash Equivalents And Short Term Investments']:
+                                                if cash_label in bs_df.index:
+                                                    cash_bs = _safe_float(bs_df.loc[cash_label, col])
+                                                    break
+
+                                            if debt is not None:
+                                                ev += debt
+                                            if cash_bs is not None:
+                                                ev -= cash_bs
+
+                                        ev_ebitda = ev / ebitda
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
                 historical.append({
                     "year": fy_label,
                     "revenue": rev_m,
@@ -178,6 +282,10 @@ def _fetch_ticker_payload(ticker: str):
                     "netIncome": ni_m,
                     "netIncomeMargin": nim,
                     "eps": eps,
+                    "roic": roic,
+                    "peRatio": pe_ratio,
+                    "evEbitda": ev_ebitda,
+                    "psRatio": ps_ratio,
                 })
 
             latest_col = cols[0]

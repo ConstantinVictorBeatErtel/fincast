@@ -929,7 +929,8 @@ export default function DCFValuation() {
           <Tabs defaultValue="forecast">
             <TabsList>
               <TabsTrigger value="forecast">Forecast</TabsTrigger>
-              <TabsTrigger value="analysis">Financial Analysis</TabsTrigger>
+              <TabsTrigger value="analysis">Financial Metrics</TabsTrigger>
+              <TabsTrigger value="valuation">Valuation</TabsTrigger>
             </TabsList>
             
             <TabsContent value="forecast">
@@ -1488,7 +1489,7 @@ export default function DCFValuation() {
             <TabsContent value="analysis">
               <Card>
                 <CardHeader>
-                  <CardTitle>Financial Analysis</CardTitle>
+                  <CardTitle>Financial Metrics</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-6">
@@ -1785,9 +1786,21 @@ export default function DCFValuation() {
                       </div>
                     </div>
 
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="valuation">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Valuation Metrics</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-6">
                     {/* Valuation Metrics Section */}
-                    <div className="mt-8">
-                      <h3 className="text-xl font-bold mb-4 text-gray-800">Valuation Metrics (FY21-FY24)</h3>
+                    <div className="mt-4">
+                      <h3 className="text-xl font-bold mb-4 text-gray-800">Historical Valuation Metrics (FY21-FY24)</h3>
 
                       {/* Valuation Charts */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -1887,7 +1900,6 @@ export default function DCFValuation() {
                         </div>
                       </div>
                     </div>
-
                   </div>
                 </CardContent>
               </Card>
