@@ -91,6 +91,7 @@ async function getExchangeRate(fromCurrency, toCurrency = 'USD') {
 }
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60; // Maximum execution time in seconds
 
 export async function GET(request) {
   try {
@@ -355,7 +356,7 @@ async function fetchLatestWithSonar(ticker) {
       { role: 'user', content: `Find the most recently reported quarter for ${ticker} (as filed or disclosed by the company) and provide financials and qualitative insights for that same quarter only. Do NOT assume a specific quarter label. Return EXACT JSON with: as_of_date, latest_quarter, latest_quarter_revenue, latest_quarter_gross_margin_pct, latest_quarter_ebitda_margin_pct, latest_quarter_net_income, guidance_summary, mgmt_summary, recent_developments, links { ir_url, sec_url }.` }
     ];
 
-    const data = await makeOpenRouterRequest({ model: 'perplexity/sonar', messages, temperature: 0.3, max_tokens: 1000 });
+    const data = await makeOpenRouterRequest({ model: 'perplexity/sonar', messages, temperature: 0.3, max_tokens: 800 });
     const text = data?.choices?.[0]?.message?.content || '';
     let sonarData = {};
     try {
@@ -375,50 +376,44 @@ async function fetchLatestWithSonar(ticker) {
 }
 
 // Fetch analyst expectations and consensus estimates via Perplexity Sonar
+// With shorter timeout to prevent blocking the main valuation flow
 async function fetchAnalystExpectations(ticker) {
   try {
-    const messages = [
-      {
-        role: 'system',
-        content: 'You are a financial analyst aggregator. Return only structured, factual analyst consensus data. Focus on recent analyst reports and consensus estimates from reputable sources (Bloomberg, Reuters, FactSet, major investment banks).'
-      },
-      {
-        role: 'user',
-        content: `Search for Wall Street analyst expectations and consensus estimates for ${ticker}. Focus on:
+    // Add a 15-second timeout to prevent blocking
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Analyst expectations timeout')), 15000)
+    );
 
-1. **Revenue Growth Expectations**: What revenue growth rates are analysts forecasting for the next 2-5 years? Include consensus estimates and ranges.
+    const fetchPromise = (async () => {
+      const messages = [
+        {
+          role: 'system',
+          content: 'Return concise analyst consensus data. Focus on numbers: growth rates, price targets, margin expectations.'
+        },
+        {
+          role: 'user',
+          content: `Wall Street analyst consensus for ${ticker}: revenue growth forecast (2-5yr), EPS growth forecast, margin expectations, price target range, key growth drivers, main risks. Be concise with specific numbers.`
+        }
+      ];
 
-2. **Earnings Growth Expectations**: What EPS or earnings growth rates are analysts projecting? Include consensus and ranges.
+      const data = await makeOpenRouterRequest({
+        model: 'perplexity/sonar',
+        messages,
+        temperature: 0.3,
+        max_tokens: 800
+      });
 
-3. **Key Growth Drivers**: What are analysts identifying as the main drivers of growth (new products, market expansion, pricing power, operational improvements, etc.)?
+      return data?.choices?.[0]?.message?.content || '';
+    })();
 
-4. **Margin Expectations**: Are analysts expecting margin expansion or contraction? What are the key factors?
-
-5. **Price Targets**: What is the average/consensus analyst price target? What is the range (high/low)?
-
-6. **Risks & Headwinds**: What are analysts highlighting as key risks or challenges?
-
-7. **Competitive Position**: How do analysts view the company's competitive position and market share trends?
-
-Return comprehensive but concise analyst expectations that can inform financial projections. Include specific numbers where available (growth rates, price targets, etc.).`
-      }
-    ];
-
-    const data = await makeOpenRouterRequest({
-      model: 'perplexity/sonar',
-      messages,
-      temperature: 0.3,
-      max_tokens: 1500
-    });
-
-    const analystInsights = data?.choices?.[0]?.message?.content || '';
+    const analystInsights = await Promise.race([fetchPromise, timeoutPromise]);
 
     return {
       analyst_expectations: analystInsights,
       has_data: !!analystInsights
     };
   } catch (e) {
-    console.error(`[Analyst Expectations] Error for ${ticker}:`, e);
+    console.log(`[Analyst Expectations] Skipped for ${ticker} (${e.message})`);
     return null;
   }
 }
