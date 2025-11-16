@@ -93,6 +93,18 @@ export default function DCFValuation() {
         }
       }
 
+      // Debug: Check historical financials first
+      console.log('[DEBUG FRONTEND] historicalFinancials count:', data.historicalFinancials?.length || 0);
+      if (data.historicalFinancials?.length > 0) {
+        console.log('[DEBUG FRONTEND] First record keys:', Object.keys(data.historicalFinancials[0]));
+        console.log('[DEBUG FRONTEND] Sample metrics:', {
+          roic: data.historicalFinancials[0].roic,
+          peRatio: data.historicalFinancials[0].peRatio,
+          evEbitda: data.historicalFinancials[0].evEbitda,
+          psRatio: data.historicalFinancials[0].psRatio
+        });
+      }
+
       // Log the detailed structure of the raw data
       console.log('Raw data structure:', {
         hasRawForecast: !!data.rawForecast,

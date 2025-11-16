@@ -122,6 +122,24 @@ export async function GET(request) {
         },
         historical_financials: []
       };
+    } else {
+      // Debug logging to check historical_financials data
+      console.log('[DEBUG] YFinance data received');
+      console.log('[DEBUG] Historical financials count:', yf?.historical_financials?.length || 0);
+      if (yf?.historical_financials?.length > 0) {
+        const firstRecord = yf.historical_financials[0];
+        console.log('[DEBUG] First historical record keys:', Object.keys(firstRecord));
+        console.log('[DEBUG] Has ROIC?', 'roic' in firstRecord);
+        console.log('[DEBUG] Has peRatio?', 'peRatio' in firstRecord);
+        console.log('[DEBUG] Has evEbitda?', 'evEbitda' in firstRecord);
+        console.log('[DEBUG] Has psRatio?', 'psRatio' in firstRecord);
+        console.log('[DEBUG] Sample values:', {
+          roic: firstRecord.roic,
+          peRatio: firstRecord.peRatio,
+          evEbitda: firstRecord.evEbitda,
+          psRatio: firstRecord.psRatio
+        });
+      }
     }
 
     if (useLLM) {
@@ -258,6 +276,20 @@ export async function POST(request) {
         },
         historical_financials: []
       };
+    } else {
+      // Debug logging for POST request
+      console.log('[DEBUG POST] YFinance data received');
+      console.log('[DEBUG POST] Historical financials count:', yf?.historical_financials?.length || 0);
+      if (yf?.historical_financials?.length > 0) {
+        const firstRecord = yf.historical_financials[0];
+        console.log('[DEBUG POST] First historical record keys:', Object.keys(firstRecord));
+        console.log('[DEBUG POST] Has new metrics?', {
+          roic: 'roic' in firstRecord,
+          peRatio: 'peRatio' in firstRecord,
+          evEbitda: 'evEbitda' in firstRecord,
+          psRatio: 'psRatio' in firstRecord
+        });
+      }
     }
 
     if (!process.env.OPENROUTER_API_KEY) {
@@ -1137,6 +1169,20 @@ Return ONLY the <forecast> section as specified above, without any additional co
     historicalFinancials: Array.isArray(yf_data?.historical_financials) ? yf_data.historical_financials : [],
     projections
   };
+
+  // Debug logging before returning
+  console.log('[DEBUG generateValuation] historicalFinancials count:', result.historicalFinancials?.length || 0);
+  if (result.historicalFinancials?.length > 0) {
+    console.log('[DEBUG generateValuation] First record keys:', Object.keys(result.historicalFinancials[0]));
+    console.log('[DEBUG generateValuation] Sample metrics:', {
+      roic: result.historicalFinancials[0].roic,
+      peRatio: result.historicalFinancials[0].peRatio,
+      evEbitda: result.historicalFinancials[0].evEbitda,
+      psRatio: result.historicalFinancials[0].psRatio
+    });
+  }
+
+  return result;
 }
 
 // NOTE: Fallback synthesis removed per requirement: Grok must always generate the forecast
