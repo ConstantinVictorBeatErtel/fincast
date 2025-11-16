@@ -128,7 +128,12 @@ export async function GET(request) {
         return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 500 });
           }
           try {
-        const sonar = await fetchLatestWithSonar(ticker).catch(() => null);
+        // Fetch both latest developments and analyst expectations in parallel
+        const [sonar, analystData] = await Promise.all([
+          fetchLatestWithSonar(ticker).catch(() => null),
+          fetchAnalystExpectations(ticker).catch(() => null)
+        ]);
+
         let lastErr = null;
         let valuation = null;
         // Try different models with exponential backoff
@@ -139,20 +144,20 @@ export async function GET(request) {
           'meta-llama/llama-3.1-8b-instruct:free',
           'microsoft/phi-3-medium-128k-instruct:free'
         ];
-        
+
         for (let attempt = 1; attempt <= 5; attempt++) {
           try {
             const model = models[Math.min(attempt - 1, models.length - 1)];
             console.log(`[LLM] Attempt ${attempt}/5 for ${ticker} using model: ${model}`);
-            
+
             // Add exponential backoff delay
             if (attempt > 1) {
               const delay = Math.min(1000 * Math.pow(2, attempt - 2), 10000); // Max 10 seconds
               console.log(`[LLM] Waiting ${delay}ms before retry...`);
               await new Promise(resolve => setTimeout(resolve, delay));
             }
-            
-            valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', '', model);
+
+            valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', analystData?.analyst_expectations || '', '', model);
             if (valuation && Array.isArray(valuation.projections) && valuation.projections.length > 0) {
               console.log(`[LLM] Success on attempt ${attempt} with ${valuation.projections.length} projections using ${model}`);
               break;
@@ -258,7 +263,12 @@ export async function POST(request) {
       return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 500 });
     }
     try {
-      const sonar = await fetchLatestWithSonar(ticker).catch(() => null);
+      // Fetch both latest developments and analyst expectations in parallel
+      const [sonar, analystData] = await Promise.all([
+        fetchLatestWithSonar(ticker).catch(() => null),
+        fetchAnalystExpectations(ticker).catch(() => null)
+      ]);
+
       let lastErr = null;
       let valuation = null;
       // Try different models with exponential backoff
@@ -269,20 +279,20 @@ export async function POST(request) {
         'meta-llama/llama-3.1-8b-instruct:free',
         'microsoft/phi-3-medium-128k-instruct:free'
       ];
-      
+
       for (let attempt = 1; attempt <= 5; attempt++) {
         try {
           const model = models[Math.min(attempt - 1, models.length - 1)];
           console.log(`[LLM] POST Attempt ${attempt}/5 for ${ticker} with feedback using model: ${model}`);
-          
+
           // Add exponential backoff delay
           if (attempt > 1) {
             const delay = Math.min(1000 * Math.pow(2, attempt - 2), 10000); // Max 10 seconds
             console.log(`[LLM] POST Waiting ${delay}ms before retry...`);
             await new Promise(resolve => setTimeout(resolve, delay));
           }
-          
-          valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', feedback || '', model);
+
+          valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', analystData?.analyst_expectations || '', feedback || '', model);
           if (valuation && Array.isArray(valuation.projections) && valuation.projections.length > 0) {
             console.log(`[LLM] POST Success on attempt ${attempt} with ${valuation.projections.length} projections using ${model}`);
             break;
@@ -360,6 +370,55 @@ async function fetchLatestWithSonar(ticker) {
 - Recent Developments: ${sonarData.recent_developments || ''}`;
     return { ...sonarData, full_response: full };
   } catch (e) {
+    return null;
+  }
+}
+
+// Fetch analyst expectations and consensus estimates via Perplexity Sonar
+async function fetchAnalystExpectations(ticker) {
+  try {
+    const messages = [
+      {
+        role: 'system',
+        content: 'You are a financial analyst aggregator. Return only structured, factual analyst consensus data. Focus on recent analyst reports and consensus estimates from reputable sources (Bloomberg, Reuters, FactSet, major investment banks).'
+      },
+      {
+        role: 'user',
+        content: `Search for Wall Street analyst expectations and consensus estimates for ${ticker}. Focus on:
+
+1. **Revenue Growth Expectations**: What revenue growth rates are analysts forecasting for the next 2-5 years? Include consensus estimates and ranges.
+
+2. **Earnings Growth Expectations**: What EPS or earnings growth rates are analysts projecting? Include consensus and ranges.
+
+3. **Key Growth Drivers**: What are analysts identifying as the main drivers of growth (new products, market expansion, pricing power, operational improvements, etc.)?
+
+4. **Margin Expectations**: Are analysts expecting margin expansion or contraction? What are the key factors?
+
+5. **Price Targets**: What is the average/consensus analyst price target? What is the range (high/low)?
+
+6. **Risks & Headwinds**: What are analysts highlighting as key risks or challenges?
+
+7. **Competitive Position**: How do analysts view the company's competitive position and market share trends?
+
+Return comprehensive but concise analyst expectations that can inform financial projections. Include specific numbers where available (growth rates, price targets, etc.).`
+      }
+    ];
+
+    const data = await makeOpenRouterRequest({
+      model: 'perplexity/sonar',
+      messages,
+      temperature: 0.3,
+      max_tokens: 1500
+    });
+
+    const analystInsights = data?.choices?.[0]?.message?.content || '';
+
+    return {
+      analyst_expectations: analystInsights,
+      has_data: !!analystInsights
+    };
+  } catch (e) {
+    console.error(`[Analyst Expectations] Error for ${ticker}:`, e);
     return null;
   }
 }
@@ -525,7 +584,7 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
   return null;
 }
 
-async function generateValuation(ticker, method, selectedMultiple, yf_data, sonarFull, userFeedback = '', model = 'x-ai/grok-code-fast-1') {
+async function generateValuation(ticker, method, selectedMultiple, yf_data, sonarFull, analystExpectations, userFeedback = '', model = 'x-ai/grok-code-fast-1') {
   const mkNumber = (v) => Number(v || 0);
   const fy = yf_data?.fy24_financials || {};
   const md = yf_data?.market_data || {};
@@ -565,7 +624,10 @@ Use the FY2024 actuals as your starting point and project forward based on:
 FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
 ${sonarFull || 'No Sonar data available'}
 
-4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
+WALL STREET ANALYST EXPECTATIONS & CONSENSUS ESTIMATES:
+${analystExpectations || 'No analyst consensus data available'}
+
+4. Project revenue growth TASK: Based on the MOST UPDATED financial data above AND the Wall Street analyst expectations, create a financial forecast for ${ticker} up to 2029.
    - Analyze historical revenue growth rates
    - Consider industry trends and market conditions
    - Estimate year-over-year revenue growth rates until 2029
@@ -672,7 +734,10 @@ Use the FY2024 actuals as your starting point and project forward based on:
 FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
 ${sonarFull || 'No Sonar data available'}
 
-4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
+WALL STREET ANALYST EXPECTATIONS & CONSENSUS ESTIMATES:
+${analystExpectations || 'No analyst consensus data available'}
+
+4. Project revenue growth TASK: Based on the MOST UPDATED financial data above AND the Wall Street analyst expectations, create a financial forecast for ${ticker} up to 2029.
    - Analyze historical revenue growth rates
    - Consider industry trends and market conditions
    - Estimate year-over-year revenue growth rates until 2029
