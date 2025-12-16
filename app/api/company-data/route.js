@@ -49,7 +49,7 @@ export async function GET(request) {
   } catch (error) {
     console.error('Error fetching company data:', error);
     return NextResponse.json(
-      { 
+      {
         error: error.message || 'Failed to fetch company data',
         details: error.stack
       },

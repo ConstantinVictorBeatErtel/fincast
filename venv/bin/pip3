@@ -1,6 +1,4 @@
-#!/bin/sh
-'''exec' "/Users/ConstiX/Downloads/Finbase 3/venv/bin/python3.13" "$0" "$@"
-' '''
+#!/Users/ConstiX/.gemini/antigravity/scratch/fincast/venv/bin/python3.13
 import sys
 from pip._internal.cli.main import main
 if __name__ == '__main__':

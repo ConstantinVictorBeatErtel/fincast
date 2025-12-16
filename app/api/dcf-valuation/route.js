@@ -59,7 +59,7 @@ async function makeOpenRouterRequest(body, timeoutMs = 45000) {
 // Function to get exchange rate from currency to USD
 async function getExchangeRate(fromCurrency, toCurrency = 'USD') {
   if (fromCurrency === toCurrency) return 1.0;
-  
+
   try {
     // Use yahoo-finance2 to get exchange rate
     const exchangeTicker = `${fromCurrency}${toCurrency}=X`;
@@ -106,6 +106,7 @@ export async function GET(request) {
     }
 
     let yf = await fetchYFinanceDataDirect(ticker, request.headers).catch(() => null);
+    console.log(`[${new Date().toISOString()}] yfinance fetch complete. Data found: ${!!yf}`);
     if (!yf) {
       console.log('No yfinance data available, proceeding with LLM-only valuation');
       // Create minimal yfinance data structure for LLM to work with
@@ -145,14 +146,15 @@ export async function GET(request) {
     if (useLLM) {
       if (!process.env.OPENROUTER_API_KEY) {
         return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 500 });
-          }
-          try {
+      }
+      try {
+        console.log(`[${new Date().toISOString()}] Starting Sonar/Analyst fetch...`);
         // Fetch both latest developments and analyst expectations in parallel
         const [sonar, analystData] = await Promise.all([
           fetchLatestWithSonar(ticker).catch(() => null),
           fetchAnalystExpectations(ticker).catch(() => null)
         ]);
-
+        console.log(`[${new Date().toISOString()}] Fetch complete. Sonar: ${!!sonar}, Analyst: ${!!analystData}`);
         let lastErr = null;
         let valuation = null;
         // Try different models with exponential backoff
@@ -167,7 +169,7 @@ export async function GET(request) {
         for (let attempt = 1; attempt <= 5; attempt++) {
           try {
             const model = models[Math.min(attempt - 1, models.length - 1)];
-            console.log(`[LLM] Attempt ${attempt}/5 for ${ticker} using model: ${model}`);
+            console.log(`[${new Date().toISOString()}] [LLM] Attempt ${attempt}/5 for ${ticker} using model: ${model}`);
 
             // Add exponential backoff delay
             if (attempt > 1) {
@@ -185,7 +187,7 @@ export async function GET(request) {
           } catch (e) {
             console.log(`[LLM] Attempt ${attempt} failed:`, e.message);
             lastErr = e;
-            
+
             // If it's a rate limit error, try next model immediately
             if (e.message.includes('429') || e.message.includes('rate limit') || e.message.includes('Too Many Requests')) {
               console.log(`[LLM] Rate limit detected, trying next model...`);
@@ -334,7 +336,7 @@ export async function POST(request) {
         } catch (e) {
           console.log(`[LLM] POST Attempt ${attempt} failed:`, e.message);
           lastErr = e;
-          
+
           // If it's a rate limit error, try next model immediately
           if (e.message.includes('429') || e.message.includes('rate limit') || e.message.includes('Too Many Requests')) {
             console.log(`[LLM] POST Rate limit detected, trying next model...`);
@@ -385,7 +387,7 @@ async function fetchLatestWithSonar(ticker) {
   try {
     const messages = [
       { role: 'system', content: 'Return ONLY JSON. Be concise. Use official IR and SEC sources.' },
-      { role: 'user', content: `Find the most recently reported quarter for ${ticker} (as filed or disclosed by the company) and provide financials and qualitative insights for that same quarter only. Do NOT assume a specific quarter label. Return EXACT JSON with: as_of_date, latest_quarter, latest_quarter_revenue, latest_quarter_gross_margin_pct, latest_quarter_ebitda_margin_pct, latest_quarter_net_income, guidance_summary, mgmt_summary, recent_developments, links { ir_url, sec_url }.` }
+      { role: 'user', content: `Find the most recently reported quarter for ${ticker} (as filed or disclosed by the company) AND analyst consensus estimates for the next 2-3 years. Return EXACT JSON with: as_of_date, latest_quarter, latest_quarter_revenue, latest_quarter_gross_margin_pct, latest_quarter_ebitda_margin_pct, latest_quarter_net_income, consensus_revenue_next_year, consensus_eps_next_year, guidance_summary, mgmt_summary, recent_developments, links { ir_url, sec_url }.` }
     ];
 
     const data = await makeOpenRouterRequest({ model: 'perplexity/sonar', messages, temperature: 0.3, max_tokens: 800 });
@@ -456,17 +458,17 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
     // Prefer external Python API in prod
     const isProd = !!process.env.VERCEL_URL || process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
     const externalPyApi = process.env.PY_YF_URL;
-    
+
     if (isProd && externalPyApi) {
       console.log(`[Vercel] Using external Python API: ${externalPyApi}`);
-      
+
       // Check if PY_YF_URL points to yfinance-data route (internal call) and handle directly
       if (externalPyApi.includes('/api/yfinance-data')) {
         console.log(`[Vercel] PY_YF_URL points to yfinance-data route - running Python script directly to avoid 401`);
         // This is an internal call, run the Python script directly instead of HTTP call
         const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
         let pythonCmd, scriptPath, cmd, args;
-        
+
         if (isVercel) {
           // On Vercel, try different Python paths
           pythonCmd = 'python3'; // Vercel should have python3 in PATH
@@ -482,13 +484,13 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
           cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
           args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
         }
-        
+
         const py = await new Promise((resolve) => {
           try {
             console.log(`[Vercel] Running Python script: ${cmd} ${args.join(' ')}`);
             console.log(`[Vercel] Working directory: ${process.cwd()}`);
             console.log(`[Vercel] Script exists: ${require('fs').existsSync(scriptPath)}`);
-            
+
             const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
             let stdout = '';
             let stderr = '';
@@ -498,12 +500,12 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
               console.log(`[Vercel] Internal Python script exit code: ${code}`);
               console.log(`[Vercel] Python stdout: ${stdout.substring(0, 500)}`);
               console.log(`[Vercel] Python stderr: ${stderr.substring(0, 500)}`);
-              
+
               if (code !== 0) {
                 console.log(`[Vercel] Internal Python script stderr: ${stderr}`);
                 return resolve(null);
               }
-              try { 
+              try {
                 const result = JSON.parse(stdout);
                 console.log(`[Vercel] Internal Python script success: ${Array.isArray(result.historical_financials) ? result.historical_financials.length : 0} historical records`);
                 resolve(result);
@@ -522,7 +524,7 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
             resolve(null);
           }
         });
-        
+
         if (py && Array.isArray(py.historical_financials) && py.historical_financials.length > 0) {
           console.log(`[Vercel] Internal Python script success: ${py.historical_financials.length} historical records`);
           return py;
@@ -537,10 +539,10 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
         if (process.env.VERCEL_PROTECTION_BYPASS) {
           headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
         }
-        
+
         const res = await fetch(url, { method: 'GET', headers });
         console.log(`[Vercel] External API response: ${res.status} ${res.statusText}`);
-        
+
         if (res.ok) {
           const json = await res.json();
           console.log(`[Vercel] External API data keys:`, Object.keys(json || {}));
@@ -565,7 +567,7 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
     const isNodeRosetta = process.arch === 'x64';
     const cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
     const args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
-    
+
     const py = await new Promise((resolve) => {
       try {
         const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
@@ -579,7 +581,7 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
             console.log(`[Local] Python script stderr: ${stderr}`);
             return resolve(null);
           }
-          try { 
+          try {
             const result = JSON.parse(stdout);
             console.log(`[Local] Python script success: ${Array.isArray(result.historical_financials) ? result.historical_financials.length : 0} historical records`);
             resolve(result);
@@ -598,7 +600,7 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
         resolve(null);
       }
     });
-    
+
     if (py && Array.isArray(py.historical_financials) && py.historical_financials.length > 0) {
       console.log(`[Local] Python script success: ${py.historical_financials.length} historical records`);
       return py;
@@ -616,11 +618,16 @@ async function generateValuation(ticker, method, selectedMultiple, yf_data, sona
   const fy = yf_data?.fy24_financials || {};
   const md = yf_data?.market_data || {};
   const companyName = yf_data?.company_name || ticker;
-  
+
+  // Format historical data for the prompt
+  const historicalTable = (yf_data.historical_financials || []).slice(0, 5).map(h => { // Take up to 5 years
+    return `${h.year} | Revenue: $${h.revenue}M (Growth: ${h.revenueGrowth ? h.revenueGrowth.toFixed(1) : 'N/A'}%) | Gross Margin: ${h.grossMargin ? h.grossMargin.toFixed(1) : 'N/A'}% | EBITDA Margin: ${h.ebitdaMargin ? h.ebitdaMargin.toFixed(1) : 'N/A'}% | Net Income Margin: ${h.netIncomeMargin ? h.netIncomeMargin.toFixed(1) : 'N/A'}% | EPS: ${h.eps}`;
+  }).join('\n');
+
   // Restore original, detailed prompts with strict output format and Sonar + yfinance context
-    let prompt;
-    if (method === 'dcf') {
-      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
+  let prompt;
+  if (method === 'dcf') {
+    prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
 
 The company you will be analyzing is: ${(companyName)}
 
@@ -629,23 +636,27 @@ ${userFeedback && userFeedback.trim().length ? `\nUSER FEEDBACK: ${userFeedback.
 To complete this task, follow these steps:
 IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
 
-Use the FY2024 actuals as your starting point and project forward based on:
-1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
-2. The yfinance data below (which provides the most current financial metrics)
-3. Your financial analysis expertise to interpret trends and project future performance
+Use the FY2024 actuals and HISTORICAL DATA as your starting point and project forward based on:
+1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and ANALYST CONSENSUS ESTIMATES).
+2. The HISTORICAL FINANCIAL DATA below (past 3-5 years) - detailed trend analysis is required.
+3. The yfinance data below (which provides the most current financial metrics)
+4. Your financial analysis expertise to interpret trends and project future performance.
 
-1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
-- Revenue: ${(mkNumber(fy.revenue)/1_000_000).toLocaleString()}M
+1. HISTORICAL FINANCIAL DATA (Past 3-5 Years):
+${historicalTable || 'No historical data available'}
+
+2. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
+- Revenue: ${(mkNumber(fy.revenue) / 1_000_000).toLocaleString()}M
 - Gross Margin: ${mkNumber(fy.gross_margin_pct).toFixed(1)}%
-- EBITDA: ${(mkNumber(fy.ebitda)/1_000_000).toLocaleString()}M
-- Net Income: ${(mkNumber(fy.net_income)/1_000_000).toLocaleString()}M
+- EBITDA: ${(mkNumber(fy.ebitda) / 1_000_000).toLocaleString()}M
+- Net Income: ${(mkNumber(fy.net_income) / 1_000_000).toLocaleString()}M
 - EPS: ${mkNumber(fy.eps).toFixed(2)}
-- Shares Outstanding: ${(mkNumber(fy.shares_outstanding)/1_000_000).toLocaleString()}M
+- Shares Outstanding: ${(mkNumber(fy.shares_outstanding) / 1_000_000).toLocaleString()}M
 
-2. MARKET DATA (from yfinance - most updated):
+3. MARKET DATA (from yfinance - most updated):
 - Current Price: $${mkNumber(md.current_price).toFixed(2)}
-- Market Cap: ${(mkNumber(md.market_cap)/1_000_000).toLocaleString()}M
-- Enterprise Value: ${md.enterprise_value ? (mkNumber(md.enterprise_value)/1_000_000).toLocaleString() + 'M' : 'N/A'}
+- Market Cap: ${(mkNumber(md.market_cap) / 1_000_000).toLocaleString()}M
+- Enterprise Value: ${md.enterprise_value ? (mkNumber(md.enterprise_value) / 1_000_000).toLocaleString() + 'M' : 'N/A'}
 - P/E Ratio: ${md.pe_ratio ? mkNumber(md.pe_ratio).toFixed(2) : 'N/A'}
 
 FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
@@ -655,23 +666,25 @@ WALL STREET ANALYST EXPECTATIONS & CONSENSUS ESTIMATES:
 ${analystExpectations || 'No analyst consensus data available'}
 
 4. Project revenue growth TASK: Based on the MOST UPDATED financial data above AND the Wall Street analyst expectations, create a financial forecast for ${ticker} up to 2029.
-   - Analyze historical revenue growth rates
+   - Analyze historical revenue growth rates (CAGR) from the provided historical data.
+   - USE ANALYST CONSENSUS ESTIMATES (from Sonar/Analyst data) as a baseline for 2025-2026.
+
    - Consider industry trends and market conditions
    - Estimate year-over-year revenue growth rates until 2029
    - Calculate projected revenue figures for each year
 
 5. Estimate gross margin:
-   - Review historical gross margin trends
+   - Review historical gross margin trends from the provided historical data.
    - Consider factors that may impact future gross margins (e.g., cost of goods sold, pricing strategies)
    - Project gross margin percentages for each year until 2029
 
 6. Calculate EBITDA margin:
-   - Analyze historical EBITDA margin trends
+   - Analyze historical EBITDA margin trends from the provided historical data.
    - Consider factors that may impact future EBITDA margins (e.g., operating expenses, efficiency improvements)
    - Project EBITDA margin percentages for each year until 2029
 
 7. Determine FCF margin:
-   - Review historical FCF margin trends
+   - Review historical FCF margin trends from the provided historical data.
    - Consider factors that may impact future FCF margins (e.g., capital expenditures, working capital changes)
    - Project FCF margin percentages for each year until 2029
 
@@ -687,7 +700,7 @@ ${analystExpectations || 'No analyst consensus data available'}
 
 For each step, use <financial_analysis> tags to show your thought process and calculations. Within these tags:
 
-1. Summarize key financial metrics from the past 3-5 years.
+1. Summarize key financial metrics from the past 3-5 years based on the provided HISTORICAL DATA.
 2. List 3-5 relevant industry trends that could impact future performance.
 3. Include the current share price for ${ticker}.
 4. For each financial metric (revenue, margins, etc.), list out year-by-year projections with brief justifications.
@@ -727,8 +740,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
 - EV/FCF: Software (mature stage), Industrial compounders, Capital-light consumer businesses
 - EV/EBITDA: Industrial conglomerates, Telecoms, Infrastructure, Manufacturing, high-growth tech firms
 - Price/Sales: High-growth firms with negative or erratic earnings` : `Use ${selectedMultiple} multiple. For P/E multiples, set enterpriseValue to 0.`;
-      
-      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
+
+    prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
 
 The company you will be analyzing is: ${(companyName)}
 
@@ -745,17 +758,17 @@ Use the FY2024 actuals as your starting point and project forward based on:
 3. Your financial analysis expertise to interpret trends and project future performance
 
 1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
-- Revenue: ${(mkNumber(fy.revenue)/1_000_000).toLocaleString()}M
+- Revenue: ${(mkNumber(fy.revenue) / 1_000_000).toLocaleString()}M
 - Gross Margin: ${mkNumber(fy.gross_margin_pct).toFixed(1)}%
-- EBITDA: ${(mkNumber(fy.ebitda)/1_000_000).toLocaleString()}M
-- Net Income: ${(mkNumber(fy.net_income)/1_000_000).toLocaleString()}M
+- EBITDA: ${(mkNumber(fy.ebitda) / 1_000_000).toLocaleString()}M
+- Net Income: ${(mkNumber(fy.net_income) / 1_000_000).toLocaleString()}M
 - EPS: ${mkNumber(fy.eps).toFixed(2)}
-- Shares Outstanding: ${(mkNumber(fy.shares_outstanding)/1_000_000).toLocaleString()}M
+- Shares Outstanding: ${(mkNumber(fy.shares_outstanding) / 1_000_000).toLocaleString()}M
 
 2. MARKET DATA (from yfinance - most updated):
 - Current Price: $${mkNumber(md.current_price).toFixed(2)}
-- Market Cap: ${(mkNumber(md.market_cap)/1_000_000).toLocaleString()}M
-- Enterprise Value: ${md.enterprise_value ? (mkNumber(md.enterprise_value)/1_000_000).toLocaleString() + 'M' : 'N/A'}
+- Market Cap: ${(mkNumber(md.market_cap) / 1_000_000).toLocaleString()}M
+- Enterprise Value: ${md.enterprise_value ? (mkNumber(md.enterprise_value) / 1_000_000).toLocaleString() + 'M' : 'N/A'}
 - P/E Ratio: ${md.pe_ratio ? mkNumber(md.pe_ratio).toFixed(2) : 'N/A'}
 
 FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
@@ -841,17 +854,21 @@ Assumptions and Justifications:
 </forecast>
 
 Return ONLY the <forecast> section as specified above, without any additional commentary or explanations outside of the designated areas within the forecast.`;
-    }
+  }
 
   const body = {
-      model: model,
-      messages: [
+    model: model,
+    messages: [
       { role: 'system', content: 'You are a skilled financial analyst. You MUST return your response in the EXACT format specified in the user prompt. The response MUST start with <forecast> and end with </forecast>. Do not include any text outside these tags.' },
       { role: 'user', content: prompt }
-      ],
-      temperature: 0.3,
-      max_tokens: 2000
+    ],
+    temperature: 0.3,
+    max_tokens: 2000
   };
+
+  console.log("--- GENERATED PROMPT PREVIEW ---");
+  console.log(prompt.substring(0, 2000) + "..."); // Log first 2000 chars to verify historical data injection
+  console.log("--- END PROMPT PREVIEW ---");
 
   const data = await makeOpenRouterRequest(body);
   const text = data?.choices?.[0]?.message?.content || '';
@@ -866,7 +883,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
 
   // Parse simple forecast table into projections for the UI charts
   const lines = forecastText.split('\n').map(l => l.trim()).filter(Boolean);
-      let inTable = false;
+  let inTable = false;
   let header = null;
   let headerIdx = {};
   const splitRow = (line) => line.split('|').map(c => c.trim()).filter(c => c.length > 0);
@@ -893,7 +910,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       const fcf = Number(fy.fcf || 0) / 1_000_000;
       if (rev > 0 && fcf > 0) return (fcf / rev) * 100;
       if (typeof fy.fcf_margin_pct === 'number') return Number(fy.fcf_margin_pct);
-    } catch {}
+    } catch { }
     return null;
   })();
   for (const raw of lines) {
@@ -926,7 +943,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
               headerIdx.fcf = -1;
             }
           }
-        } catch {}
+        } catch { }
         continue;
       }
       continue;
@@ -966,7 +983,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
     projections.push({
       year: (yearLabel.match(/\b(20\d{2})\b/)?.[1]) || yearLabel,
       revenue,
-        revenueGrowth,
+      revenueGrowth,
       grossProfit,
       grossMargin,
       ebitda: revenue * (ebitdaMargin / 100),
@@ -987,7 +1004,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       // Recompute revenue growth from series (ignore LLM-provided value)
       if (i === 0) {
         p.revenueGrowth = 0;
-    } else {
+      } else {
         const prev = projections[i - 1];
         const prevRev = Number(prev?.revenue || 0);
         const curRev = Number(p?.revenue || 0);
@@ -1132,7 +1149,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       upside = ((fairValue - currentPrice) / currentPrice) * 100;
       cagr = (Math.pow(fairValue / currentPrice, 1 / 5) - 1) * 100;
     }
-        } else {
+  } else {
     if (fvMillionMatch) fairValue = parseFloat(fvMillionMatch[1].replace(/,/g, ''));
     const marketCapM = mkNumber(md.market_cap) / 1_000_000;
     if (marketCapM > 0 && fairValue > 0) {
@@ -1142,10 +1159,10 @@ Return ONLY the <forecast> section as specified above, without any additional co
   }
 
   return {
-        rawForecast: forecastText,
+    rawForecast: forecastText,
     rawFinancialAnalysis: '',
-        companyName: companyName,
-      method,
+    companyName: companyName,
+    method,
     fairValue,
     currentSharePrice: currentPrice,
     discountRate,
