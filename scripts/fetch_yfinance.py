@@ -599,8 +599,8 @@ def fetch_historical_valuation(ticker):
         # The Node logic `processValuationData` does a LOT of processing.
         # Replicating that exact logic in Python is safer.
         
-        # Convert index (Date) to string column
-        hist = hist.reset_index()
+        # Convert index (Date) to string column - REMOVED to avoid duplication issues
+        # hist = hist.reset_index()
         
         # Extract relevant financial history for TTM
         # yfinance normally returns last 4-5 years of quarters.
@@ -632,31 +632,62 @@ def fetch_historical_valuation(ticker):
         
         results = []
         
-        for index, row in hist.iterrows():
-            date_obj = row['Date']
-            close_price = safe_float(row['Close'])
-            
-            # Simple fallback if no financials
-            results.append({
-                "date": date_obj.strftime('%Y-%m-%d'),
-                "price": close_price,
-                # Placeholders - calculating true TTM here is risky without full data inspection
-                # But the user wants the chart to "show up".
-                # Providing price data is better than nothing.
-                "marketCap": close_price * shares if shares else 0,
-                # We will try to calculate TTM if q_inc is available
-                "revenue": get_ttm_at_date(q_inc, date_obj, "Total Revenue") if q_inc is not None else 0,
-                "netIncome": get_ttm_at_date(q_inc, date_obj, "Net Income") if q_inc is not None else 0
-            })
-            
-            # Post-calc Ratios
-            res = results[-1]
-            if res['revenue'] > 0 and res['marketCap'] > 0:
-                res['psRatio'] = res['marketCap'] / res['revenue']
-            if res['netIncome'] > 0 and shares > 0:
-                eps = res['netIncome'] / shares
-                if eps > 0:
-                    res['peRatio'] = close_price / eps
+        # Iterate over the DataFrame - if 'Date' puts it in columns or index depends on yfinance version/params
+        # Safest way: inspect usage. We called reset_index() earlier.
+        # If 'Date' became a column, but there were multiple cols?
+        
+        # Re-simplifying:
+        # 1. Don't use reset_index() blindly.
+        # 2. Iterate index directly if it's DatetimeIndex.
+        
+        if 'Date' in hist.columns:
+            # If Date is a column, use it. But ensure it's not a Series of columns.
+            # Drop duplicates to be safe if multiple 'Date' columns exist
+            hist = hist.loc[:, ~hist.columns.duplicated()]
+            dates = hist['Date']
+        else:
+            dates = hist.index
+
+        # Retrieve Close prices
+        # 'Close' might be a column.
+        
+        for idx in range(len(hist)):
+            try:
+                if 'Date' in hist.columns:
+                   date_obj = pd.to_datetime(hist['Date'].iloc[idx])
+                else:
+                   date_obj = pd.to_datetime(hist.index[idx])
+                
+                # Access Close price safely
+                if 'Close' in hist.columns:
+                    val = hist['Close'].iloc[idx]
+                    # If it's a Series (multi-level col), take first
+                    if isinstance(val, pd.Series):
+                        val = val.iloc[0]
+                    close_price = safe_float(val)
+                else:
+                    close_price = 0
+
+                results.append({
+                    "date": date_obj.strftime('%Y-%m-%d'),
+                    "price": close_price,
+                    "marketCap": close_price * shares if shares else 0,
+                    "revenue": get_ttm_at_date(q_inc, date_obj, "Total Revenue") if q_inc is not None else 0,
+                    "netIncome": get_ttm_at_date(q_inc, date_obj, "Net Income") if q_inc is not None else 0
+                })
+                
+                # Post-calc Ratios
+                res = results[-1]
+                if res['revenue'] > 0 and res['marketCap'] > 0:
+                    res['psRatio'] = res['marketCap'] / res['revenue']
+                if res['netIncome'] > 0 and shares > 0:
+                    eps = res['netIncome'] / shares
+                    if eps > 0:
+                        res['peRatio'] = close_price / eps
+            except Exception as loop_e:
+                debug(f"Error processing row {idx}: {loop_e}")
+                continue
+
                     
         return results
 
