@@ -119,29 +119,54 @@ function validateDataQuality(data) {
 }
 
 // Helper to run python script with mode
+// Helper to run python script via Spawn (Local) or HTTP (Vercel)
 async function runPythonScript(ticker, mode) {
     const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
-    let pythonCmd, scriptPath, cmd, args;
+
+    // STRATEGY: On Vercel, Node and Python run in separate isolated environments.
+    // We cannot spawn python3 from Node. We MUST call the Python Serverless Function via HTTP.
 
     if (isVercel) {
-        pythonCmd = 'python3';
-        scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
-        cmd = pythonCmd;
-        args = [scriptPath, ticker];
-        if (mode) args.push(mode);
-    } else {
-        // Local development
-        pythonCmd = `${process.cwd()}/venv/bin/python3`;
-        scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
-        const isDarwin = process.platform === 'darwin';
-        const isNodeRosetta = process.arch === 'x64';
-        cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
-        args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
-        if (mode && isDarwin && isNodeRosetta) {
-            args.push(mode);
-        } else if (mode) {
-            args.push(mode);
+        try {
+            const baseUrl = `https://${process.env.VERCEL_URL}`;
+            const url = new URL('/api/py-yf', baseUrl);
+            url.searchParams.set('ticker', ticker);
+            if (mode) url.searchParams.set('mode', mode.replace('--', '')); // API expects 'valuation' not '--valuation'
+
+            console.log(`[DataFetcher] Calling Python Function via HTTP: ${url.toString()}`);
+
+            const res = await fetch(url.toString(), {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (!res.ok) {
+                const txt = await res.text();
+                console.error(`[DataFetcher] Python API Error (${res.status}): ${txt}`);
+                return null;
+            }
+
+            return await res.json();
+        } catch (e) {
+            console.error(`[DataFetcher] HTTP Fetch Error: ${e.message}`);
+            return null;
         }
+    }
+
+    // LOCAL DEVELOPMENT: Spawn process as usual
+    let pythonCmd, scriptPath, cmd, args;
+
+    // Local development configuration
+    pythonCmd = `${process.cwd()}/venv/bin/python3`;
+    scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+    const isDarwin = process.platform === 'darwin';
+    const isNodeRosetta = process.arch === 'x64';
+    cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
+    args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
+    if (mode && isDarwin && isNodeRosetta) {
+        args.push(mode);
+    } else if (mode) {
+        args.push(mode);
     }
 
     return new Promise((resolve, reject) => {
