@@ -21,7 +21,8 @@ export async function generateStandardForecast(ticker, companyName, options = {}
     try {
         // Step 1: Fetch and validate data
         console.log(`[GeminiForecast] ${ticker}: Fetching data...`);
-        const data = await fetchForecastData(ticker);
+        // Pass headers from options (if provided) to enable authenticated internal requests
+        const data = await fetchForecastData(ticker, options.headers || {});
 
         // Step 2: Build compressed prompt
         console.log(`[GeminiForecast] ${ticker}: Building prompt...`);

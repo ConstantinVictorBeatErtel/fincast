@@ -20,7 +20,15 @@ export async function POST(request) {
     // Inject strict override if multiple is selected via UI
     const effectiveFeedback = (targetMultiple ? `Use Exit Multiple Type: "${targetMultiple}". ` : "") + (feedback || "");
 
-    const serviceResult = await generateStandardForecast(ticker, ticker, { feedback: effectiveFeedback });
+    // Extract headers to bypass Vercel Authentication on internal calls
+    const headers = {};
+    if (request.headers.get('cookie')) headers['cookie'] = request.headers.get('cookie');
+    if (request.headers.get('authorization')) headers['authorization'] = request.headers.get('authorization');
+
+    const serviceResult = await generateStandardForecast(ticker, ticker, {
+      feedback: effectiveFeedback,
+      headers // Pass headers down
+    });
 
     if (!serviceResult.forecast) {
       console.error('[LegacyAdapter] Service failed:', serviceResult.metadata?.error);

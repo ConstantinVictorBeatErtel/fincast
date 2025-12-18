@@ -4,7 +4,7 @@ import fs from 'fs';
 const dataCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-export async function fetchForecastData(ticker) {
+export async function fetchForecastData(ticker, headers = {}) {
     const cacheKey = `${ticker}-${Math.floor(Date.now() / CACHE_TTL)}`;
 
     if (dataCache.has(cacheKey)) {
@@ -16,7 +16,7 @@ export async function fetchForecastData(ticker) {
         console.log(`[DataFetcher] Fetching fresh data for ${ticker}...`);
         // Fetch all data in parallel
         const [yfinance, sonar] = await Promise.all([
-            fetchYFinanceData(ticker),
+            fetchYFinanceData(ticker, headers),
             fetchPerplexitySonar(ticker).catch(err => {
                 console.warn('[DataFetcher] Sonar fetch failed, using fallback:', err);
                 return { summary: 'Not available', insights: [] };
@@ -120,7 +120,7 @@ function validateDataQuality(data) {
 
 // Helper to run python script with mode
 // Helper to run python script via Spawn (Local) or HTTP (Vercel)
-async function runPythonScript(ticker, mode) {
+async function runPythonScript(ticker, mode, headers = {}) {
     const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
 
     // STRATEGY: On Vercel, Node and Python run in separate isolated environments.
@@ -135,9 +135,15 @@ async function runPythonScript(ticker, mode) {
 
             console.log(`[DataFetcher] Calling Python Function via HTTP: ${url.toString()}`);
 
+            // Forward headers (cookies) to pass Vercel Authentication on Preview deployments
+            const requestHeaders = {
+                'Content-Type': 'application/json',
+                ...headers // Specific headers like 'cookie' or 'authorization'
+            };
+
             const res = await fetch(url.toString(), {
                 method: 'GET',
-                headers: { 'Content-Type': 'application/json' }
+                headers: requestHeaders
             });
 
             if (!res.ok) {
@@ -206,10 +212,10 @@ async function runPythonScript(ticker, mode) {
 }
 
 // Fetch both standard and valuation data
-async function fetchYFinanceData(ticker) {
+async function fetchYFinanceData(ticker, headers = {}) {
     const [standard, valuation] = await Promise.all([
-        runPythonScript(ticker),
-        runPythonScript(ticker, '--valuation')
+        runPythonScript(ticker, null, headers),
+        runPythonScript(ticker, '--valuation', headers)
     ]);
 
     if (!standard) return null;
