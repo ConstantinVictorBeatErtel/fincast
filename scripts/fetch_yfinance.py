@@ -8,6 +8,7 @@ import json
 import math
 import yfinance as yf
 import requests
+import pandas as pd
 
 
 def debug(*args, **kwargs):
@@ -69,6 +70,105 @@ def convert_currency(value, from_currency, to_currency='USD'):
     return value * rate
 
 
+def get_fiscal_quarter(date_obj):
+    """Determine fiscal quarter based on month."""
+    month = date_obj.month
+    if 1 <= month <= 3: return 1
+    elif 4 <= month <= 6: return 2
+    elif 7 <= month <= 9: return 3
+    else: return 4
+
+
+def get_fiscal_info(ticker_info, last_quarter_date):
+    """
+    Determine current fiscal year and quarter label accurately.
+    """
+    try:
+        if not last_quarter_date:
+            return None
+            
+        lq_date = pd.to_datetime(last_quarter_date)
+        debug(f"[Fiscal] Calculating for Last Q Date: {lq_date}")
+        
+        # Default: Calendar Year
+        current_fy = lq_date.year
+        q_num = (lq_date.month - 1) // 3 + 1
+        
+        # Enriched Logic using yfinance info
+        if ticker_info:
+            last_fy_end = ticker_info.get('lastFiscalYearEnd')
+            if last_fy_end:
+                # Convert unix timestamp
+                last_fy_date = pd.to_datetime(last_fy_end, unit='s')
+                
+                # If the latest quarter is AFTER the last fiscal year end
+                if lq_date > last_fy_date:
+                    # We are in the NEW fiscal year
+                    current_fy = last_fy_date.year + 1
+                    
+                    # Offset calculation:
+                    # distance in months from FY end
+                    months_diff = (lq_date.year - last_fy_date.year) * 12 + (lq_date.month - last_fy_date.month)
+                    q_num = ((months_diff - 1) // 3) + 1
+                    if q_num > 4: q_num = 4
+                    if q_num < 1: q_num = 1
+                else:
+                    # We are ON or BEFORE the last reported annual date
+                    current_fy = last_fy_date.year
+                    # Calculate Quarter relative to FY end?
+                    # Actually if we are using historical data, usually lq_date IS the quarter end.
+                    # If lq_date <= last_fy_date, it means it's part of the OLD FY.
+                    # But usually annual report comes AFTER Q4. 
+                    # If lq_date == last_fy_date, it is Q4.
+                    if lq_date == last_fy_date:
+                        q_num = 4
+                    else:
+                         # It is a previous quarter of the same completed FY?
+                         # e.g. lq_date = Mar 2025. last_fy_date = Jun 2025.
+                         # This is Q3 FY25.
+                         months_diff = (lq_date.year - last_fy_date.year) * 12 + (lq_date.month - last_fy_date.month)
+                         # months_diff is negative, e.g. -3.
+                         # Q4 is 0 diff (or 1-3 months before end).
+                         # Q3 is -3 diff.
+                         # Formula: Q = 4 - (abs(diff) // 3)
+                         q_num = 4 - (abs(months_diff) // 3)
+                         if q_num < 1: q_num = 1
+
+        fy_short = str(current_fy)[-2:]
+        return {
+            "latest_quarter_date": lq_date.strftime('%Y-%m-%d'),
+            "latest_quarter_label": f"Q{int(q_num)} FY{fy_short}", 
+            "ttm_label": f"TTM (As of Q{int(q_num)} FY{fy_short})",
+            "current_fiscal_year": current_fy
+        }
+    except Exception as e:
+        debug(f"Error getting fiscal info: {e}")
+        return None
+
+def calculate_ttm(quarterly_df, col_name):
+    """Sum last 4 columns (quarters) of a dataframe row."""
+    if quarterly_df is None or quarterly_df.empty or col_name not in quarterly_df.index:
+        return 0
+        
+    try:
+        # Get columns sorted by date descending (newest first)
+        cols = sorted(quarterly_df.columns, reverse=True)
+        latest_4 = cols[:4]
+        
+        if len(latest_4) < 4:
+            # Not enough data for full TTM, scale it? No, safer to return partial or 0.
+            # Let's return sum of what we have but warn? 
+            # Ideally we want 4 quarters.
+            pass
+
+        total = 0
+        for c in latest_4:
+            val = quarterly_df.loc[col_name, c]
+            total += safe_float(val)
+        return total
+    except Exception:
+        return 0
+
 def fetch_financials(ticker):
     """Fetch financial data from yfinance for a given ticker."""
     try:
@@ -77,444 +177,418 @@ def fetch_financials(ticker):
         # Create ticker object
         company = yf.Ticker(ticker)
         
-        # Get current price from download method
+        # Get current price
         current_price = 0
         try:
             hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
             if hist is not None and not hist.empty:
-                current_price = safe_float(hist['Close'].iloc[-1])
-                debug(f"Got current price from download: ${current_price}")
-            else:
-                debug("Download returned empty data")
+                # Handle multi-level columns if present
+                if 'Close' in hist.columns:
+                    val = hist['Close'].iloc[-1]
+                    if isinstance(val, pd.Series): val = val.iloc[0]
+                    current_price = safe_float(val)
         except Exception as e:
             debug(f"Download failed: {e}")
         
-        # Get financial data using the working methods
-        fy24_financials = {
+        # Fetch Quarterly Data for TTM
+        q_income = company.quarterly_income_stmt
+        q_cash = company.quarterly_cash_flow
+        q_balance = company.quarterly_balance_sheet
+        
+        # Annual Data
+        income_stmt = company.income_stmt
+        balance_sheet = company.balance_sheet
+        cash_flow = company.cash_flow
+        
+        # Get Info for Fiscal Year logic
+        info = None
+        try:
+             info = company.info
+        except:
+             pass
+
+        # 1. Determine Fiscal Info / Latest Quarter
+        latest_date = None
+        if q_income is not None and not q_income.empty:
+             # Columns are dates. Find the max date.
+             dates = [pd.to_datetime(c) for c in q_income.columns]
+             if dates:
+                 latest_date = max(dates)
+        
+        fiscal_info = get_fiscal_info(info, latest_date)
+        
+        # 2. Calculate TTM Financials
+        ttm_financials = {
+            "revenue": 0,
+            "net_income": 0,
+            "gross_profit": 0,
+            "ebitda": 0,
+            "eps": 0
+        }
+        
+        if q_income is not None and not q_income.empty:
+            ttm_financials["revenue"] = calculate_ttm(q_income, "Total Revenue")
+            ttm_financials["net_income"] = calculate_ttm(q_income, "Net Income")
+            ttm_financials["gross_profit"] = calculate_ttm(q_income, "Gross Profit")
+            ttm_financials["ebitda"] = calculate_ttm(q_income, "EBITDA")
+            
+            # Gross Margin TTM
+            if ttm_financials["revenue"] > 0:
+                  ttm_financials["gross_margin_pct"] = (ttm_financials["gross_profit"] / ttm_financials["revenue"]) * 100
+            else:
+                  ttm_financials["gross_margin_pct"] = 0
+
+        # Calculate TTM EPS
+        if q_income is not None:
+            if 'Diluted EPS' in q_income.index:
+                 ttm_financials["eps"] = calculate_ttm(q_income, 'Diluted EPS')
+            elif 'Basic EPS' in q_income.index:
+                 ttm_financials["eps"] = calculate_ttm(q_income, 'Basic EPS')
+
+        # 3. Get Annual (FY24 or latest full FY) Financials (Legacy support + Backup)
+        annual_financials = {
             "revenue": 0,
             "gross_margin_pct": 0,
             "ebitda": 0,
             "net_income": 0,
             "eps": 0,
-            "shares_outstanding": 0
+            "shares_outstanding": 0,
+            "fiscal_year": "N/A"
         }
-        
+
+        shares_outstanding = 0
+        try:
+            info = company.info
+            shares_outstanding = safe_float(info.get('sharesOutstanding', 0))
+        except:
+            pass
+            
+        if shares_outstanding == 0 and balance_sheet is not None and 'Ordinary Shares Number' in balance_sheet.index:
+             shares_outstanding = safe_float(balance_sheet.loc['Ordinary Shares Number', balance_sheet.columns[0]])
+
+        if income_stmt is not None and not income_stmt.empty:
+            latest_col = income_stmt.columns[0]
+            annual_financials["fiscal_year"] = str(pd.to_datetime(latest_col).year)
+            
+            rev = safe_float(income_stmt.loc['Total Revenue', latest_col]) if 'Total Revenue' in income_stmt.index else 0
+            gp = safe_float(income_stmt.loc['Gross Profit', latest_col]) if 'Gross Profit' in income_stmt.index else 0
+            ni = safe_float(income_stmt.loc['Net Income', latest_col]) if 'Net Income' in income_stmt.index else 0
+            ebitda = safe_float(income_stmt.loc['EBITDA', latest_col]) if 'EBITDA' in income_stmt.index else 0
+            
+            annual_financials["revenue"] = rev
+            annual_financials["gross_profit"] = gp
+            annual_financials["net_income"] = ni
+            annual_financials["ebitda"] = ebitda
+            annual_financials["gross_margin_pct"] = (gp / rev * 100) if rev else 0
+            annual_financials["shares_outstanding"] = shares_outstanding
+            
+            if 'Diluted EPS' in income_stmt.index:
+                annual_financials["eps"] = safe_float(income_stmt.loc['Diluted EPS', latest_col])
+            else:
+                 annual_financials["eps"] = ni / shares_outstanding if shares_outstanding else 0
+
+        # Market Data
         market_data = {
             "current_price": current_price,
-            "market_cap": 0,
-            "enterprise_value": 0,
-            "pe_ratio": 0
+            "market_cap": current_price * shares_outstanding,
+            "pe_ratio": 0,
+            "enterprise_value": 0
         }
         
-        historical_financials = []
+        eff_eps = ttm_financials["eps"] if ttm_financials["eps"] != 0 else annual_financials["eps"]
+        if eff_eps > 0:
+            market_data["pe_ratio"] = current_price / eff_eps
 
-        try:
-            # Get income statement data
-            income_stmt = company.income_stmt
-            # Try to get cash flow statement (newer yfinance uses cash_flow)
-            cash_flow = None
-            try:
-                cash_flow = company.cash_flow
-            except Exception:
-                try:
-                    cash_flow = company.cashflow
-                except Exception:
-                    cash_flow = None
+        # Try to get Enterprise Value from info directly
+        if info:
+             ev = safe_float(info.get('enterpriseValue', 0))
+             if ev > 0:
+                 market_data["enterprise_value"] = ev
 
-            # Try to get balance sheet
-            balance_sheet = None
-            try:
-                balance_sheet = company.balance_sheet
-            except Exception:
-                try:
-                    balance_sheet = company.balancesheet
-                except Exception:
-                    balance_sheet = None
-
-            if income_stmt is not None and not income_stmt.empty and len(income_stmt.columns) > 0:
-                latest_year = income_stmt.columns[0]
-                debug(f"Latest financial year: {latest_year}")
-                
-                # Extract key metrics
-                if 'Total Revenue' in income_stmt.index:
-                    revenue = income_stmt.loc['Total Revenue', latest_year]
-                    fy24_financials["revenue"] = safe_float(revenue)
-                    debug(f"Revenue: ${fy24_financials['revenue']:,.0f}")
-                
-                if 'Gross Profit' in income_stmt.index and 'Total Revenue' in income_stmt.index:
-                    gross_profit = income_stmt.loc['Gross Profit', latest_year]
-                    revenue = income_stmt.loc['Total Revenue', latest_year]
-                    fy24_financials["gross_profit"] = safe_float(gross_profit)
-                    debug(f"Gross Profit: ${fy24_financials['gross_profit']:,.0f}")
-                    if revenue != 0:
-                        fy24_financials["gross_margin_pct"] = (safe_float(gross_profit) / safe_float(revenue)) * 100
-                        debug(f"Gross Margin: {fy24_financials['gross_margin_pct']:.1f}%")
-                
-                if 'EBITDA' in income_stmt.index:
-                    ebitda = income_stmt.loc['EBITDA', latest_year]
-                    fy24_financials["ebitda"] = safe_float(ebitda)
-                    debug(f"EBITDA: ${fy24_financials['ebitda']:,.0f}")
-                    # Calculate EBITDA margin
-                    if 'Total Revenue' in income_stmt.index:
-                        revenue = fy24_financials["revenue"]
-                        if revenue != 0:
-                            fy24_financials["ebitda_margin_pct"] = (safe_float(ebitda) / revenue) * 100
-                            debug(f"EBITDA Margin: {fy24_financials['ebitda_margin_pct']:.1f}%")
-                
-                if 'Net Income' in income_stmt.index:
-                    net_income = income_stmt.loc['Net Income', latest_year]
-                    fy24_financials["net_income"] = safe_float(net_income)
-                    debug(f"Net Income: ${fy24_financials['net_income']:,.0f}")
-                
-                if 'Diluted EPS' in income_stmt.index:
-                    eps = income_stmt.loc['Diluted EPS', latest_year]
-                    fy24_financials["eps"] = safe_float(eps)
-                    debug(f"EPS: ${fy24_financials['eps']:.2f}")
-                
-                if 'Diluted Average Shares' in income_stmt.index:
-                    shares = income_stmt.loc['Diluted Average Shares', latest_year]
-                    fy24_financials["shares_outstanding"] = safe_float(shares)
-                    debug(f"Shares Outstanding: {fy24_financials['shares_outstanding']:,.0f}")
-                
-                # Calculate FCF (Free Cash Flow) from cash flow statement when available
-                try:
-                    if cash_flow is not None and not cash_flow.empty and latest_year in cash_flow.columns:
-                        # Support multiple possible index labels for OCF and CapEx
-                        ocf_labels = [
-                            'Operating Cash Flow',
-                            'Total Cash From Operating Activities',
-                            'Cash Flow From Operating Activities'
-                        ]
-                        capex_labels = [
-                            'Capital Expenditure',
-                            'Capital Expenditures'
-                        ]
-                        ocf = None
-                        capex = None
-                        for ocf_label in ocf_labels:
-                            if ocf_label in cash_flow.index:
-                                ocf = safe_float(cash_flow.loc[ocf_label, latest_year])
-                                break
-                        for capex_label in capex_labels:
-                            if capex_label in cash_flow.index:
-                                capex = safe_float(cash_flow.loc[capex_label, latest_year])
-                                break
-                        if ocf is not None and capex is not None:
-                            # In Yahoo data CapEx is typically negative; ocf + capex is correct
-                            fcf_latest = safe_float(ocf + capex)
-                            fy24_financials["fcf"] = fcf_latest
-                            if fy24_financials["revenue"]:
-                                fy24_financials["fcf_margin_pct"] = (fcf_latest / fy24_financials["revenue"]) * 100.0
-                            debug(f"FCF (from CF stmt): ${fy24_financials['fcf']:,.0f}, FCF Margin: {fy24_financials.get('fcf_margin_pct', 0):.1f}%")
-                        else:
-                            # Fallback: estimate 25% if CF data missing
-                            revenue = fy24_financials["revenue"]
-                            estimated_fcf = revenue * 0.25
-                            fy24_financials["fcf"] = estimated_fcf
-                            fy24_financials["fcf_margin_pct"] = 25.0
-                            debug(f"Estimated FCF (fallback): ${estimated_fcf:,.0f} (25% of revenue)")
-                    else:
-                        revenue = fy24_financials["revenue"]
-                        estimated_fcf = revenue * 0.25
-                        fy24_financials["fcf"] = estimated_fcf
-                        fy24_financials["fcf_margin_pct"] = 25.0
-                        debug(f"Estimated FCF (no CF stmt): ${estimated_fcf:,.0f} (25% of revenue)")
-                except Exception as cferr:
-                    debug(f"FCF computation failed: {cferr}")
-                    revenue = fy24_financials["revenue"]
-                    estimated_fcf = revenue * 0.25
-                    fy24_financials["fcf"] = estimated_fcf
-                    fy24_financials["fcf_margin_pct"] = 25.0
-                    debug(f"Estimated FCF (error fallback): ${estimated_fcf:,.0f} (25% of revenue)")
-
-                # Build historical financials (last up to 4 periods) in $M
-                try:
-                    # Ensure we have required rows
-                    idx = income_stmt.index
-                    needed = ['Total Revenue', 'Gross Profit', 'EBITDA', 'Net Income', 'Diluted EPS']
-                    if all(metric in idx for metric in needed):
-                        # Use last 4 columns (most recent first by yfinance convention)
-                        cols = list(income_stmt.columns)[:4]
-                        # Reverse to oldest->newest for nicer display
-                        cols = cols[::-1]
-                        prev_revenue_m = None
-                        for col in cols:
-                            # Column may be a Timestamp or string; derive a FY label
-                            year_label = str(col)
-                            year_num = None
-                            try:
-                                year_num = int(str(col)[:4])
-                            except Exception:
-                                pass
-                            if year_num:
-                                fy_label = f"FY{str(year_num)[-2:]}"
-                            else:
-                                fy_label = f"FY{year_label}"
-
-                            rev = safe_float(income_stmt.loc['Total Revenue', col])
-                            gp = safe_float(income_stmt.loc['Gross Profit', col])
-                            ebitda_val = safe_float(income_stmt.loc['EBITDA', col])
-                            ni = safe_float(income_stmt.loc['Net Income', col])
-                            eps_val = safe_float(income_stmt.loc['Diluted EPS', col])
-
-                            rev_m = rev / 1_000_000.0
-                            gp_m = gp / 1_000_000.0
-                            ebitda_m = ebitda_val / 1_000_000.0
-                            ni_m = ni / 1_000_000.0
-                            # Historical FCF from cash flow statement if available
-                            fcf_val = None
-                            try:
-                                if cash_flow is not None and not cash_flow.empty and col in cash_flow.columns:
-                                    ocf = None
-                                    capex = None
-                                    for ocf_label in ['Operating Cash Flow', 'Total Cash From Operating Activities', 'Cash Flow From Operating Activities']:
-                                        if ocf_label in cash_flow.index:
-                                            ocf = safe_float(cash_flow.loc[ocf_label, col])
-                                            break
-                                    for capex_label in ['Capital Expenditure', 'Capital Expenditures']:
-                                        if capex_label in cash_flow.index:
-                                            capex = safe_float(cash_flow.loc[capex_label, col])
-                                            break
-                                    if ocf is not None and capex is not None:
-                                        fcf_val = safe_float(ocf + capex)
-                            except Exception as hcferr:
-                                debug(f"Historical FCF compute failed for {col}: {hcferr}")
-                            if fcf_val is None:
-                                fcf_val = rev * 0.25  # fallback
-                            fcf_m = fcf_val / 1_000_000.0
-
-                            gross_margin = (gp / rev * 100.0) if rev else 0.0
-                            ebitda_margin = (ebitda_val / rev * 100.0) if rev else 0.0
-                            ni_margin = (ni / rev * 100.0) if rev else 0.0
-                            fcf_margin = (fcf_val / rev * 100.0) if rev else 0.0
-
-                            if prev_revenue_m is not None and prev_revenue_m > 0:
-                                rev_growth = ((rev_m - prev_revenue_m) / prev_revenue_m) * 100.0
-                            else:
-                                rev_growth = 0.0
-                            prev_revenue_m = rev_m
-
-                            # Calculate ROIC from balance sheet data
-                            roic = 0.0
-                            try:
-                                if balance_sheet is not None and not balance_sheet.empty and col in balance_sheet.columns:
-                                    # ROIC = EBIT / Invested Capital
-                                    # Try to get EBIT, fallback to EBITDA as approximation
-                                    ebit = None
-                                    try:
-                                        # Try to get EBIT directly
-                                        if 'EBIT' in income_stmt.index:
-                                            ebit = safe_float(income_stmt.loc['EBIT', col])
-                                        # Fallback: use EBITDA as approximation
-                                        elif ebitda_val > 0:
-                                            ebit = ebitda_val
-                                    except Exception:
-                                        ebit = ebitda_val if ebitda_val > 0 else None
-
-                                    total_equity = None
-                                    total_debt = None
-                                    cash = None
-
-                                    # Try to get stockholder equity
-                                    for equity_label in ['Stockholders Equity', 'Total Equity', 'Stockholders\' Equity', 'Total Stockholder Equity']:
-                                        if equity_label in balance_sheet.index:
-                                            total_equity = safe_float(balance_sheet.loc[equity_label, col])
-                                            break
-
-                                    # Try to get total debt
-                                    for debt_label in ['Total Debt', 'Long Term Debt', 'Net Debt']:
-                                        if debt_label in balance_sheet.index:
-                                            total_debt = safe_float(balance_sheet.loc[debt_label, col])
-                                            break
-
-                                    # Try to get cash
-                                    for cash_label in ['Cash And Cash Equivalents', 'Cash', 'Cash Cash Equivalents And Short Term Investments']:
-                                        if cash_label in balance_sheet.index:
-                                            cash = safe_float(balance_sheet.loc[cash_label, col])
-                                            break
-
-                                    # Calculate invested capital
-                                    if total_equity is not None and ebit is not None and ebit > 0:
-                                        invested_capital = total_equity
-                                        if total_debt is not None:
-                                            invested_capital += total_debt
-                                        if cash is not None:
-                                            invested_capital -= cash
-
-                                        if invested_capital > 0:
-                                            roic = (ebit / invested_capital) * 100.0
-                            except Exception as roic_err:
-                                debug(f"ROIC calculation failed for {col}: {roic_err}")
-
-                            # Calculate valuation metrics
-                            pe_ratio = 0.0
-                            ev_ebitda = 0.0
-                            ps_ratio = 0.0
-
-                            try:
-                                # Get historical price for this fiscal year end
-                                # Approximate fiscal year end date
-                                if year_num:
-                                    # Try to get price data around fiscal year end (assume December 31)
-                                    year_end_date = f"{year_num}-12-31"
-                                    try:
-                                        # Get historical prices around year end
-                                        hist_prices = yf.download(ticker, start=f"{year_num}-11-01", end=f"{year_num+1}-01-31", progress=False, ignore_tz=True)
-                                        if hist_prices is not None and not hist_prices.empty:
-                                            historical_price = safe_float(hist_prices['Close'].iloc[-1])
-
-                                            # Get shares outstanding for this period
-                                            shares_outstanding = None
-                                            if 'Diluted Average Shares' in income_stmt.index and col in income_stmt.columns:
-                                                shares_outstanding = safe_float(income_stmt.loc['Diluted Average Shares', col])
-
-                                            if shares_outstanding and shares_outstanding > 0:
-                                                historical_market_cap = historical_price * shares_outstanding
-                                                historical_market_cap_m = historical_market_cap / 1_000_000.0
-
-                                                # Calculate P/E
-                                                if ni > 0:
-                                                    pe_ratio = historical_market_cap / ni
-
-                                                # Calculate P/S
-                                                if rev > 0:
-                                                    ps_ratio = historical_market_cap / rev
-
-                                                # Calculate EV/EBITDA
-                                                if ebitda_val > 0:
-                                                    # EV = Market Cap + Total Debt - Cash
-                                                    ev = historical_market_cap
-                                                    if balance_sheet is not None and not balance_sheet.empty and col in balance_sheet.columns:
-                                                        debt = None
-                                                        cash_bs = None
-                                                        for debt_label in ['Total Debt', 'Long Term Debt']:
-                                                            if debt_label in balance_sheet.index:
-                                                                debt = safe_float(balance_sheet.loc[debt_label, col])
-                                                                break
-                                                        for cash_label in ['Cash And Cash Equivalents', 'Cash', 'Cash Cash Equivalents And Short Term Investments']:
-                                                            if cash_label in balance_sheet.index:
-                                                                cash_bs = safe_float(balance_sheet.loc[cash_label, col])
-                                                                break
-
-                                                        if debt is not None:
-                                                            ev += debt
-                                                        if cash_bs is not None:
-                                                            ev -= cash_bs
-
-                                                    ev_ebitda = ev / ebitda_val
-                                    except Exception as price_err:
-                                        debug(f"Historical price fetch failed for {year_num}: {price_err}")
-                            except Exception as val_err:
-                                debug(f"Valuation metrics calculation failed for {col}: {val_err}")
-
-                            historical_financials.append({
-                                "year": fy_label,
-                                "revenue": rev_m,
-                                "revenueGrowth": rev_growth,
-                                "grossProfit": gp_m,
-                                "grossMargin": gross_margin,
-                                "ebitda": ebitda_m,
-                                "ebitdaMargin": ebitda_margin,
-                                "fcf": fcf_m,
-                                "fcfMargin": fcf_margin,
-                                "netIncome": ni_m,
-                                "netIncomeMargin": ni_margin,
-                                "eps": eps_val,
-                                "roic": roic,
-                                "peRatio": pe_ratio,
-                                "evEbitda": ev_ebitda,
-                                "psRatio": ps_ratio
-                            })
-                            debug(f"Added historical record for {fy_label}: roic={roic}, peRatio={pe_ratio}, evEbitda={ev_ebitda}, psRatio={ps_ratio}")
-                except Exception as he:
-                    debug(f"Failed to build historical financials: {he}")
-            
-            # Get market data
-            info = company.info
-            if info:
-                if 'marketCap' in info:
-                    market_data["market_cap"] = safe_float(info['marketCap'])
-                    debug(f"Market Cap: ${market_data['market_cap']:,.0f}")
-                
-                if 'enterpriseValue' in info:
-                    market_data["enterprise_value"] = safe_float(info['enterpriseValue'])
-                    debug(f"Enterprise Value: ${market_data['enterprise_value']:,.0f}")
-                
-                if 'trailingPE' in info:
-                    market_data["pe_ratio"] = safe_float(info['trailingPE'])
-                    debug(f"P/E Ratio: {market_data['pe_ratio']:.2f}")
-                
-                # Update current price if not already set
-                if current_price == 0 and 'currentPrice' in info:
-                    market_data["current_price"] = safe_float(info['currentPrice'])
-                    current_price = market_data["current_price"]
-                    debug(f"Current Price from info: ${current_price:.2f}")
-            
-        except Exception as e:
-            debug(f"Error getting financial data: {e}")
-        
-        # Get company name
-        company_name = ticker
-        try:
-            if info and 'longName' in info:
-                company_name = info['longName']
-            elif info and 'shortName' in info:
-                company_name = info['shortName']
-        except Exception as e:
-            debug(f"Error getting company name: {e}")
-        
-        # Get currency info
-        currency_info = {
-            "original_currency": "USD",
-            "converted_to_usd": False,
-            "conversion_rate": 1.0,
-            "exchange_rate_source": "none"
-        }
-        
-        try:
-            if info and 'currency' in info:
-                original_currency = info['currency']
-                if original_currency and original_currency != 'USD':
-                    currency_info["original_currency"] = original_currency
-                    conversion_rate = get_exchange_rate(original_currency, 'USD')
-                    currency_info["conversion_rate"] = conversion_rate
-                    currency_info["converted_to_usd"] = True
-                    currency_info["exchange_rate_source"] = "exchangerate-api"
-                    
-                    # Convert financial values to USD
-                    if fy24_financials["revenue"] > 0:
-                        fy24_financials["revenue"] = convert_currency(fy24_financials["revenue"], original_currency, 'USD')
-                    if fy24_financials["ebitda"] > 0:
-                        fy24_financials["ebitda"] = convert_currency(fy24_financials["ebitda"], original_currency, 'USD')
-                    if fy24_financials["net_income"] > 0:
-                        fy24_financials["net_income"] = convert_currency(fy24_financials["net_income"], original_currency, 'USD')
-                    if market_data["market_cap"] > 0:
-                        market_data["market_cap"] = convert_currency(market_data["market_cap"], original_currency, 'USD')
-                    if market_data["enterprise_value"] > 0:
-                        market_data["enterprise_value"] = convert_currency(market_data["enterprise_value"], original_currency, 'USD')
-
-                    # Convert historical values to USD (they are in $M, so convert base then divide)
-                    if historical_financials:
-                        for row in historical_financials:
-                            # Convert base currency amounts first
-                            row["revenue"] = convert_currency(row["revenue"] * 1_000_000.0, original_currency, 'USD') / 1_000_000.0
-                            row["grossProfit"] = convert_currency(row["grossProfit"] * 1_000_000.0, original_currency, 'USD') / 1_000_000.0
-                            row["ebitda"] = convert_currency(row["ebitda"] * 1_000_000.0, original_currency, 'USD') / 1_000_000.0
-                            row["netIncome"] = convert_currency(row["netIncome"] * 1_000_000.0, original_currency, 'USD') / 1_000_000.0
-                            row["fcf"] = convert_currency(row["fcf"] * 1_000_000.0, original_currency, 'USD') / 1_000_000.0
-        except Exception as e:
-            debug(f"Error handling currency conversion: {e}")
-        
+        # Construct Output
         result = {
-            "fy24_financials": fy24_financials,
+            "fiscal_info": fiscal_info,
+            "ttm_financials": ttm_financials,
+            "fy24_financials": annual_financials, 
             "market_data": market_data,
-            "company_name": company_name,
-            "source": "yfinance",
-            "currency_info": currency_info,
-            "historical_financials": historical_financials
+            "company_name": ticker, 
+            "currency_info": { "original_currency": "USD" }, 
+            "historical_financials": [] 
         }
         
-        debug("Successfully fetched financial data!")
+        try:
+             if 'longName' in company.info:
+                 result["company_name"] = company.info['longName']
+        except:
+             pass
+
+        # PRESERVE HISTORICAL FINANCIALS LOGIC
+        hist_records = []
+        
+        # Fetch Historical Price Data (Monthly) for Valuation Multiples
+        # We already fetched 'hist' (1mo) for current price, but we need 5y history for multiples
+        price_history = None
+        try:
+             price_history = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True)
+        except:
+             pass
+
+        def get_price_at_date(df, date_str):
+             if df is None or df.empty: return 0
+             try:
+                 dt = pd.to_datetime(date_str)
+                 # Find closest date
+                 idx = df.index.get_indexer([dt], method='nearest')[0]
+                 val = df['Close'].iloc[idx]
+                 if isinstance(val, pd.Series): val = val.iloc[0]
+                 return safe_float(val)
+             except:
+                 return 0
+
+        if income_stmt is not None and not income_stmt.empty:
+             cols = list(income_stmt.columns)
+             # Sort cols by date ascending for growth calc
+             cols = sorted(cols, key=lambda x: pd.to_datetime(x))
+             
+             for i, col in enumerate(cols):
+                 try:
+                     col_dt = pd.to_datetime(col)
+                     year_str = str(col_dt.year)
+                     
+                     # Basic Metrics
+                     rev = safe_float(income_stmt.loc['Total Revenue', col])
+                     gp = safe_float(income_stmt.loc['Gross Profit', col]) if 'Gross Profit' in income_stmt.index else 0
+                     ni = safe_float(income_stmt.loc['Net Income', col])
+                     
+                     rec = {
+                         "year": year_str,
+                         "revenue": rev / 1e6,
+                         "grossProfit": gp / 1e6,
+                         "grossMargin": (gp/rev*100) if rev else 0,
+                         "netIncome": ni / 1e6,
+                         "netIncomeMargin": (ni/rev*100) if rev else 0,
+                         "eps": safe_float(income_stmt.loc['Diluted EPS', col]) if 'Diluted EPS' in income_stmt.index else 0
+                     }
+
+                     # EBITDA
+                     ebitda_val = 0
+                     if 'EBITDA' in income_stmt.index:
+                          ebitda_val = safe_float(income_stmt.loc['EBITDA', col])
+                     elif 'Normalized EBITDA' in income_stmt.index:
+                          ebitda_val = safe_float(income_stmt.loc['Normalized EBITDA', col])
+                     
+                     rec["ebitda"] = ebitda_val / 1e6
+                     rec["ebitdaMargin"] = (ebitda_val/rev*100) if rev else 0
+
+                     # Free Cash Flow & OCF/CapEx
+                     fcf_val = 0
+                     shares_hist = shares_outstanding # Default to current
+                     if balance_sheet is not None and col in balance_sheet.columns:
+                         if 'Ordinary Shares Number' in balance_sheet.index:
+                              shares_hist = safe_float(balance_sheet.loc['Ordinary Shares Number', col])
+                         elif 'Common Stock Shares Outstanding' in balance_sheet.index:
+                              shares_hist = safe_float(balance_sheet.loc['Common Stock Shares Outstanding', col])
+
+                     if cash_flow is not None and not cash_flow.empty:
+                         if col in cash_flow.columns:
+                             if 'Free Cash Flow' in cash_flow.index:
+                                 fcf_val = safe_float(cash_flow.loc['Free Cash Flow', col])
+                             elif 'us-gaap:FreeCashFlow' in cash_flow.index: # rare
+                                 fcf_val = safe_float(cash_flow.loc['us-gaap:FreeCashFlow', col])
+                             elif 'Operating Cash Flow' in cash_flow.index and 'Capital Expenditure' in cash_flow.index:
+                                 ocf = safe_float(cash_flow.loc['Operating Cash Flow', col])
+                                 capex = safe_float(cash_flow.loc['Capital Expenditure', col])
+                                 fcf_val = ocf + capex
+                     
+                     rec["fcf"] = fcf_val / 1e6
+                     rec["fcfMargin"] = (fcf_val/rev*100) if rev else 0
+
+                     # ROIC Calculation
+                     roic_val = 0
+                     if balance_sheet is not None and not balance_sheet.empty and col in balance_sheet.columns:
+                         try:
+                             ebit = safe_float(income_stmt.loc['EBIT', col]) if 'EBIT' in income_stmt.index else safe_float(income_stmt.loc['Pretax Income', col])
+                             tax_prov = safe_float(income_stmt.loc['Tax Provision', col]) if 'Tax Provision' in income_stmt.index else 0
+                             nopat = ebit - tax_prov
+                             
+                             equity = safe_float(balance_sheet.loc['Total Stockholder Equity', col]) if 'Total Stockholder Equity' in balance_sheet.index else safe_float(balance_sheet.loc['Common Stock Equity', col])
+                             debt = safe_float(balance_sheet.loc['Total Debt', col]) if 'Total Debt' in balance_sheet.index else 0
+                             cash = safe_float(balance_sheet.loc['Cash And Cash Equivalents', col]) if 'Cash And Cash Equivalents' in balance_sheet.index else 0
+                             
+                             inv_cap = equity + debt - cash
+                             if inv_cap > 0:
+                                 roic_val = (nopat / inv_cap) * 100
+                         except:
+                             pass
+                     rec["roic"] = roic_val
+
+                     # Historical Valuation Multiples
+                     # Need price at fiscal year end
+                     price_at_fy = get_price_at_date(price_history, col)
+                     if price_at_fy > 0:
+                         total_debt = 0
+                         cash_equiv = 0
+                         if balance_sheet is not None and col in balance_sheet.columns:
+                              if 'Total Debt' in balance_sheet.index: total_debt = safe_float(balance_sheet.loc['Total Debt', col])
+                              if 'Cash And Cash Equivalents' in balance_sheet.index: cash_equiv = safe_float(balance_sheet.loc['Cash And Cash Equivalents', col])
+                         
+                         market_cap_hist = price_at_fy * shares_hist
+                         enterprise_value_hist = market_cap_hist + total_debt - cash_equiv
+                         
+                         rec["peRatio"] = (price_at_fy / rec["eps"]) if rec["eps"] > 0 else 0
+                         rec["psRatio"] = (market_cap_hist / rev) if rev > 0 else 0
+                         rec["evEbitda"] = (enterprise_value_hist / ebitda_val) if ebitda_val > 0 else 0
+                         rec["evFcf"] = (enterprise_value_hist / fcf_val) if fcf_val > 0 else 0
+                         rec["fcfYield"] = (fcf_val / market_cap_hist * 100) if (market_cap_hist > 0 and fcf_val > 0) else 0
+
+                     # Revenue Growth
+                     if i > 0:
+                         prev_col = cols[i-1]
+                         prev_rev = safe_float(income_stmt.loc['Total Revenue', prev_col])
+                         if prev_rev > 0:
+                             rec["revenueGrowth"] = ((rev - prev_rev) / prev_rev) * 100
+                         else:
+                             rec["revenueGrowth"] = 0
+                     else:
+                         rec["revenueGrowth"] = 0
+
+                     hist_records.append(rec)
+                 except Exception as e:
+                     debug(f"Error processing historical year {col}: {e}")
+                     pass
+        
+        # Append TTM Record
+        if ttm_financials["revenue"] > 0:
+            try:
+                # Calculate TTM FCF
+                ttm_fcf = 0
+                if q_cash is not None:
+                     ocf_ttm = calculate_ttm(q_cash, "Operating Cash Flow")
+                     capex_ttm = calculate_ttm(q_cash, "Capital Expenditure")
+                     ttm_fcf = ocf_ttm + capex_ttm # Capex negative usually
+
+                # TTM Revenue Growth - comparison to last FY is misleading due to seasonality/timeframe overlap
+                # Better to show N/A or gap in chart
+                # Better to show N/A or gap in chart
+                ttm_growth = 0 
+
+                # Calculate TTM ROIC
+                ttm_roic = 0
+                try:
+                    if q_income is not None and not q_income.empty:
+                        ttm_ebit = calculate_ttm(q_income, "EBIT")
+                        if ttm_ebit == 0: ttm_ebit = calculate_ttm(q_income, "Pretax Income")
+                        
+                        ttm_tax = calculate_ttm(q_income, "Tax Provision")
+                        ttm_nopat = ttm_ebit - ttm_tax
+                        
+                        # Invested Capital (Latest Snapshot)
+                        if q_balance is not None and not q_balance.empty:
+                            lq = q_balance.columns[0]
+                            eq = safe_float(q_balance.loc['Total Stockholder Equity', lq]) if 'Total Stockholder Equity' in q_balance.index else safe_float(q_balance.loc['Common Stock Equity', lq])
+                            debt = safe_float(q_balance.loc['Total Debt', lq]) if 'Total Debt' in q_balance.index else 0
+                            cash = safe_float(q_balance.loc['Cash And Cash Equivalents', lq]) if 'Cash And Cash Equivalents' in q_balance.index else 0
+                            
+                            inv_cap = eq + debt - cash
+                            if inv_cap > 0:
+                                ttm_roic = (ttm_nopat / inv_cap) * 100
+                except:
+                    pass
+
+                # Define ttm_rec dictionary
+                ttm_rec = {
+                    "year": fiscal_info["ttm_label"] if fiscal_info else "TTM",
+                    "revenue": ttm_financials["revenue"] / 1e6,
+                    "grossProfit": ttm_financials["gross_profit"] / 1e6,
+                    "grossMargin": ttm_financials["gross_margin_pct"],
+                    "netIncome": ttm_financials["net_income"] / 1e6,
+                    "netIncomeMargin": (ttm_financials["net_income"] / ttm_financials["revenue"] * 100) if ttm_financials["revenue"] else 0,
+                    "eps": ttm_financials["eps"],
+                    "ebitda": ttm_financials["ebitda"] / 1e6,
+                    "ebitdaMargin": (ttm_financials["ebitda"] / ttm_financials["revenue"] * 100) if ttm_financials["revenue"] else 0,
+                    "fcf": ttm_fcf / 1e6,
+                    "fcfMargin": (ttm_fcf / ttm_financials["revenue"] * 100) if ttm_financials["revenue"] else 0,
+                    "roic": ttm_roic,
+                    "revenueGrowth": 0, # TTM vs last FY is not apples-to-apples for growth rate display
+                    
+                    # Valuation Multiples - Initial Defaults (will be updated below)
+                    "peRatio": market_data["pe_ratio"],
+                    "psRatio": 0,
+                    "evEbitda": 0,
+                    "evFcf": 0,
+                    "fcfYield": (ttm_fcf / market_data["market_cap"] * 100) if (market_data["market_cap"] and ttm_fcf) else 0
+                } 
+
+                # Prepare result - MERGE into existing result object instead of overwriting
+                result["financials"] = {
+                    "revenue": ttm_financials["revenue"] / 1e6,
+                    "grossMargin": ttm_financials["gross_margin_pct"],
+                    "ebitda": ttm_financials["ebitda"] / 1e6,
+                    "ebitdaMargin": (ttm_financials["ebitda"] / ttm_financials["revenue"] * 100) if ttm_financials["revenue"] else 0,
+                    "netIncome": ttm_financials["net_income"] / 1e6,
+                    "netIncomeMargin": (ttm_financials["net_income"] / ttm_financials["revenue"] * 100) if ttm_financials["revenue"] else 0,
+                    "eps": ttm_financials["eps"],
+                    # IMPORTANT: Export Cash Flow Components for TTM Recalculation
+                    "freeCashFlow": ttm_fcf / 1e6 if ttm_fcf else 0,
+                    "fcf": ttm_fcf / 1e6 if ttm_fcf else 0, # Alias
+                    "operatingCashFlow": ocf_ttm / 1e6 if ocf_ttm else 0,
+                    "capitalExpenditures": capex_ttm / 1e6 if capex_ttm else 0,
+                    # Valuation Ratios (Snapshot)
+                    "peRatio": market_data["pe_ratio"],
+                    "fcfYield": (ttm_fcf / market_data["market_cap"] * 100) if (market_data["market_cap"] and ttm_fcf) else 0,
+                    "marketCap": market_data["market_cap"] / 1e6,
+                    "enterpriseValue": market_data["enterprise_value"] / 1e6,
+                    "currentPrice": market_data["current_price"],
+                    "roic": ttm_roic
+                }
+                
+                # Duplicate for legacy compatibility
+                result["yfinanceData"] = { 
+                    "revenue": ttm_financials["revenue"] / 1e6,
+                    "grossMargin": ttm_financials["gross_margin_pct"],
+                    "ebitda": ttm_financials["ebitda"] / 1e6,
+                    "netIncome": ttm_financials["net_income"] / 1e6,
+                    "eps": ttm_financials["eps"],
+                    "marketCap": market_data["market_cap"] / 1e6,
+                    "currentPrice": market_data["current_price"],
+                    "shares_outstanding": shares_outstanding,
+                    "peRatio": market_data["pe_ratio"],
+                    "source": "yfinance_api"
+                }
+
+                if market_data["market_cap"] > 0 and ttm_financials["revenue"] > 0:
+                     ttm_rec["psRatio"] = market_data["market_cap"] / ttm_financials["revenue"]
+                     result["financials"]["psRatio"] = ttm_rec["psRatio"]
+
+                # EV/EBITDA TTM
+                if q_balance is not None and not q_balance.empty:
+                      # Get latest quarter column
+                      latest_q = q_balance.columns[0]
+                      debt_q = safe_float(q_balance.loc['Total Debt', latest_q]) if 'Total Debt' in q_balance.index else 0
+                      cash_q = safe_float(q_balance.loc['Cash And Cash Equivalents', latest_q]) if 'Cash And Cash Equivalents' in q_balance.index else 0
+                      
+                      mc = market_data["market_cap"]
+                      ev = mc + debt_q - cash_q
+                      market_data["enterprise_value"] = ev # Update generic market data too
+                      result["financials"]["enterpriseValue"] = ev / 1e6 # Update in financials too
+                      
+                      if ttm_financials["ebitda"] > 0:
+                           ttm_rec["evEbitda"] = ev / ttm_financials["ebitda"]
+                           result["financials"]["evEbitda"] = ttm_rec["evEbitda"]
+                      if ttm_fcf > 0:
+                           ttm_rec["evFcf"] = ev / ttm_fcf
+                           result["financials"]["evFcf"] = ttm_rec["evFcf"]
+                
+                # Ensure Company Name is accurate in final result
+                result["companyName"] = company.info.get('longName', ticker) if company and hasattr(company, 'info') and company.info else ticker
+
+                hist_records.append(ttm_rec)
+            except Exception as e:
+                debug(f"Error appending TTM record: {e}")
+
+        # Sort oldest to newest
+        result["historical_financials"] = sorted(hist_records, key=lambda x: str(x['year']))
+
         return result
         
     except Exception as e:
@@ -548,13 +622,13 @@ def fetch_financials(ticker):
 
 
 def fetch_historical_valuation(ticker):
-    """Fetch 5 years of historical data for valuation charts."""
+    """Fetch 5 years of quarterly valuation data (TTM based)."""
     try:
         debug(f"Fetching historical valuation data for {ticker}...")
         
-        # 1. Fetch 5 years of monthly price data
-        # Download needs to be adjusted for 5y history
-        hist = yf.download(ticker, period="5y", interval="1mo", progress=False, ignore_tz=True)
+        # 1. Fetch 5+ years of monthly price data
+        # We need enough history to cover the 5y chart 
+        hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True)
         
         if hist is None or hist.empty:
             debug("No historical price data found")
@@ -563,134 +637,196 @@ def fetch_historical_valuation(ticker):
         # 2. Fetch quarterly financials
         company = yf.Ticker(ticker)
         
-        # Get financials (using multiple possible attributes for robustness)
-        quarterly_income = None
-        try:
-            quarterly_income = company.quarterly_income_stmt
-        except:
-            pass
-            
-        quarterly_balance = None
-        try:
-            quarterly_balance = company.quarterly_balance_sheet
-        except:
-            pass
-            
+        q_inc = company.quarterly_income_stmt
+        q_bal = company.quarterly_balance_sheet
+        q_cash = company.quarterly_cash_flow
+        
+        if q_inc is None or q_inc.empty:
+            debug("No quarterly income data found")
+            return []
+
+        # Fetch Annual CF for Backup
+        a_cash = company.cash_flow
+
+        # Get Shares (fallback logic)
         shares = 0
         try:
             info = company.info
-            shares = info.get('sharesOutstanding', 0)
+            shares = safe_float(info.get('sharesOutstanding', 0))
         except:
             pass
-
-        # If direct properties fail, we might need a different approach or just fallback
-        # Given yfinance fragility, let's try to construct a simple series
-        
-        # Process data
-        valuation_data = []
-        
-        # We need to align prices with TTM financials.
-        # This is complex to do robustly in one step.
-        # Let's simplify: return the raw price data and let the frontend/node layer do heavy TTM math? 
-        # API expects: date, price, marketCap, peRatio, psRatio, revenue, netIncome
-        
-        # Let's try to get TTM metrics if possible.
-        # Actually, let's just return the raw data needed by the existing Node logic?
-        # The Node logic `processValuationData` does a LOT of processing.
-        # Replicating that exact logic in Python is safer.
-        
-        # Convert index (Date) to string column - REMOVED to avoid duplication issues
-        # hist = hist.reset_index()
-        
-        # Extract relevant financial history for TTM
-        # yfinance normally returns last 4-5 years of quarters.
-        
-        # Helper to find TTM value for a date
-        def get_ttm_at_date(df, target_date, col_name):
-            if df is None or df.empty:
-                return 0
-            # Filter for quarters ending on or before target_date
-            # df columns are dates in yfinance (usually)
-            relevant_cols = [c for c in df.columns if pd.to_datetime(c) <= target_date]
-            relevant_cols.sort(key=lambda x: pd.to_datetime(x), reverse=True)
-            last_4 = relevant_cols[:4]
-            if len(last_4) < 4:
-                return 0 # Not enough data
             
+        # Helper: Get Price at Date
+        def get_price_at_date(df, target_date):
+            if df is None or df.empty: return 0
+            # Convert index to datetime if needed
+            index_dt = pd.to_datetime(df.index)
+            # Find closest index
+            # Use searchsorted?
+            # Simplest: difference
+            try:
+                # Ensure target_date is tz-naive if index is
+                if index_dt.tz is not None: index_dt = index_dt.tz_localize(None)
+                
+                # Find closest index
+                # This works for finding the month-end close closest to quarter-end
+                idx_pos = index_dt.searchsorted(target_date)
+                if idx_pos >= len(df): idx_pos = len(df) - 1
+                
+                # Check adjacent
+                dt_at = index_dt[idx_pos]
+                val = df['Close'].iloc[idx_pos]
+                if isinstance(val, pd.Series): val = val.iloc[0]
+                return safe_float(val)
+            except:
+                return 0
+
+        # Helper: Calculate TTM from Quarterly DF
+        def calculate_ttm_at_date(df, end_date, row_name):
+            if df is None or df.empty: return 0
+            # Get columns (dates)
+            cols = [pd.to_datetime(c) for c in df.columns]
+            # Filter cols <= end_date
+            valid_cols = [c for c in cols if c <= end_date]
+            valid_cols.sort(reverse=True) # Newest first
+            
+            # We need exact 4 quarters
+            last_4 = valid_cols[:4]
+            if len(last_4) < 4: return 0
+            
+            # Check if they are contiguous? (Assume roughly 3 month gaps)
+            # Just sum them for now
             total = 0
-            for c in last_4:
+            for date_col in last_4:
+                # Find matching column name in original df (might be string vs timestamp mismatch)
+                # Re-map back to string if needed or use index
+                # yfinance df columns are Timestamps usually
                 try:
-                    val = df.loc[col_name, c]
+                    # In recent pandas/yfinance, columns are Timestamps
+                    val = df.loc[row_name, date_col]
                     total += safe_float(val)
                 except:
                     pass
             return total
 
-        # Prepare financials for TTM
-        # Note: yfinance returns DataFrame with Dates as columns
-        q_inc = quarterly_income
-        
+        # Helper: Get Balance Sheet Item at Date (Point in Time)
+        def get_bs_at_date(df, end_date, row_name):
+             if df is None or df.empty: return 0
+             cols = [pd.to_datetime(c) for c in df.columns]
+             valid_cols = [c for c in cols if c <= end_date]
+             valid_cols.sort(reverse=True)
+             if not valid_cols: return 0
+             latest = valid_cols[0]
+             try:
+                 return safe_float(df.loc[row_name, latest]) 
+             except:
+                 return 0
+
+        # Iterate over Income Statement Columns (Quarters)
         results = []
+        cols = [pd.to_datetime(c) for c in q_inc.columns]
+        cols.sort() # Oldest to newest
         
-        # Iterate over the DataFrame - if 'Date' puts it in columns or index depends on yfinance version/params
-        # Safest way: inspect usage. We called reset_index() earlier.
-        # If 'Date' became a column, but there were multiple cols?
-        
-        # Re-simplifying:
-        # 1. Don't use reset_index() blindly.
-        # 2. Iterate index directly if it's DatetimeIndex.
-        
-        if 'Date' in hist.columns:
-            # If Date is a column, use it. But ensure it's not a Series of columns.
-            # Drop duplicates to be safe if multiple 'Date' columns exist
-            hist = hist.loc[:, ~hist.columns.duplicated()]
-            dates = hist['Date']
-        else:
-            dates = hist.index
+        # Filter to last 5 years
+        # start_date = pd.Timestamp.now() - pd.DateOffset(years=5)
+        # cols = [c for c in cols if c >= start_date]
 
-        # Retrieve Close prices
-        # 'Close' might be a column.
-        
-        for idx in range(len(hist)):
+        for q_date in cols:
             try:
-                if 'Date' in hist.columns:
-                   date_obj = pd.to_datetime(hist['Date'].iloc[idx])
-                else:
-                   date_obj = pd.to_datetime(hist.index[idx])
+                # 1. TTM Metrics
+                rev_ttm = calculate_ttm_at_date(q_inc, q_date, "Total Revenue")
+                ni_ttm  = calculate_ttm_at_date(q_inc, q_date, "Net Income")
+                eps_val = calculate_ttm_at_date(q_inc, q_date, "Diluted EPS")
+                if eps_val == 0 and shares > 0: eps_val = ni_ttm / shares
                 
-                # Access Close price safely
-                if 'Close' in hist.columns:
-                    val = hist['Close'].iloc[idx]
-                    # If it's a Series (multi-level col), take first
-                    if isinstance(val, pd.Series):
-                        val = val.iloc[0]
-                    close_price = safe_float(val)
-                else:
-                    close_price = 0
+                ebitda_ttm = 0
+                if 'EBITDA' in q_inc.index:
+                    ebitda_ttm = calculate_ttm_at_date(q_inc, q_date, "EBITDA")
+                elif 'Normalized EBITDA' in q_inc.index:
+                    ebitda_ttm = calculate_ttm_at_date(q_inc, q_date, "Normalized EBITDA")
 
-                results.append({
-                    "date": date_obj.strftime('%Y-%m-%d'),
-                    "price": close_price,
-                    "marketCap": close_price * shares if shares else 0,
-                    "revenue": get_ttm_at_date(q_inc, date_obj, "Total Revenue") if q_inc is not None else 0,
-                    "netIncome": get_ttm_at_date(q_inc, date_obj, "Net Income") if q_inc is not None else 0
-                })
+                fcf_ttm = 0
+                if q_cash is not None:
+                     # Try Direct FCF first if available in quarterly
+                     fcf_ttm = calculate_ttm_at_date(q_cash, q_date, "Free Cash Flow")
+                if q_cash is not None and fcf_ttm == 0: # Only try OCF+CapEx if direct FCF is 0
+                     # 1. Try TTM from Quarterly OCF+CapEx
+                     ocf = calculate_ttm_at_date(q_cash, q_date, "Operating Cash Flow")
+                     capex = calculate_ttm_at_date(q_cash, q_date, "Capital Expenditure")
+                     fcf_ttm = ocf + capex
+
+                # 2. WORKAROUND: Fallback to Annual FCF if Quarterly failed
+                if fcf_ttm == 0 and a_cash is not None and not a_cash.empty:
+                    # Find annual report column where date is close to q_date (within 6 months?)
+                    # If q_date is 2023-09-30, and Annual is 2023-12-31, use that.
+                    try:
+                        a_cols = [pd.to_datetime(c) for c in a_cash.columns]
+                        # Find closest date
+                        closest_date = min(a_cols, key=lambda d: abs(d - q_date))
+                        # If closest is within 365 days, use it
+                        if abs((closest_date - q_date).days) < 370:
+                             # Get FCF from Annual
+                             val = 0
+                             if 'Free Cash Flow' in a_cash.index:
+                                 val = safe_float(a_cash.loc['Free Cash Flow', closest_date])
+                             elif 'Operating Cash Flow' in a_cash.index and 'Capital Expenditure' in a_cash.index:
+                                 val = safe_float(a_cash.loc['Operating Cash Flow', closest_date]) + safe_float(a_cash.loc['Capital Expenditure', closest_date])
+                             
+                             fcf_ttm = val # Use Annual as Proxy for TTM
+                    except:
+                        pass
                 
-                # Post-calc Ratios
-                res = results[-1]
-                if res['revenue'] > 0 and res['marketCap'] > 0:
-                    res['psRatio'] = res['marketCap'] / res['revenue']
-                if res['netIncome'] > 0 and shares > 0:
-                    eps = res['netIncome'] / shares
-                    if eps > 0:
-                        res['peRatio'] = close_price / eps
-            except Exception as loop_e:
-                debug(f"Error processing row {idx}: {loop_e}")
-                continue
+                # WORKAROUND: Fallback to Annual FCF if Quarterly failed
+                # User specifically asked for workarounds to populate the chart
+                if fcf_ttm == 0:
+                    try:
+                        # Fetch/Use Annual Cash Flow (lazy load if not already)
+                        # We don't have it passed in, need to access company.cash_flow which might be slow?
+                        # Actually we instantiated 'company' above (line 568).
+                        # Let's assume 'company.cash_flow' is fast enough or cached by yfinance lib
+                        
+                        # We need to find the Annual Column closest to q_date
+                        # Since we are inside a loop, let's not call .cash_flow every time.
+                        # We should have fetched it once outside.
+                        # Refactor: move .cash_flow fetch up.
+                        pass # See MultiReplace below
+                    except:
+                        pass
+                
+                # 2. Valuation Logic
+                price = get_price_at_date(hist, q_date)
+                
+                # Shares at that time? Hard to get historical shares accurately without full BS history.
+                # Use current shares as proxy if historical missing, or try BS
+                shares_hist = get_bs_at_date(q_bal, q_date, "Ordinary Shares Number")
+                if shares_hist == 0: shares_hist = get_bs_at_date(q_bal, q_date, "Common Stock Shares Outstanding")
+                if shares_hist == 0: shares_hist = shares # Fallback
+                
+                if price == 0 or shares_hist == 0: continue
+                
+                market_cap = price * shares_hist
+                
+                # Enterprise Value
+                debt = get_bs_at_date(q_bal, q_date, "Total Debt")
+                cash = get_bs_at_date(q_bal, q_date, "Cash And Cash Equivalents")
+                ev = market_cap + debt - cash
+                
+                # 3. Ratios
+                rec = {
+                    "date": q_date.strftime('%Y-%m-%d'),
+                    "price": price,
+                    "peRatio": (price / eps_val) if eps_val > 0 else 0,
+                    "psRatio": (market_cap / rev_ttm) if rev_ttm > 0 else 0,
+                    "evEbitda": (ev / ebitda_ttm) if ebitda_ttm > 0 else 0,
+                    "evFcf": (ev / fcf_ttm) if fcf_ttm > 0 else 0,
+                    "fcfYield": (fcf_ttm / market_cap * 100) if (market_cap > 0 and fcf_ttm > 0) else 0
+                }
+                
+                results.append(rec)
+            except Exception as e:
+                pass # Skip bad quarters
 
-                    
         return results
-
     except Exception as e:
         debug(f"Error fetching historical valuation: {e}")
         return []

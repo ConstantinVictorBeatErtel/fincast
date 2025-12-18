@@ -1,7 +1,7 @@
 {
   "version": 2,
   "buildCommand": "npm run build",
-  "installCommand": "npm install",
+  "installCommand": "npm install && pip3 install -r requirements.txt",
   "framework": "nextjs",
   "functions": {
     "api/py-yf/index.py": {

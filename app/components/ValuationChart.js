@@ -8,7 +8,9 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 const METRICS = [
   { key: 'peRatio', label: 'P/E Ratio', icon: TrendingUp, color: '#8884d8' },
-    { key: 'psRatio', label: 'P/Sales Ratio', icon: BarChart3, color: '#82ca9d' }
+  { key: 'psRatio', label: 'P/Sales Ratio', icon: BarChart3, color: '#82ca9d' },
+  { key: 'evEbitda', label: 'EV/EBITDA', icon: Activity, color: '#ffc658' },
+  { key: 'fcfYield', label: 'FCF Yield (%)', icon: DollarSign, color: '#ff0000' }
 ];
 
 export default function ValuationChart({ ticker, data, loading }) {
@@ -25,9 +27,9 @@ export default function ValuationChart({ ticker, data, loading }) {
     if (!data || data.length === 0) return;
 
     const processedData = data.map(point => ({
-      date: new Date(point.date).toLocaleDateString('en-US', { 
-        month: 'short', 
-        year: '2-digit' 
+      date: new Date(point.date).toLocaleDateString('en-US', {
+        month: 'short',
+        year: '2-digit'
       }),
       fullDate: point.date,
       [selectedMetric]: point[selectedMetric]
@@ -93,16 +95,15 @@ export default function ValuationChart({ ticker, data, loading }) {
         {METRICS.map(metric => {
           const Icon = metric.icon;
           const isSelected = selectedMetric === metric.key;
-          
+
           return (
             <Button
               key={metric.key}
               onClick={() => selectMetric(metric.key)}
               variant={isSelected ? "default" : "outline"}
               size="sm"
-              className={`flex items-center space-x-2 ${
-                isSelected ? 'bg-blue-600 text-white' : ''
-              }`}
+              className={`flex items-center space-x-2 ${isSelected ? 'bg-blue-600 text-white' : ''
+                }`}
             >
               <Icon className="w-4 h-4" />
               <span>{metric.label}</span>
@@ -117,25 +118,25 @@ export default function ValuationChart({ ticker, data, loading }) {
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis 
-                dataKey="date" 
+              <XAxis
+                dataKey="date"
                 stroke="#6b7280"
                 tick={{ fontSize: 12 }}
               />
-              <YAxis 
+              <YAxis
                 stroke="#6b7280"
                 tick={{ fontSize: 12 }}
                 domain={['dataMin - 5', 'dataMax + 5']}
               />
-              <Tooltip 
+              <Tooltip
                 formatter={(value, name) => [value?.toFixed(2) || 'N/A', name]}
                 labelFormatter={(label) => `Date: ${label}`}
               />
               <Legend />
-              <Line 
-                type="monotone" 
-                dataKey={selectedMetric} 
-                stroke={METRICS.find(m => m.key === selectedMetric)?.color || '#8884d8'} 
+              <Line
+                type="monotone"
+                dataKey={selectedMetric}
+                stroke={METRICS.find(m => m.key === selectedMetric)?.color || '#8884d8'}
                 strokeWidth={2}
                 dot={{ fill: METRICS.find(m => m.key === selectedMetric)?.color || '#8884d8', strokeWidth: 2, r: 4 }}
                 activeDot={{ r: 6, stroke: METRICS.find(m => m.key === selectedMetric)?.color || '#8884d8', strokeWidth: 2 }}
@@ -159,7 +160,7 @@ export default function ValuationChart({ ticker, data, loading }) {
               const values = chartData
                 .map(point => point[selectedMetric])
                 .filter(val => val !== null && val !== undefined && !isNaN(val));
-              
+
               if (values.length === 0) return null;
 
               const avg = values.reduce((sum, val) => sum + val, 0) / values.length;
