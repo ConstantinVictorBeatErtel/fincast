@@ -47,10 +47,13 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode())
 
         except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
             self.send_response(500)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({
                 'error': 'Failed to fetch data',
-                'message': str(e)
+                'message': str(e),
+                'traceback': error_details
             }).encode())
