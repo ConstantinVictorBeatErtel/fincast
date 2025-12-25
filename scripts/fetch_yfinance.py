@@ -23,9 +23,9 @@ if os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'):
         # Let's set the HOME directory to /tmp so appdirs picks it up.
         os.environ['HOME'] = '/tmp'
         os.environ['XDG_CACHE_HOME'] = '/tmp/.cache'
-        debug("Set HOME and XDG_CACHE_HOME to /tmp for Vercel environment.")
+        sys.stderr.write("Set HOME and XDG_CACHE_HOME to /tmp for Vercel environment.\n")
     except Exception as e:
-        debug(f"Failed to set cache env: {e}")
+        sys.stderr.write(f"Failed to set cache env: {e}\n")
 
 
 def debug(*args, **kwargs):
