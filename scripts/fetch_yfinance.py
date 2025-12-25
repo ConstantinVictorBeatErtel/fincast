@@ -20,10 +20,19 @@ if os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'):
         # Best approach: Set specific cache location via requests session or just try to 
         # ensure it doesn't crash.
         # However, yfinance 0.2.x is robust. The issue might simply be that it *can't* write.
-        # Let's set the HOME directory to /tmp so appdirs picks it up.
+        # Configure yfinance to use /tmp for cache
+        cache_dir = '/tmp/py-yfinance'
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir, exist_ok=True)
+        
+        try:
+            yf.set_tz_cache_location(cache_dir)
+        except AttributeError:
+             pass # Older yfinance versions might not have this
+
         os.environ['HOME'] = '/tmp'
         os.environ['XDG_CACHE_HOME'] = '/tmp/.cache'
-        sys.stderr.write("Set HOME and XDG_CACHE_HOME to /tmp for Vercel environment.\n")
+        sys.stderr.write(f"Set yfinance cache to {cache_dir}\n")
     except Exception as e:
         sys.stderr.write(f"Failed to set cache env: {e}\n")
 
@@ -191,13 +200,32 @@ def fetch_financials(ticker):
     try:
         debug(f"Fetching data for {ticker}...")
         
+        # Helper to get session (only inject if curl_cffi is missing to avoid conflicts)
+        def get_yf_session():
+            try:
+                import curl_cffi
+                return None # Let yfinance use curl_cffi
+            except ImportError:
+                # Vercel / No curl_cffi: Inject User-Agent
+                s = requests.Session()
+                s.headers.update({
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                })
+                return s
+
+        session = get_yf_session()
+        
         # Create ticker object
-        company = yf.Ticker(ticker)
+        company = yf.Ticker(ticker, session=session)
         
         # Get current price
         current_price = 0
         try:
-            hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
+            try:
+                hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True, session=session)
+            except TypeError:
+                hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
+
             if hist is not None and not hist.empty:
                 # Handle multi-level columns if present
                 if 'Close' in hist.columns:
@@ -644,15 +672,31 @@ def fetch_historical_valuation(ticker):
         debug(f"Fetching historical valuation data for {ticker}...")
         
         # 1. Fetch 5+ years of monthly price data
+        def get_yf_session():
+            try:
+                import curl_cffi
+                return None
+            except ImportError:
+                s = requests.Session()
+                s.headers.update({
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                })
+                return s
+        
+        session = get_yf_session()
+
         # We need enough history to cover the 5y chart 
-        hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True)
+        try:
+            hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True, session=session)
+        except TypeError:
+            hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True)
         
         if hist is None or hist.empty:
             debug("No historical price data found")
             return []
             
         # 2. Fetch quarterly financials
-        company = yf.Ticker(ticker)
+        company = yf.Ticker(ticker, session=session)
         
         q_inc = company.quarterly_income_stmt
         q_bal = company.quarterly_balance_sheet
