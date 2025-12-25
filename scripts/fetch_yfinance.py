@@ -200,14 +200,43 @@ def fetch_financials(ticker):
     try:
         debug(f"Fetching data for {ticker}...")
         
-        # Create ticker object
-        # With curl_cffi installed, yfinance should automatically handle session/requests acting like a browser
-        company = yf.Ticker(ticker)
+        debug(f"Fetching data for {ticker}...")
+        
+        # Robust Session Creation Strategy
+        session = None
+        try:
+            debug("Attempting to use curl_cffi for session...")
+            from curl_cffi import requests as cffi_requests
+            # impersonate="chrome" mimics a real browser TLS fingerprint
+            session = cffi_requests.Session(impersonate="chrome")
+            session.headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            debug("Success: Using curl_cffi session.")
+        except ImportError:
+            debug("Warning: curl_cffi not found/installed. Falling back to requests.")
+        except Exception as e:
+            debug(f"Error initializing curl_cffi: {e}. Falling back to requests.")
+
+        # Fallback: If curl_cffi failed, use standard requests with User-Agent
+        if session is None:
+            debug("Creating fallback requests.Session with custom User-Agent...")
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            })
+
+        # Create ticker object with the chosen session
+        company = yf.Ticker(ticker, session=session)
         
         # Get current price
         current_price = 0
         try:
-            hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
+             # Pass session to download if supported by this version of yfinance
+            try:
+                hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True, session=session)
+            except TypeError:
+                debug("yfinance.download does not support session argument. Using default behavior.")
+                hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
+
             if hist is not None and not hist.empty:
                 # Handle multi-level columns if present
                 if 'Close' in hist.columns:
@@ -654,15 +683,31 @@ def fetch_historical_valuation(ticker):
         debug(f"Fetching historical valuation data for {ticker}...")
         
         # 1. Fetch 5+ years of monthly price data
+        session = None
+        try:
+            from curl_cffi import requests as cffi_requests
+            session = cffi_requests.Session(impersonate="chrome")
+            session.headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        except Exception:
+            # Fallback
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            })
+
         # We need enough history to cover the 5y chart 
-        hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True)
+        try:
+            hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True, session=session)
+        except TypeError:
+             # Fallback for older yf versions
+            hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True)
         
         if hist is None or hist.empty:
             debug("No historical price data found")
             return []
             
         # 2. Fetch quarterly financials
-        company = yf.Ticker(ticker)
+        company = yf.Ticker(ticker, session=session)
         
         q_inc = company.quarterly_income_stmt
         q_bal = company.quarterly_balance_sheet
