@@ -12,7 +12,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from scripts.fetch_yfinance import fetch_financials
+from scripts.fetch_yfinance import fetch_financials, fetch_historical_valuation
 
 
 class handler(BaseHTTPRequestHandler):
@@ -36,8 +36,14 @@ class handler(BaseHTTPRequestHandler):
                 }).encode())
                 return
 
-            # Fetch the data
-            data = fetch_financials(ticker)
+            # Get mode from query params
+            mode = query_params.get('mode', [None])[0]
+            
+            # Fetch the data based on mode
+            if mode == 'valuation':
+                data = fetch_historical_valuation(ticker)
+            else:
+                data = fetch_financials(ticker)
 
             # Send successful response
             self.send_response(200)
