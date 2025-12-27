@@ -11,31 +11,6 @@ import requests
 import pandas as pd
 import os
 
-# Configure yfinance to use /tmp for cache on Vercel/Lambda
-if os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'):
-    try:
-        # yfinance uses 'appdirs' to find cache location. We can monkeypatch or set env var.
-        # Actually, simpler to just set the env var if py-yfinance supports it, 
-        # but yfinance 0.2.x uses a specific cache path.
-        # Best approach: Set specific cache location via requests session or just try to 
-        # ensure it doesn't crash.
-        # However, yfinance 0.2.x is robust. The issue might simply be that it *can't* write.
-        # Configure yfinance to use /tmp for cache
-        cache_dir = '/tmp/py-yfinance'
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir, exist_ok=True)
-        
-        try:
-            yf.set_tz_cache_location(cache_dir)
-        except AttributeError:
-             pass # Older yfinance versions might not have this
-
-        os.environ['HOME'] = '/tmp'
-        os.environ['XDG_CACHE_HOME'] = '/tmp/.cache'
-        sys.stderr.write(f"Set yfinance cache to {cache_dir}\n")
-    except Exception as e:
-        sys.stderr.write(f"Failed to set cache env: {e}\n")
-
 
 def debug(*args, **kwargs):
     try:
