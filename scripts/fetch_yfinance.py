@@ -199,8 +199,6 @@ def fetch_financials(ticker):
     """Fetch financial data from yfinance for a given ticker."""
     try:
         debug(f"Fetching data for {ticker}...")
-        
-        debug(f"Fetching data for {ticker}...")
 
         # Create ticker object
         company = yf.Ticker(ticker)
@@ -208,10 +206,8 @@ def fetch_financials(ticker):
         # Get current price
         current_price = 0
         try:
-             try:
-                hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
-             except Exception:
-                hist = None
+            hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
+            if hist is not None and not hist.empty:
                 # Handle multi-level columns if present
                 if 'Close' in hist.columns:
                     val = hist['Close'].iloc[-1]
