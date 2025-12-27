@@ -351,25 +351,13 @@ def fetch_financials(ticker):
         # PRESERVE HISTORICAL FINANCIALS LOGIC
         hist_records = []
         
-        # Fetch Historical Price Data (Monthly) for Valuation Multiples
-        # We already fetched 'hist' (1mo) for current price, but we need 5y history for multiples
+        # NOTE: Removed 10-year price download to reduce API calls (was causing 429s)
+        # Historical valuation multiples will not be calculated
         price_history = None
-        try:
-             price_history = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True)
-        except:
-             pass
 
         def get_price_at_date(df, date_str):
-             if df is None or df.empty: return 0
-             try:
-                 dt = pd.to_datetime(date_str)
-                 # Find closest date
-                 idx = df.index.get_indexer([dt], method='nearest')[0]
-                 val = df['Close'].iloc[idx]
-                 if isinstance(val, pd.Series): val = val.iloc[0]
-                 return safe_float(val)
-             except:
-                 return 0
+             # Disabled to reduce API calls
+             return 0
 
         if income_stmt is not None and not income_stmt.empty:
              cols = list(income_stmt.columns)
