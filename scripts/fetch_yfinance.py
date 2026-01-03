@@ -248,13 +248,9 @@ def fetch_financials(ticker):
         balance_sheet = company.balance_sheet
         cash_flow = company.cash_flow
         
-        # Get Info for Fiscal Year logic with retry
+        # REMOVED company.info API call to avoid 429 rate limiting on Vercel
+        # This was the main source of rate limit errors. All data can be derived from financial statements.
         info = None
-        try:
-            info = retry_with_backoff(lambda: company.info, max_retries=3, initial_delay=1.0)
-        except:
-            debug("Failed to fetch company.info after retries")
-            pass
 
         # 1. Determine Fiscal Info / Latest Quarter
         latest_date = None
@@ -305,15 +301,13 @@ def fetch_financials(ticker):
             "fiscal_year": "N/A"
         }
 
+        # Get shares outstanding from balance sheet (avoid company.info API call for rate limiting)
         shares_outstanding = 0
-        try:
-            info = company.info
-            shares_outstanding = safe_float(info.get('sharesOutstanding', 0))
-        except:
-            pass
-            
-        if shares_outstanding == 0 and balance_sheet is not None and 'Ordinary Shares Number' in balance_sheet.index:
-             shares_outstanding = safe_float(balance_sheet.loc['Ordinary Shares Number', balance_sheet.columns[0]])
+        if balance_sheet is not None and not balance_sheet.empty:
+            if 'Ordinary Shares Number' in balance_sheet.index:
+                shares_outstanding = safe_float(balance_sheet.loc['Ordinary Shares Number', balance_sheet.columns[0]])
+            elif 'Common Stock Shares Outstanding' in balance_sheet.index:
+                shares_outstanding = safe_float(balance_sheet.loc['Common Stock Shares Outstanding', balance_sheet.columns[0]])
 
         if income_stmt is not None and not income_stmt.empty:
             latest_col = income_stmt.columns[0]
@@ -365,11 +359,8 @@ def fetch_financials(ticker):
             "historical_financials": [] 
         }
         
-        try:
-             if 'longName' in company.info:
-                 result["company_name"] = company.info['longName']
-        except:
-             pass
+        # Company name stays as ticker to avoid company.info API call
+        # Long name is cosmetic and causes rate limiting
 
         # PRESERVE HISTORICAL FINANCIALS LOGIC
         hist_records = []
@@ -616,8 +607,8 @@ def fetch_financials(ticker):
                            ttm_rec["evFcf"] = ev / ttm_fcf
                            result["financials"]["evFcf"] = ttm_rec["evFcf"]
                 
-                # Ensure Company Name is accurate in final result
-                result["companyName"] = company.info.get('longName', ticker) if company and hasattr(company, 'info') and company.info else ticker
+                # Keep ticker as company name to avoid company.info API call (rate limiting)
+                result["companyName"] = ticker
 
                 hist_records.append(ttm_rec)
             except Exception as e:
@@ -690,13 +681,14 @@ def fetch_historical_valuation(ticker):
         # Fetch Annual CF for Backup
         a_cash = company.cash_flow
 
-        # Get Shares (fallback logic)
+        # Get Shares from balance sheet (avoid company.info API call for rate limiting)
         shares = 0
-        try:
-            info = company.info
-            shares = safe_float(info.get('sharesOutstanding', 0))
-        except:
-            pass
+        if q_bal is not None and not q_bal.empty:
+            latest_q = q_bal.columns[0]
+            if 'Ordinary Shares Number' in q_bal.index:
+                shares = safe_float(q_bal.loc['Ordinary Shares Number', latest_q])
+            elif 'Common Stock Shares Outstanding' in q_bal.index:
+                shares = safe_float(q_bal.loc['Common Stock Shares Outstanding', latest_q])
             
         # Helper: Get Price at Date
         def get_price_at_date(df, target_date):
