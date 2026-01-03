@@ -189,15 +189,9 @@ def fetch_financials(ticker):
         # Get current price
         current_price = 0
         try:
-            hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
-            if hist is not None and not hist.empty:
-                # Handle multi-level columns if present
-                if 'Close' in hist.columns:
-                    val = hist['Close'].iloc[-1]
-                    if isinstance(val, pd.Series): val = val.iloc[0]
-                    current_price = safe_float(val)
+            current_price = safe_float(company.fast_info.get('last_price', 0))
         except Exception as e:
-            debug(f"Download failed: {e}")
+            debug(f"Fast info price fetch failed: {e}")
         
         # Fetch Quarterly Data for TTM
         q_income = company.quarterly_income_stmt
@@ -210,11 +204,8 @@ def fetch_financials(ticker):
         cash_flow = company.cash_flow
         
         # Get Info for Fiscal Year logic
+        # REMOVED company.info call to avoid 429 errors
         info = None
-        try:
-             info = company.info
-        except:
-             pass
 
         # 1. Determine Fiscal Info / Latest Quarter
         latest_date = None
@@ -267,8 +258,7 @@ def fetch_financials(ticker):
 
         shares_outstanding = 0
         try:
-            info = company.info
-            shares_outstanding = safe_float(info.get('sharesOutstanding', 0))
+            shares_outstanding = safe_float(company.fast_info.get('shares', 0))
         except:
             pass
             
@@ -308,11 +298,11 @@ def fetch_financials(ticker):
         if eff_eps > 0:
             market_data["pe_ratio"] = current_price / eff_eps
 
-        # Try to get Enterprise Value from info directly
-        if info:
-             ev = safe_float(info.get('enterpriseValue', 0))
-             if ev > 0:
-                 market_data["enterprise_value"] = ev
+        # Try to get Enterprise Value from info directly - REMOVED info call
+        # if info:
+        #      ev = safe_float(info.get('enterpriseValue', 0))
+        #      if ev > 0:
+        #          market_data["enterprise_value"] = ev
 
         # Construct Output
         result = {
@@ -326,8 +316,8 @@ def fetch_financials(ticker):
         }
         
         try:
-             if 'longName' in company.info:
-                 result["company_name"] = company.info['longName']
+             # Fallback name fetch if possible, or just use ticker
+             pass 
         except:
              pass
 
@@ -577,7 +567,8 @@ def fetch_financials(ticker):
                            result["financials"]["evFcf"] = ttm_rec["evFcf"]
                 
                 # Ensure Company Name is accurate in final result
-                result["companyName"] = company.info.get('longName', ticker) if company and hasattr(company, 'info') and company.info else ticker
+                # Removed info call
+                result["companyName"] = ticker
 
                 hist_records.append(ttm_rec)
             except Exception as e:
@@ -651,8 +642,7 @@ def fetch_historical_valuation(ticker):
         # Get Shares (fallback logic)
         shares = 0
         try:
-            info = company.info
-            shares = safe_float(info.get('sharesOutstanding', 0))
+            shares = safe_float(company.fast_info.get('shares', 0))
         except:
             pass
             
