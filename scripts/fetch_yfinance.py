@@ -20,19 +20,7 @@ try:
 except:
     pass
 
-# Configure yfinance session with proper headers to avoid rate limiting
-# This is critical for Vercel deployments
-try:
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive',
-    })
-except:
-    pass
+
 
 
 def debug(*args, **kwargs):
@@ -217,11 +205,13 @@ def calculate_ttm(quarterly_df, col_name):
 
 def fetch_financials(ticker):
     """Fetch financial data from yfinance for a given ticker."""
+    # Init current_price safety
+    current_price = 0
     try:
         debug(f"Fetching data for {ticker}...")
 
-        # Create ticker object with session
-        company = yf.Ticker(ticker, session=session)
+        # Create ticker object (let yfinance handle session)
+        company = yf.Ticker(ticker)
 
         # Get current price
         current_price = 0
@@ -653,7 +643,7 @@ def fetch_historical_valuation(ticker):
         try:
             # Add delay before API call
             time.sleep(0.3)
-            hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True, session=session)
+            hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True)
         except Exception:
             hist = None
 
@@ -661,8 +651,8 @@ def fetch_historical_valuation(ticker):
             debug("No historical price data found")
             return []
 
-        # 2. Fetch quarterly financials with session
-        company = yf.Ticker(ticker, session=session)
+        # 2. Fetch quarterly financials
+        company = yf.Ticker(ticker)
         
         q_inc = company.quarterly_income_stmt
         q_bal = company.quarterly_balance_sheet
