@@ -211,20 +211,9 @@ async function runPythonScript(ticker, mode, headers = {}) {
     });
 }
 
-// Fetch both standard and valuation data
+// Fetch yfinance data (single call to reduce rate limiting)
 async function fetchYFinanceData(ticker, headers = {}) {
-    const [standard, valuation] = await Promise.all([
-        runPythonScript(ticker, null, headers),
-        runPythonScript(ticker, '--valuation', headers)
-    ]);
-
-    if (!standard) return null;
-
-    // Attach valuation history to standard response
-    if (valuation && Array.isArray(valuation)) {
-        standard.valuationHistory = valuation;
-    }
-
+    const standard = await runPythonScript(ticker, null, headers);
     return standard;
 }
 
