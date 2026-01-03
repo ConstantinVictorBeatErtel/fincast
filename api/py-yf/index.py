@@ -12,7 +12,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from scripts.fetch_yfinance import fetch_financials, fetch_historical_valuation
+from scripts.fetch_yfinance import fetch_financials
 
 
 class handler(BaseHTTPRequestHandler):
@@ -36,14 +36,8 @@ class handler(BaseHTTPRequestHandler):
                 }).encode())
                 return
 
-            # Get mode from query params
-            mode = query_params.get('mode', [None])[0]
-            
-            # Fetch the data based on mode
-            if mode == 'valuation':
-                data = fetch_historical_valuation(ticker)
-            else:
-                data = fetch_financials(ticker)
+            # Fetch the data
+            data = fetch_financials(ticker)
 
             # Send successful response
             self.send_response(200)
@@ -53,13 +47,10 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode())
 
         except Exception as e:
-            import traceback
-            error_details = traceback.format_exc()
             self.send_response(500)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({
                 'error': 'Failed to fetch data',
-                'message': str(e),
-                'traceback': error_details
+                'message': str(e)
             }).encode())
