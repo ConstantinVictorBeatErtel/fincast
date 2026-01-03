@@ -41,6 +41,28 @@ def debug(*args, **kwargs):
     except Exception:
         pass
 
+
+def retry_with_backoff(func, max_retries=3, initial_delay=1.0):
+    """
+    Retry a function with exponential backoff for rate limiting.
+    Handles 429 errors and connection issues.
+    """
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            error_str = str(e)
+            # Check if it's a rate limit error
+            if '429' in error_str or 'Too Many Requests' in error_str or 'JSONDecodeError' in error_str:
+                if attempt < max_retries - 1:
+                    delay = initial_delay * (2 ** attempt)  # Exponential backoff
+                    debug(f"Rate limited (attempt {attempt + 1}/{max_retries}), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+            # For other errors or last attempt, raise
+            raise
+    return None
+
 def safe_float(value, default=0.0):
     try:
         f = float(value)
@@ -226,12 +248,13 @@ def fetch_financials(ticker):
         balance_sheet = company.balance_sheet
         cash_flow = company.cash_flow
         
-        # Get Info for Fiscal Year logic
+        # Get Info for Fiscal Year logic with retry
         info = None
         try:
-             info = company.info
+            info = retry_with_backoff(lambda: company.info, max_retries=3, initial_delay=1.0)
         except:
-             pass
+            debug("Failed to fetch company.info after retries")
+            pass
 
         # 1. Determine Fiscal Info / Latest Quarter
         latest_date = None
