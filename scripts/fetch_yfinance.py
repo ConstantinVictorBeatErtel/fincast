@@ -217,8 +217,20 @@ def fetch_financials(ticker):
         current_price = 0
         try:
             current_price = safe_float(company.fast_info.get('last_price', 0))
+            if current_price == 0:
+                raise Exception("fast_info returned 0")
         except Exception as e:
-            debug(f"Fast info price fetch failed: {e}")
+            debug(f"Fast info price fetch failed: {e}, trying fallback...")
+            try:
+                # Fallback: Download 1 day of data
+                time.sleep(0.3) # Rate limit check
+                hist = yf.download(ticker, period="1d", interval="1d", progress=False, ignore_tz=True)
+                if hist is not None and not hist.empty and 'Close' in hist.columns:
+                    val = hist['Close'].iloc[-1]
+                    if isinstance(val, pd.Series): val = val.iloc[0]
+                    current_price = safe_float(val)
+            except Exception as e2:
+                debug(f"Fallback price fetch failed: {e2}")
         
         # Fetch Quarterly Data for TTM
         q_income = company.quarterly_income_stmt
