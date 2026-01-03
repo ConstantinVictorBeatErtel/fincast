@@ -10,12 +10,27 @@ import yfinance as yf
 import requests
 import pandas as pd
 import os
+import time
 
 # Fix cache location for Vercel's read-only filesystem
 os.environ['HOME'] = '/tmp'
 os.environ['XDG_CACHE_HOME'] = '/tmp/.cache'
 try:
     yf.set_tz_cache_location('/tmp')
+except:
+    pass
+
+# Configure yfinance session with proper headers to avoid rate limiting
+# This is critical for Vercel deployments
+try:
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+    })
 except:
     pass
 
@@ -183,13 +198,15 @@ def fetch_financials(ticker):
     try:
         debug(f"Fetching data for {ticker}...")
 
-        # Create ticker object
-        company = yf.Ticker(ticker)
-        
+        # Create ticker object with session
+        company = yf.Ticker(ticker, session=session)
+
         # Get current price
         current_price = 0
         try:
-            hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True)
+            # Add small delay before first API call to avoid rate limiting
+            time.sleep(0.3)
+            hist = yf.download(ticker, period="1mo", interval="1d", progress=False, ignore_tz=True, session=session)
             if hist is not None and not hist.empty:
                 # Handle multi-level columns if present
                 if 'Close' in hist.columns:
@@ -624,18 +641,20 @@ def fetch_historical_valuation(ticker):
         debug(f"Fetching historical valuation data for {ticker}...")
         
         # 1. Fetch 5+ years of monthly price data
-        # We need enough history to cover the 5y chart 
+        # We need enough history to cover the 5y chart
         try:
-            hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True)
+            # Add delay before API call
+            time.sleep(0.3)
+            hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True, session=session)
         except Exception:
             hist = None
-        
+
         if hist is None or hist.empty:
             debug("No historical price data found")
             return []
-            
-        # 2. Fetch quarterly financials
-        company = yf.Ticker(ticker)
+
+        # 2. Fetch quarterly financials with session
+        company = yf.Ticker(ticker, session=session)
         
         q_inc = company.quarterly_income_stmt
         q_bal = company.quarterly_balance_sheet
