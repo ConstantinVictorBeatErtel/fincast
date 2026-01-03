@@ -6,8 +6,17 @@ Called from Node.js to get real financial data.
 import sys
 import json
 import math
+import os
 import yfinance as yf
 import requests
+
+# Fix cache location for Vercel's read-only filesystem
+os.environ['HOME'] = '/tmp'
+os.environ['XDG_CACHE_HOME'] = '/tmp/.cache'
+try:
+    yf.set_tz_cache_location('/tmp')
+except:
+    pass
 
 
 def debug(*args, **kwargs):
