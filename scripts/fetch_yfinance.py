@@ -10,6 +10,7 @@ import yfinance as yf
 import requests
 import pandas as pd
 import os
+import time
 
 # Fix cache location for Vercel's read-only filesystem
 os.environ['HOME'] = '/tmp'
@@ -19,12 +20,48 @@ try:
 except:
     pass
 
+# Configure yfinance session with proper headers to avoid rate limiting
+# This is critical for Vercel deployments
+try:
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+    })
+except:
+    pass
+
 
 def debug(*args, **kwargs):
     try:
         sys.stderr.write(" ".join(str(a) for a in args) + "\n")
     except Exception:
         pass
+
+
+def retry_with_backoff(func, max_retries=3, initial_delay=1.0):
+    """
+    Retry a function with exponential backoff for rate limiting.
+    Handles 429 errors and connection issues.
+    """
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            error_str = str(e)
+            # Check if it's a rate limit error
+            if '429' in error_str or 'Too Many Requests' in error_str or 'JSONDecodeError' in error_str:
+                if attempt < max_retries - 1:
+                    delay = initial_delay * (2 ** attempt)  # Exponential backoff
+                    debug(f"Rate limited (attempt {attempt + 1}/{max_retries}), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+            # For other errors or last attempt, raise
+            raise
+    return None
 
 def safe_float(value, default=0.0):
     try:
@@ -183,9 +220,9 @@ def fetch_financials(ticker):
     try:
         debug(f"Fetching data for {ticker}...")
 
-        # Create ticker object
-        company = yf.Ticker(ticker)
-        
+        # Create ticker object with session
+        company = yf.Ticker(ticker, session=session)
+
         # Get current price
         current_price = 0
         try:
@@ -256,6 +293,7 @@ def fetch_financials(ticker):
             "fiscal_year": "N/A"
         }
 
+        # Get shares outstanding from balance sheet (avoid company.info API call for rate limiting)
         shares_outstanding = 0
         try:
             shares_outstanding = safe_float(company.fast_info.get('shares', 0))
@@ -315,11 +353,8 @@ def fetch_financials(ticker):
             "historical_financials": [] 
         }
         
-        try:
-             # Fallback name fetch if possible, or just use ticker
-             pass 
-        except:
-             pass
+        # Company Name is already set to ticker in result init
+        pass
 
         # PRESERVE HISTORICAL FINANCIALS LOGIC
         hist_records = []
@@ -567,7 +602,6 @@ def fetch_financials(ticker):
                            result["financials"]["evFcf"] = ttm_rec["evFcf"]
                 
                 # Ensure Company Name is accurate in final result
-                # Removed info call
                 result["companyName"] = ticker
 
                 hist_records.append(ttm_rec)
@@ -615,18 +649,20 @@ def fetch_historical_valuation(ticker):
         debug(f"Fetching historical valuation data for {ticker}...")
         
         # 1. Fetch 5+ years of monthly price data
-        # We need enough history to cover the 5y chart 
+        # We need enough history to cover the 5y chart
         try:
-            hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True)
+            # Add delay before API call
+            time.sleep(0.3)
+            hist = yf.download(ticker, period="10y", interval="1mo", progress=False, ignore_tz=True, session=session)
         except Exception:
             hist = None
-        
+
         if hist is None or hist.empty:
             debug("No historical price data found")
             return []
-            
-        # 2. Fetch quarterly financials
-        company = yf.Ticker(ticker)
+
+        # 2. Fetch quarterly financials with session
+        company = yf.Ticker(ticker, session=session)
         
         q_inc = company.quarterly_income_stmt
         q_bal = company.quarterly_balance_sheet
@@ -639,7 +675,7 @@ def fetch_historical_valuation(ticker):
         # Fetch Annual CF for Backup
         a_cash = company.cash_flow
 
-        # Get Shares (fallback logic)
+        # Get Shares from balance sheet (avoid company.info API call for rate limiting)
         shares = 0
         try:
             shares = safe_float(company.fast_info.get('shares', 0))
