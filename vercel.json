@@ -4,6 +4,14 @@
   "installCommand": "npm install",
   "framework": "nextjs",
   "functions": {
+    "api/py-yf/index.py": {
+      "memory": 1024,
+      "maxDuration": 60
+    },
+    "api/portfolio-prices/index.py": {
+      "memory": 1024,
+      "maxDuration": 60
+    },
     "app/api/dcf-valuation/route.js": {
       "maxDuration": 60
     },

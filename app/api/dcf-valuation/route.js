@@ -368,91 +368,40 @@ async function fetchLatestWithSonar(ticker) {
   }
 }
 
-// Direct yfinance fetch using yahoo-finance2 npm package (Node.js/JavaScript)
+// Direct yfinance fetch using Python Vercel serverless function
 async function fetchYFinanceDataDirect(ticker, hdrs) {
   try {
-    console.log(`[yahoo-finance2] Fetching data for ${ticker} using Node.js package`);
+    console.log(`[Python API] Fetching data for ${ticker} using Python serverless function`);
 
-    // Use yahoo-finance2 directly - works on both local and Vercel
-    const quoteSummary = await yahooFinance.quoteSummary(ticker, { modules: ['price', 'summaryDetail', 'defaultKeyStatistics', 'incomeStatementHistory', 'balanceSheetHistory', 'cashflowStatementHistory'] });
-    const quote = await yahooFinance.quote(ticker);
+    // Call the Python serverless function at /api/py-yf
+    const baseUrl = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : 'http://localhost:3000';
 
-    if (!quoteSummary || !quote) {
-      console.log(`[yahoo-finance2] No data returned for ${ticker}`);
+    const url = `${baseUrl}/api/py-yf?ticker=${encodeURIComponent(ticker)}`;
+    console.log(`[Python API] Calling ${url}`);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.log(`[Python API] Error: ${response.status} ${response.statusText}`);
       return null;
     }
 
-    // Extract data
-    const price = quote.regularMarketPrice || 0;
-    const marketCap = quote.marketCap || 0;
-    const eps = quoteSummary.defaultKeyStatistics?.trailingEps || 0;
-    const peRatio = quote.trailingPE || 0;
-    const sharesOutstanding = quoteSummary.defaultKeyStatistics?.sharesOutstanding || 0;
+    const data = await response.json();
 
-    // Extract most recent income statement data
-    const incomeStatements = quoteSummary.incomeStatementHistory?.incomeStatementHistory || [];
-    const latestIncome = incomeStatements[0] || {};
-    const revenue = latestIncome.totalRevenue?.raw || 0;
-    const grossProfit = latestIncome.grossProfit?.raw || 0;
-    const netIncome = latestIncome.netIncome?.raw || 0;
-    const ebitda = latestIncome.ebitda?.raw || 0;
+    if (data && Array.isArray(data.historical_financials) && data.historical_financials.length > 0) {
+      console.log(`[Python API] Successfully fetched data for ${ticker}: ${data.historical_financials.length} historical records`);
+      return data;
+    }
 
-    // Extract balance sheet
-    const balanceSheets = quoteSummary.balanceSheetHistory?.balanceSheetStatements || [];
-    const latestBalance = balanceSheets[0] || {};
-    const totalDebt = latestBalance.totalDebt?.raw || 0;
-    const cash = latestBalance.cash?.raw || 0;
-
-    // Extract cash flow
-    const cashflows = quoteSummary.cashflowStatementHistory?.cashflowStatements || [];
-    const latestCashflow = cashflows[0] || {};
-    const freeCashFlow = latestCashflow.freeCashflow?.raw || 0;
-
-    // Calculate margins
-    const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
-    const ebitdaMarginPct = revenue > 0 ? (ebitda / revenue) * 100 : 0;
-    const fcfMarginPct = revenue > 0 ? (freeCashFlow / revenue) * 100 : 0;
-
-    // Build historical financials array (from income statements)
-    const historicalFinancials = incomeStatements.slice(0, 5).map(stmt => ({
-      date: stmt.endDate?.fmt || '',
-      revenue: stmt.totalRevenue?.raw || 0,
-      grossProfit: stmt.grossProfit?.raw || 0,
-      netIncome: stmt.netIncome?.raw || 0,
-      ebitda: stmt.ebitda?.raw || 0
-    }));
-
-    const result = {
-      company_name: quote.shortName || quote.longName || ticker,
-      fy24_financials: {
-        revenue,
-        gross_margin_pct: grossMarginPct,
-        ebitda,
-        ebitda_margin_pct: ebitdaMarginPct,
-        net_income: netIncome,
-        eps,
-        shares_outstanding: sharesOutstanding,
-        fcf: freeCashFlow,
-        fcf_margin_pct: fcfMarginPct
-      },
-      market_data: {
-        current_price: price,
-        market_cap: marketCap,
-        enterprise_value: marketCap + totalDebt - cash,
-        pe_ratio: peRatio
-      },
-      currency_info: {
-        original_currency: quote.currency || 'USD',
-        converted_to_usd: quote.currency !== 'USD',
-        conversion_rate: 1.0,
-        exchange_rate_source: 'yahoo-finance2'
-      },
-      historical_financials: historicalFinancials,
-      source: 'yahoo-finance2'
-    };
-
-    console.log(`[yahoo-finance2] Successfully fetched data for ${ticker}: ${historicalFinancials.length} historical records`);
-    return result;
+    console.log(`[Python API] No valid data returned for ${ticker}`);
+    return null;
   } catch (e) {
     console.log(`[Error] fetchYFinanceDataDirect error: ${e.message}`);
   }
