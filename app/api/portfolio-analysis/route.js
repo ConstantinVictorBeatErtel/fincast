@@ -20,7 +20,7 @@ export async function POST(request) {
 
     // Fetch historical data for all tickers
     const historicalData = await fetchHistoricalData(tickers);
-    
+
     // Debug: Check data for each ticker
     console.log('Historical data fetched for tickers:', Object.keys(historicalData));
     Object.keys(historicalData).forEach(ticker => {
@@ -28,7 +28,7 @@ export async function POST(request) {
       const dates = Object.keys(data);
       console.log(`${ticker}: ${dates.length} data points, first date: ${dates[0]}, last date: ${dates[dates.length - 1]}`);
     });
-    
+
     if (!historicalData || Object.keys(historicalData).length === 0) {
       return NextResponse.json(
         { error: 'Failed to fetch historical data for the provided tickers' },
@@ -38,15 +38,15 @@ export async function POST(request) {
 
     // Calculate returns
     const returns = calculateReturns(historicalData);
-    
+
     // Calculate correlation matrix
     const correlationData = calculateCorrelationMatrix(returns);
-    
+
     // Get the date range used for fetching data
     const endDate = new Date();
     const startDate = new Date();
     startDate.setFullYear(endDate.getFullYear() - 5); // 5 years of data
-    
+
     // Calculate portfolio beta with fallback
     let betaData;
     try {
@@ -59,7 +59,7 @@ export async function POST(request) {
       betaData = await calculatePortfolioBetaAlternative(returns, weights, startDate, endDate);
       console.log('Fallback beta calculation result:', betaData);
     }
-    
+
     // If only correlation/beta is requested, return early with minimal payload
     if (correlationOnly) {
       const analysisResult = {
@@ -157,39 +157,53 @@ async function fetchHistoricalData(tickers) {
     const startDate = new Date();
     startDate.setFullYear(endDate.getFullYear() - 5); // 5 years of data
 
-    // Fetch each ticker using yahoo-finance2 directly
+    // Fetch each ticker using yahoo-finance2 directly with retry logic
     for (const ticker of tickers) {
-      try {
-        console.log(`Fetching price data for ${ticker} using yahoo-finance2...`);
-        
-        const chart = await yahooFinance.chart(ticker, { 
-          period1: startDate, 
-          period2: endDate, 
-          interval: '1d' 
-        });
-        
-        const quotes = chart?.quotes || [];
-        
-        if (quotes && quotes.length > 0) {
-          const priceData = {};
-          quotes.forEach(q => {
-            const date = new Date(q.date).toISOString().split('T')[0];
-            if (q.close) {
-              priceData[date] = q.close;
-            }
+      let retries = 3;
+      let delay = 1000; // Start with 1 second delay
+
+      while (retries > 0) {
+        try {
+          console.log(`Fetching price data for ${ticker} using yahoo-finance2...`);
+
+          const chart = await yahooFinance.chart(ticker, {
+            period1: startDate,
+            period2: endDate,
+            interval: '1d'
           });
-          historicalData[ticker] = priceData;
-          console.log(`Fetched ${quotes.length} price points for ${ticker}`);
-        } else {
-          console.log(`No price data found for ${ticker}`);
+
+          const quotes = chart?.quotes || [];
+
+          if (quotes && quotes.length > 0) {
+            const priceData = {};
+            quotes.forEach(q => {
+              const date = new Date(q.date).toISOString().split('T')[0];
+              if (q.close) {
+                priceData[date] = q.close;
+              }
+            });
+            historicalData[ticker] = priceData;
+            console.log(`Fetched ${quotes.length} price points for ${ticker}`);
+          } else {
+            console.log(`No price data found for ${ticker}`);
+          }
+          break; // Success, exit retry loop
+
+        } catch (error) {
+          retries--;
+          if (error.message.includes('Too Many Requests') || error.message.includes('429')) {
+            console.log(`Rate limited for ${ticker}, waiting ${delay}ms before retry (${retries} retries left)...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay *= 2; // Exponential backoff
+          } else {
+            console.error(`Error fetching data for ${ticker}:`, error.message);
+            break; // Non-rate-limit error, don't retry
+          }
         }
-        
-        // Small delay between requests to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-      } catch (error) {
-        console.error(`Error fetching data for ${ticker}:`, error.message);
       }
+
+      // Small delay between tickers to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
 
     return historicalData;
@@ -206,14 +220,14 @@ async function fetchHistoricalData(tickers) {
 
 function calculateReturns(historicalData) {
   const allDates = new Set();
-  
+
   // Collect all unique dates
   Object.values(historicalData).forEach(data => {
     Object.keys(data).forEach(date => allDates.add(date));
   });
 
   const sortedDates = Array.from(allDates).sort();
-  
+
   // Create aligned price matrix
   const alignedData = {};
   Object.keys(historicalData).forEach(ticker => {
@@ -268,7 +282,7 @@ function calculateCorrelationMatrix(returns) {
     for (let j = 0; j < tickers.length; j++) {
       const ticker1 = tickers[i];
       const ticker2 = tickers[j];
-      
+
       if (i === j) {
         correlationMatrix[ticker1][ticker2] = 1.0;
       } else {
@@ -280,7 +294,7 @@ function calculateCorrelationMatrix(returns) {
 
   // Calculate average correlations
   tickers.forEach(ticker => {
-    const correlations = Object.values(correlationMatrix[ticker]).filter((val, idx) => 
+    const correlations = Object.values(correlationMatrix[ticker]).filter((val, idx) =>
       Object.keys(correlationMatrix[ticker])[idx] !== ticker
     );
     averageCorrelations[ticker] = correlations.reduce((sum, corr) => sum + corr, 0) / correlations.length;
@@ -329,21 +343,42 @@ function calculateCorrelation(returns1, returns2) {
 async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
   try {
     console.log('Calculating portfolio beta using yahoo-finance2 directly...');
-    
-    // Fetch SPY data using yahoo-finance2 directly (no API calls)
-    const chart = await yahooFinance.chart('SPY', { 
-      period1: startDate, 
-      period2: endDate, 
-      interval: '1d' 
-    });
-    
+
+    // Fetch SPY data using yahoo-finance2 directly with retry logic
+    let retries = 3;
+    let delay = 1000;
+    let chart = null;
+
+    while (retries > 0 && !chart) {
+      try {
+        chart = await yahooFinance.chart('SPY', {
+          period1: startDate,
+          period2: endDate,
+          interval: '1d'
+        });
+      } catch (error) {
+        retries--;
+        if (error.message.includes('Too Many Requests') || error.message.includes('429')) {
+          console.log(`Rate limited for SPY, waiting ${delay}ms before retry (${retries} retries left)...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2;
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    if (!chart) {
+      throw new Error('Failed to fetch SPY data after retries');
+    }
+
     const spyQuotes = chart?.quotes || [];
     console.log(`Fetched ${spyQuotes.length} SPY data points`);
-    
+
     if (spyQuotes.length === 0) {
       throw new Error('No SPY data available');
     }
-    
+
     // Calculate SPY returns
     const spyReturns = [];
     for (let i = 1; i < spyQuotes.length; i++) {
@@ -353,15 +388,15 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
         spyReturns.push((currPrice - prevPrice) / prevPrice);
       }
     }
-    
+
     const marketVariance = calculateVariance(spyReturns);
-    
+
     console.log(`SPY returns sample:`, spyReturns.slice(0, 5));
     console.log(`SPY variance: ${marketVariance}`);
 
     const tickers = Object.keys(returns).filter(key => key !== 'index');
     console.log(`Processing tickers for beta: ${tickers.join(', ')}`);
-    
+
     const stockBetas = {};
     const weightedBetas = {};
 
@@ -372,14 +407,14 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
       const minLength = Math.min(stockReturns.length, spyReturns.length);
       const alignedStockReturns = stockReturns.slice(0, minLength);
       const alignedSpyReturns = spyReturns.slice(0, minLength);
-      
+
       console.log(`${ticker}: ${alignedStockReturns.length} aligned data points`);
-      
+
       const covariance = calculateCovariance(alignedStockReturns, alignedSpyReturns);
       const beta = marketVariance === 0 ? 0 : covariance / marketVariance;
-      
+
       console.log(`${ticker}: beta=${beta.toFixed(4)}`);
-      
+
       stockBetas[ticker] = beta;
       weightedBetas[ticker] = beta * weights[index];
     });
@@ -417,36 +452,36 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
 
 function calculateVariance(returns) {
   if (returns.length === 0) return 0;
-  
+
   const mean = returns.reduce((sum, val) => sum + val, 0) / returns.length;
   const variance = returns.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / returns.length;
-  
+
   console.log(`Variance calculation: mean=${mean.toFixed(6)}, variance=${variance.toFixed(6)}, length=${returns.length}`);
-  
+
   return variance;
 }
 
 function calculateCovariance(returns1, returns2) {
   if (returns1.length !== returns2.length || returns1.length === 0) return 0;
-  
+
   const mean1 = returns1.reduce((sum, val) => sum + val, 0) / returns1.length;
   const mean2 = returns2.reduce((sum, val) => sum + val, 0) / returns2.length;
-  
-  const covariance = returns1.reduce((sum, val, i) => 
+
+  const covariance = returns1.reduce((sum, val, i) =>
     sum + (val - mean1) * (returns2[i] - mean2), 0) / returns1.length;
-  
+
   console.log(`Covariance calculation: mean1=${mean1.toFixed(6)}, mean2=${mean2.toFixed(6)}, covariance=${covariance.toFixed(6)}, length=${returns1.length}`);
-  
+
   return covariance;
 }
 
 function calculatePortfolioStatistics(returns, weights) {
   const tickers = Object.keys(returns).filter(key => key !== 'index');
-  
+
   // Risk-free rate (10-year Treasury yield, approximately 4.5% annually)
   const riskFreeRate = 0.045; // 4.5% annually
   const dailyRiskFreeRate = riskFreeRate / 252; // Daily risk-free rate
-  
+
   // Calculate individual stock statistics
   const stockStats = {};
   tickers.forEach(ticker => {
@@ -454,11 +489,11 @@ function calculatePortfolioStatistics(returns, weights) {
     const meanReturn = stockReturns.reduce((sum, val) => sum + val, 0) / stockReturns.length;
     const variance = calculateVariance(stockReturns);
     const volatility = Math.sqrt(variance);
-    
+
     const annualizedReturn = meanReturn * 252;
     const annualizedVolatility = volatility * Math.sqrt(252);
     const excessReturn = annualizedReturn - riskFreeRate;
-    
+
     stockStats[ticker] = {
       meanReturn: annualizedReturn,
       volatility: annualizedVolatility,
@@ -467,19 +502,19 @@ function calculatePortfolioStatistics(returns, weights) {
   });
 
   // Calculate portfolio statistics
-  const portfolioReturn = tickers.reduce((sum, ticker, index) => 
+  const portfolioReturn = tickers.reduce((sum, ticker, index) =>
     sum + stockStats[ticker].meanReturn * weights[index], 0);
 
   // Calculate portfolio volatility using proper portfolio variance formula
   // Portfolio variance = sum of (wi^2 * var_i) + sum of (wi * wj * cov_ij) for all i != j
   let portfolioVariance = 0;
-  
+
   // Add individual stock variances
   tickers.forEach((ticker, i) => {
     const dailyVariance = Math.pow(stockStats[ticker].volatility / Math.sqrt(252), 2);
     portfolioVariance += Math.pow(weights[i], 2) * dailyVariance;
   });
-  
+
   // Add covariance terms (simplified - using correlation matrix if available)
   for (let i = 0; i < tickers.length; i++) {
     for (let j = i + 1; j < tickers.length; j++) {
@@ -487,12 +522,12 @@ function calculatePortfolioStatistics(returns, weights) {
       const ticker2 = tickers[j];
       const returns1 = returns[ticker1];
       const returns2 = returns[ticker2];
-      
+
       // Calculate correlation
       const correlation = calculateCorrelation(returns1, returns2);
       const vol1 = stockStats[ticker1].volatility / Math.sqrt(252);
       const vol2 = stockStats[ticker2].volatility / Math.sqrt(252);
-      
+
       portfolioVariance += 2 * weights[i] * weights[j] * correlation * vol1 * vol2;
     }
   }
@@ -626,9 +661,9 @@ async function calculatePortfolioBetaAlternative(returns, weights, startDate, en
   try {
     console.log('Using alternative beta calculation method...');
     console.log('Start date:', startDate, 'End date:', endDate);
-    
+
     // Fetch SPY data using our yfinance-data endpoint
-    const baseUrl = process.env.VERCEL_URL 
+    const baseUrl = process.env.VERCEL_URL
       ? `https://${process.env.VERCEL_URL}`
       : 'http://localhost:3000';
 
@@ -645,7 +680,7 @@ async function calculatePortfolioBetaAlternative(returns, weights, startDate, en
 
     const spyDataResult = await spyResponse.json();
     const spyData = spyDataResult.historicalData || [];
-    
+
     console.log('SPY data fetched, length:', spyData?.length);
 
     if (!spyData || spyData.length === 0) {
@@ -671,24 +706,24 @@ async function calculatePortfolioBetaAlternative(returns, weights, startDate, en
     // Calculate individual stock betas using the alternative method
     const marketVariance = calculateVariance(spyReturns);
     console.log(`Alternative market variance: ${marketVariance}`);
-    
+
     tickers.forEach((ticker, index) => {
       const stockReturns = returns[ticker];
       console.log(`${ticker} stock returns length: ${stockReturns.length}`);
       console.log(`SPY returns length: ${spyReturns.length}`);
-      
+
       // Use the shorter length to avoid index issues
       const minLength = Math.min(stockReturns.length, spyReturns.length);
       const alignedStockReturns = stockReturns.slice(0, minLength);
       const alignedSpyReturns = spyReturns.slice(0, minLength);
-      
+
       console.log(`Aligned lengths - stock: ${alignedStockReturns.length}, SPY: ${alignedSpyReturns.length}`);
-      
+
       const covariance = calculateCovariance(alignedStockReturns, alignedSpyReturns);
       const beta = marketVariance === 0 ? 0 : covariance / marketVariance;
-      
+
       console.log(`${ticker} (alt): covariance=${covariance.toFixed(6)}, beta=${beta.toFixed(4)}, marketVariance=${marketVariance.toFixed(6)}`);
-      
+
       stockBetas[ticker] = beta;
       weightedBetas[ticker] = beta * weights[index];
     });

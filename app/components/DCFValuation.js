@@ -1109,9 +1109,9 @@ export default function DCFValuation() {
                                       {/* Revenue Growth Row */}
                                       <tr className="hover:bg-gray-50">
                                         <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Revenue Growth (%)</td>
-                                        {filteredProjections.map((row) => (
+                                        {filteredProjections.map((row, index) => (
                                           <td key={row.yearLabel} className="px-3 py-2 text-center text-green-700 border-r">
-                                            {row.revenueGrowth?.toFixed(1)}
+                                            {index === 0 ? '-' : row.revenueGrowth?.toFixed(1)}
                                           </td>
                                         ))}
                                       </tr>
