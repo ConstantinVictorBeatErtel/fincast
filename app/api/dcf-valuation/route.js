@@ -375,13 +375,13 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
   // On Vercel: use HTTP to Python serverless function
   // Locally: spawn Python script directly
   if (isVercel) {
-    // Try Python API via HTTP
+    // Try Python API via HTTP with timeout to leave time for LLM
+    const startTime = Date.now();
     try {
       // PY_YF_URL can be set to production URL to avoid preview deployment 401s
-      // e.g., PY_YF_URL=https://fincast.vercel.app/api/py-yf
       const pyYfUrl = process.env.PY_YF_URL;
       const baseUrl = pyYfUrl
-        ? pyYfUrl.replace(/\?.*$/, '') // Remove any query string
+        ? pyYfUrl.replace(/\?.*$/, '')
         : `https://${process.env.VERCEL_URL}/api/py-yf`;
 
       const url = `${baseUrl}?ticker=${encodeURIComponent(ticker)}`;
@@ -396,20 +396,31 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
         headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
       }
 
-      const response = await fetch(url, { method: 'GET', headers });
+      // 8 second timeout - leave 50+ seconds for LLM within Vercel 60s limit
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
 
+      const response = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      const elapsed = Date.now() - startTime;
       if (response.ok) {
         const data = await response.json();
         if (data && Array.isArray(data.historical_financials) && data.historical_financials.length > 0) {
-          console.log(`[Python API] Success: ${data.historical_financials.length} historical records`);
+          console.log(`[Python API] Success in ${elapsed}ms: ${data.historical_financials.length} historical records`);
           return data;
         }
-        console.log(`[Python API] No valid data returned`);
+        console.log(`[Python API] No valid data in ${elapsed}ms`);
       } else {
-        console.log(`[Python API] Error: ${response.status} ${response.statusText}`);
+        console.log(`[Python API] Error in ${elapsed}ms: ${response.status} ${response.statusText}`);
       }
     } catch (e) {
-      console.log(`[Python API] Error: ${e.message}`);
+      const elapsed = Date.now() - startTime;
+      if (e.name === 'AbortError') {
+        console.log(`[Python API] Timeout after ${elapsed}ms, skipping to fallback`);
+      } else {
+        console.log(`[Python API] Error in ${elapsed}ms: ${e.message}`);
+      }
     }
   } else {
     // Local development: spawn Python script directly
