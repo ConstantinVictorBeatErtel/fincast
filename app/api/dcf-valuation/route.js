@@ -345,11 +345,44 @@ export async function POST(request) {
 async function fetchLatestWithSonar(ticker) {
   try {
     const messages = [
-      { role: 'system', content: 'Return ONLY JSON. Be concise. Use official IR and SEC sources.' },
-      { role: 'user', content: `Find the most recently reported quarter for ${ticker} (as filed or disclosed by the company) and provide financials and qualitative insights for that same quarter only. Do NOT assume a specific quarter label. Return EXACT JSON with: as_of_date, latest_quarter, latest_quarter_revenue, latest_quarter_gross_margin_pct, latest_quarter_ebitda_margin_pct, latest_quarter_net_income, guidance_summary, mgmt_summary, recent_developments, links { ir_url, sec_url }.` }
+      { role: 'system', content: 'Return ONLY JSON. Be thorough on growth catalysts and non-linear drivers. Use official IR, SEC, press releases, and analyst reports.' },
+      {
+        role: 'user', content: `Find comprehensive information about ${ticker} for financial modeling. Focus especially on GROWTH CATALYSTS and NON-LINEAR DRIVERS that could significantly impact future performance.
+
+Return EXACT JSON with:
+{
+  "as_of_date": "date of latest info",
+  "latest_quarter": "Q label",
+  "latest_quarter_revenue": number in $M,
+  "latest_quarter_gross_margin_pct": number,
+  "latest_quarter_ebitda_margin_pct": number,
+  "latest_quarter_net_income": number in $M,
+  "guidance_summary": "company's official forward guidance including revenue/earnings targets",
+  "mgmt_summary": "key management commentary on strategy and outlook",
+  "recent_developments": "significant recent news, announcements, partnerships",
+  
+  "growth_catalysts": {
+    "capacity_expansion": "details on new facilities, data centers, mining capacity, production lines, etc.",
+    "new_contracts": "major contracts signed, customer wins, partnerships deals with specific $$ values if available",
+    "new_products_services": "new product launches, service offerings, market entries",
+    "strategic_initiatives": "M&A activity, joint ventures, pivots, new business segments",
+    "industry_tailwinds": "sector-specific growth drivers (AI demand, infrastructure spending, regulatory changes)",
+    "backlog_pipeline": "order backlog, contract pipeline, signed but not yet recognized revenue"
+  },
+  
+  "analyst_expectations": {
+    "consensus_revenue_growth": "expected YoY revenue growth rate",
+    "consensus_eps": "expected EPS",
+    "price_targets": "analyst price target range",
+    "key_bull_thesis": "main reasons analysts are bullish",
+    "key_bear_thesis": "main risks or concerns"
+  },
+  
+  "links": { "ir_url": "", "sec_url": "" }
+}` }
     ];
 
-    const data = await makeOpenRouterRequest({ model: 'perplexity/sonar', messages, temperature: 0.3, max_tokens: 1000 });
+    const data = await makeOpenRouterRequest({ model: 'perplexity/sonar', messages, temperature: 0.3, max_tokens: 2000 });
     const text = data?.choices?.[0]?.message?.content || '';
     let sonarData = {};
     try {
@@ -358,12 +391,37 @@ async function fetchLatestWithSonar(ticker) {
       const m = text.match(/\{[\s\S]*\}/);
       if (m) sonarData = JSON.parse(m[0]);
     }
-    const full = `Latest quarterly data for ${ticker}:
-- Management: ${sonarData.mgmt_summary || ''}
-- Guidance: ${sonarData.guidance_summary || ''}
-- Recent Developments: ${sonarData.recent_developments || ''}`;
+
+    // Build comprehensive full response for LLM
+    const gc = sonarData.growth_catalysts || {};
+    const ae = sonarData.analyst_expectations || {};
+
+    const full = `=== LATEST DATA FOR ${ticker} ===
+AS OF: ${sonarData.as_of_date || 'Recent'}
+
+MANAGEMENT COMMENTARY & GUIDANCE:
+- Guidance: ${sonarData.guidance_summary || 'No specific guidance found'}
+- Management: ${sonarData.mgmt_summary || 'No management commentary found'}
+- Recent Developments: ${sonarData.recent_developments || 'No recent developments found'}
+
+🚀 GROWTH CATALYSTS & NON-LINEAR DRIVERS (CRITICAL FOR PROJECTIONS):
+- Capacity Expansion: ${gc.capacity_expansion || 'None identified'}
+- New Contracts/Customers: ${gc.new_contracts || 'None identified'}  
+- New Products/Services: ${gc.new_products_services || 'None identified'}
+- Strategic Initiatives: ${gc.strategic_initiatives || 'None identified'}
+- Industry Tailwinds: ${gc.industry_tailwinds || 'None identified'}
+- Backlog/Pipeline: ${gc.backlog_pipeline || 'None identified'}
+
+📊 ANALYST EXPECTATIONS:
+- Consensus Revenue Growth: ${ae.consensus_revenue_growth || 'Not available'}
+- Consensus EPS: ${ae.consensus_eps || 'Not available'}
+- Price Targets: ${ae.price_targets || 'Not available'}
+- Bull Thesis: ${ae.key_bull_thesis || 'Not available'}
+- Bear Risks: ${ae.key_bear_thesis || 'Not available'}`;
+
     return { ...sonarData, full_response: full };
   } catch (e) {
+    console.log(`[Sonar] Error: ${e.message}`);
     return null;
   }
 }
@@ -603,13 +661,16 @@ The company you will be analyzing is: ${(companyName)}
 ${userFeedback && userFeedback.trim().length ? `\nUSER FEEDBACK: ${userFeedback.trim()}\n\nPlease incorporate this feedback into your analysis and adjust the assumptions/projections accordingly.\n` : ''}
 
 To complete this task, follow these steps:
-IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
+IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available.
+
+⚠️ CRITICAL: Pay special attention to the GROWTH CATALYSTS section in the Sonar data below. These non-linear drivers (capacity expansions, new contracts, product launches, industry tailwinds) should be EXPLICITLY incorporated into your projections. Do not simply extrapolate historical trends - model the impact of specific catalysts on revenue and margins.
 
 IMPORTANT: The latest reported fiscal year is FY${latestFY}. Use FY${latestFY} actuals as your starting point and project forward from ${forecastStartYear} to ${forecastEndYear}.
 DO NOT include FY${latestFY} in the forecast table - it is already reported. Start projections from ${forecastStartYear}.
 
-1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
-2. The yfinance data below (which provides the most current financial metrics)
+KEY DATA SOURCES:
+1. The full Sonar response below (contains growth catalysts, capacity expansion details, new contracts, analyst expectations - USE THESE)
+2. The yfinance data below (provides the most current financial metrics)
 3. Your financial analysis expertise to interpret trends and project future performance
 
 1. FY${latestFY} ACTUAL FINANCIALS (from yfinance - latest reported year):
@@ -708,13 +769,16 @@ ${multipleTypeInstruction}
 ${userFeedback && userFeedback.trim().length ? `\nUSER FEEDBACK: ${userFeedback.trim()}\n\nPlease incorporate this feedback into your analysis and adjust the assumptions/projections accordingly.\n` : ''}
 
 To complete this task, follow these steps:
-IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
+IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available.
+
+⚠️ CRITICAL: Pay special attention to the GROWTH CATALYSTS section in the Sonar data below. These non-linear drivers (capacity expansions, new contracts, product launches, industry tailwinds) should be EXPLICITLY incorporated into your projections. Do not simply extrapolate historical trends - model the impact of specific catalysts on revenue and margins.
 
 IMPORTANT: The latest reported fiscal year is FY${latestFY}. Use FY${latestFY} actuals as your starting point and project forward from ${forecastStartYear} to ${forecastEndYear}.
 DO NOT include FY${latestFY} in the forecast table - it is already reported. Start projections from ${forecastStartYear}.
 
-1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
-2. The yfinance data below (which provides the most current financial metrics)
+KEY DATA SOURCES:
+1. The full Sonar response below (contains growth catalysts, capacity expansion details, new contracts, analyst expectations - USE THESE)
+2. The yfinance data below (provides the most current financial metrics)
 3. Your financial analysis expertise to interpret trends and project future performance
 
 1. FY${latestFY} ACTUAL FINANCIALS (from yfinance - latest reported year):
