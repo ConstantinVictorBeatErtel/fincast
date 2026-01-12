@@ -68,7 +68,7 @@ export default function DCFValuation() {
     try {
       const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}&llm=1`);
       let data;
-      
+
       try {
         data = await response.json();
       } catch (jsonError) {
@@ -234,7 +234,7 @@ export default function DCFValuation() {
       // Set the raw data directly
       setValuation(data);
       setRetrying(false);
-      
+
     } catch (err) {
       console.error('Error in handleSubmit:', err);
       setError(err.message);
@@ -427,7 +427,7 @@ export default function DCFValuation() {
     }
 
     const workbook = XLSX.utils.book_new();
-    
+
     // Create Summary sheet
     // Compute implied fair share price for exit multiple using backend upside
     const impliedFairSharePrice = (valuation.method === 'exit-multiple' && typeof valuation.currentSharePrice === 'number' && typeof valuation.upside === 'number')
@@ -535,28 +535,28 @@ export default function DCFValuation() {
 
     // Create Analysis sheet
     const analysisData = [];
-    
+
     if (valuation.sections?.financialAnalysis) {
       // Truncate financial analysis to first few lines
       const truncatedAnalysis = valuation.sections.financialAnalysis
         .split('\n')
         .slice(0, 10) // Take first 10 lines
         .join('\n');
-      
+
       analysisData.push(
         ['Financial Analysis'],
         [truncatedAnalysis],
         []
       );
     }
-    
+
     if (valuation.sections?.assumptions) {
       // Truncate assumptions to first few lines
       const truncatedAssumptions = valuation.sections.assumptions
         .split('\n')
         .slice(0, 8) // Take first 8 lines
         .join('\n');
-      
+
       analysisData.push(
         ['Assumptions and Justifications'],
         [truncatedAssumptions]
@@ -643,7 +643,7 @@ export default function DCFValuation() {
     try {
       const value = path.split('.').reduce((acc, part) => acc?.[part], obj);
       if (value === undefined || value === null) return defaultValue;
-      
+
       // Convert numeric strings to numbers
       if (typeof value === 'string' && !isNaN(parseFloat(value))) {
         return parseFloat(value);
@@ -716,6 +716,27 @@ export default function DCFValuation() {
     return num.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   };
 
+  // Helper: convert year to FY format (2025 -> FY25, "2025" -> FY25)
+  const formatYearAsFY = (year) => {
+    const s = String(year || '').trim();
+    // If already "FY" format, return as-is
+    if (s.toUpperCase().startsWith('FY')) return s;
+    // Extract 4-digit year and convert to FY format
+    const m = s.match(/(20\d{2})/);
+    if (m) return `FY${m[1].slice(2)}`;
+    return s;
+  };
+
+  // Helper: get year number for comparison (2025 from "2025" or "FY25")
+  const getYearNumber = (year) => {
+    const s = String(year || '').trim();
+    if (s.toUpperCase().startsWith('FY')) {
+      const num = parseInt(s.slice(2), 10);
+      return num < 100 ? 2000 + num : num;
+    }
+    const m = s.match(/(20\d{2})/);
+    return m ? parseInt(m[1], 10) : 0;
+  };
   // Helper: sort historical by FY label or year ascending
   const getSortedHistorical = (arr) => {
     if (!Array.isArray(arr)) return [];
@@ -731,28 +752,28 @@ export default function DCFValuation() {
 
   // Helper function to determine if we should show EV-based display
   const shouldShowEVDisplay = () => {
-    return method === 'exit-multiple' && 
-           valuation?.exitMultipleType && 
-           (valuation.exitMultipleType === 'EV/EBITDA' || 
-            valuation.exitMultipleType === 'EV/FCF');
+    return method === 'exit-multiple' &&
+      valuation?.exitMultipleType &&
+      (valuation.exitMultipleType === 'EV/EBITDA' ||
+        valuation.exitMultipleType === 'EV/FCF');
   };
 
   // Helper to filter out unwanted sections from latestDevelopments
   const filterLatestDevelopments = (text) => {
     if (!text || typeof text !== 'string') return '';
-    
+
     // Remove the unwanted sections completely
     let filtered = text;
-    
+
     // Remove Historical Analysis & Projections section
     filtered = filtered.replace(/Historical\s+Analysis\s*&\s*Projections[\s\S]*?(?=\n\n|\n\*|\n$)/gi, '');
-    
+
     // Remove Assumptions and Justifications section  
     filtered = filtered.replace(/Assumptions\s+and\s+Justifications[\s\S]*?(?=\n\n|\n\*|\n$)/gi, '');
-    
+
     // Clean up any double newlines that might result
     filtered = filtered.replace(/\n\n\n+/g, '\n\n');
-    
+
     return filtered.trim();
   };
 
@@ -838,8 +859,8 @@ export default function DCFValuation() {
                   <p className="text-2xl font-bold">
                     {valuation.method === 'exit-multiple'
                       ? (typeof valuation.currentSharePrice === 'number' && typeof valuation.upside === 'number'
-                          ? `$${(valuation.currentSharePrice * (1 + (valuation.upside / 100))).toFixed(2)} per share`
-                          : 'N/A')
+                        ? `$${(valuation.currentSharePrice * (1 + (valuation.upside / 100))).toFixed(2)} per share`
+                        : 'N/A')
                       : `$${valuation.fairValue?.toLocaleString()} million`
                     }
                   </p>
@@ -883,7 +904,7 @@ export default function DCFValuation() {
                   </>
                 )}
               </div>
-              
+
               {/* Add CAGR display */}
               <div className="mt-6 pt-6 border-t">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -906,7 +927,7 @@ export default function DCFValuation() {
                     </p>
                   </div>
                 </div>
-                
+
                 {/* Currency conversion info */}
                 {valuation.currencyInfo && valuation.currencyInfo.converted_to_usd && (
                   <div className="mt-4 pt-4 border-t border-gray-200">
@@ -931,7 +952,7 @@ export default function DCFValuation() {
               <TabsTrigger value="forecast">Forecast</TabsTrigger>
               <TabsTrigger value="analysis">Financial Analysis</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="forecast">
               <Card>
                 <CardHeader>
@@ -939,243 +960,261 @@ export default function DCFValuation() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-6">
-                    {(Array.isArray(valuation.projections) && valuation.projections.length > 0) && (
-                      <div>
-                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Financial Projections</h3>
-                        <div className="bg-white border border-gray-200 rounded-lg p-6">
-                          <div className="space-y-8">
-                            {/* Revenue and Growth Chart */}
-                            <div>
-                              <h4 className="text-md font-semibold mb-3 text-gray-700">Revenue & Growth</h4>
-                              <ResponsiveContainer width="100%" height={300}>
-                                <ComposedChart data={valuation.projections}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                                  <XAxis dataKey="year" stroke="#6b7280" tickFormatter={(v) => String(v)} />
-                                  <YAxis yAxisId="left" stroke="#3b82f6" />
-                                  <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
-                                  <Tooltip 
-                                    formatter={(value, name) => [
-                                      (typeof name === 'string' && name.toLowerCase().includes('growth')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
-                                      name
-                                    ]}
-                                  />
-                                  <Legend />
-                                  <Bar yAxisId="left" dataKey="revenue" fill="#3b82f6" name="Revenue ($M)" />
-                                  <Line yAxisId="right" type="monotone" dataKey="revenueGrowth" stroke="#10b981" strokeWidth={2} name="Revenue Growth (%)" />
-                                </ComposedChart>
-                              </ResponsiveContainer>
-                            </div>
+                    {(Array.isArray(valuation.projections) && valuation.projections.length > 0) && (() => {
+                      // Get the latest historical year to filter projections to only future years
+                      const historicalYears = (valuation.historicalFinancials || [])
+                        .map(h => getYearNumber(h.year))
+                        .filter(y => y > 0);
+                      const latestHistoricalYear = historicalYears.length > 0 ? Math.max(...historicalYears) : 2024;
 
-                            {/* Margins Chart */}
-                            <div>
-                              <h4 className="text-md font-semibold mb-3 text-gray-700">Margins (%)</h4>
-                              <ResponsiveContainer width="100%" height={300}>
-                                <LineChart data={valuation.projections}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                                  <XAxis dataKey="year" stroke="#6b7280" />
-                                  <YAxis stroke="#6b7280" />
-                                  <Tooltip formatter={(value) => [`${formatOneDecimal(value)}%`, '']} />
-                                  <Legend />
-                                  <Line type="monotone" dataKey="grossMargin" stroke="#8b5cf6" strokeWidth={2} name="Gross Margin" />
-                                  <Line type="monotone" dataKey="ebitdaMargin" stroke="#f59e0b" strokeWidth={2} name="EBITDA Margin" />
-                                  <Line type="monotone" dataKey="fcfMargin" stroke="#ef4444" strokeWidth={2} name="FCF Margin" />
-                                </LineChart>
-                              </ResponsiveContainer>
-                            </div>
+                      // Filter projections to only show years AFTER the latest historical year
+                      const filteredProjections = valuation.projections
+                        .filter(p => getYearNumber(p.year) > latestHistoricalYear)
+                        .map(p => ({
+                          ...p,
+                          yearLabel: formatYearAsFY(p.year) // Add FY formatted label
+                        }));
 
-                            {/* Profitability Chart */}
-                            <div>
-                              <h4 className="text-md font-semibold mb-3 text-gray-700">Profitability</h4>
-                              <ResponsiveContainer width="100%" height={300}>
-                                <ComposedChart data={valuation.projections}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                                  <XAxis dataKey="year" stroke="#6b7280" />
-                                  <YAxis yAxisId="left" stroke="#3b82f6" />
-                                  <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
-                                  <Tooltip 
-                                    formatter={(value, name) => [
-                                      (typeof name === 'string' && name.toLowerCase().includes('margin')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
-                                      name
-                                    ]}
-                                  />
-                                  <Legend />
-                                  <Bar yAxisId="left" dataKey="netIncome" fill="#3b82f6" name="Net Income ($M)" />
-                                  <Line yAxisId="right" type="monotone" dataKey="netIncomeMargin" stroke="#10b981" strokeWidth={2} name="Net Income Margin (%)" />
-                                </ComposedChart>
-                              </ResponsiveContainer>
-                            </div>
+                      if (filteredProjections.length === 0) return null;
 
-                            {/* Cash Flow Chart */}
-                            <div>
-                              <h4 className="text-md font-semibold mb-3 text-gray-700">Cash Flow</h4>
-                              <ResponsiveContainer width="100%" height={300}>
-                                <ComposedChart data={valuation.projections}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                                  <XAxis dataKey="year" stroke="#6b7280" />
-                                  <YAxis yAxisId="left" stroke="#3b82f6" />
-                                  <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
-                                  <Tooltip 
-                                    formatter={(value, name) => [
-                                      (typeof name === 'string' && name.toLowerCase().includes('margin')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
-                                      name
-                                    ]}
-                                  />
-                                  <Legend />
-                                  <Bar yAxisId="left" dataKey="fcf" fill="#3b82f6" name="FCF ($M)" />
-                                  <Line yAxisId="right" type="monotone" dataKey="fcfMargin" stroke="#10b981" strokeWidth={2} name="FCF Margin (%)" />
-                                </ComposedChart>
-                              </ResponsiveContainer>
-                            </div>
+                      return (
+                        <div>
+                          <h3 className="text-lg font-semibold mb-4 text-gray-800">Financial Projections ({formatYearAsFY(filteredProjections[0]?.year)}-{formatYearAsFY(filteredProjections[filteredProjections.length - 1]?.year)})</h3>
+                          <div className="bg-white border border-gray-200 rounded-lg p-6">
+                            <div className="space-y-8">
+                              {/* Revenue and Growth Chart */}
+                              <div>
+                                <h4 className="text-md font-semibold mb-3 text-gray-700">Revenue & Growth</h4>
+                                <ResponsiveContainer width="100%" height={300}>
+                                  <ComposedChart data={filteredProjections}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                    <XAxis dataKey="yearLabel" stroke="#6b7280" />
+                                    <YAxis yAxisId="left" stroke="#3b82f6" />
+                                    <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
+                                    <Tooltip
+                                      formatter={(value, name) => [
+                                        (typeof name === 'string' && name.toLowerCase().includes('growth')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
+                                        name
+                                      ]}
+                                    />
+                                    <Legend />
+                                    <Bar yAxisId="left" dataKey="revenue" fill="#3b82f6" name="Revenue ($M)" />
+                                    <Line yAxisId="right" type="monotone" dataKey="revenueGrowth" stroke="#10b981" strokeWidth={2} name="Revenue Growth (%)" />
+                                  </ComposedChart>
+                                </ResponsiveContainer>
+                              </div>
 
-                            {/* EPS Chart */}
-                            <div>
-                              <h4 className="text-md font-semibold mb-3 text-gray-700">EPS</h4>
-                              <ResponsiveContainer width="100%" height={300}>
-                                <LineChart data={valuation.projections}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                                  <XAxis dataKey="year" stroke="#6b7280" />
-                                  <YAxis stroke="#6b7280" />
-                                  <Tooltip formatter={(value) => [`$${formatOneDecimal(value)}`, 'EPS']} />
-                                  <Legend />
-                                  <Line type="monotone" dataKey="eps" stroke="#ec4899" strokeWidth={2} name="EPS ($)" />
-                                </LineChart>
-                              </ResponsiveContainer>
-                            </div>
+                              {/* Margins Chart */}
+                              <div>
+                                <h4 className="text-md font-semibold mb-3 text-gray-700">Margins (%)</h4>
+                                <ResponsiveContainer width="100%" height={300}>
+                                  <LineChart data={filteredProjections}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                    <XAxis dataKey="yearLabel" stroke="#6b7280" />
+                                    <YAxis stroke="#6b7280" />
+                                    <Tooltip formatter={(value) => [`${formatOneDecimal(value)}%`, '']} />
+                                    <Legend />
+                                    <Line type="monotone" dataKey="grossMargin" stroke="#8b5cf6" strokeWidth={2} name="Gross Margin" />
+                                    <Line type="monotone" dataKey="ebitdaMargin" stroke="#f59e0b" strokeWidth={2} name="EBITDA Margin" />
+                                    <Line type="monotone" dataKey="fcfMargin" stroke="#ef4444" strokeWidth={2} name="FCF Margin" />
+                                  </LineChart>
+                                </ResponsiveContainer>
+                              </div>
 
-                            {/* Summary Table for Reference */}
-                            <div className="mt-6">
-                              <h4 className="text-md font-semibold mb-3 text-gray-700">Summary Table</h4>
-                              <div className="overflow-x-auto">
-                                <table className="w-full text-sm border border-gray-200 rounded-lg">
-                                  <thead className="bg-gray-50">
-                                    <tr>
-                                      <th className="px-3 py-2 text-left font-medium text-gray-700 border-b border-r">Metric</th>
-                                      {valuation.projections?.map((row) => (
-                                        <th key={row.year} className="px-3 py-2 text-center font-medium text-gray-700 border-b border-r">
-                                          {row.year}
-                                        </th>
-                                      ))}
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-gray-200">
-                                    {/* Revenue Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Revenue ($M)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
-                                          {row.revenue?.toFixed(1)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                    
-                                    {/* Revenue Growth Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Revenue Growth (%)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-green-700 border-r">
-                                          {row.revenueGrowth?.toFixed(1)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                    
-                                    {/* Gross Profit Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Gross Profit ($M)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
-                                          {row.grossProfit?.toFixed(1)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                    
-                                    {/* Gross Margin Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Gross Margin (%)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-green-700 border-r">
-                                          {row.grossMargin?.toFixed(1)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                    
-                                    {/* EBITDA Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EBITDA ($M)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
-                                          {row.ebitda?.toFixed(1)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                    
-                                    {/* EBITDA Margin Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">EBITDA Margin (%)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-green-700 border-r">
-                                          {row.ebitdaMargin?.toFixed(1)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                    
-                                    {/* Net Income Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Net Income ($M)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
-                                          {row.netIncome?.toFixed(1)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                    
-                                    {/* Net Income Margin Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Net Income Margin (%)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-green-700 border-r">
-                                          {row.netIncomeMargin?.toFixed(1)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                    
-                                    {/* EPS Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EPS ($)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
-                                          ${row.eps?.toFixed(2)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                    
-                                    {/* FCF Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">FCF ($M)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-gray-900 border-r">
-                                          {row.fcf?.toFixed(1)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                    
-                                    {/* FCF Margin Row */}
-                                    <tr className="hover:bg-gray-50">
-                                      <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">FCF Margin (%)</td>
-                                      {valuation.projections?.map((row) => (
-                                        <td key={row.year} className="px-3 py-2 text-center text-green-700 border-r">
-                                          {row.fcfMargin?.toFixed(1)}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                  </tbody>
-                                </table>
+                              {/* Profitability Chart */}
+                              <div>
+                                <h4 className="text-md font-semibold mb-3 text-gray-700">Profitability</h4>
+                                <ResponsiveContainer width="100%" height={300}>
+                                  <ComposedChart data={filteredProjections}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                    <XAxis dataKey="yearLabel" stroke="#6b7280" />
+                                    <YAxis yAxisId="left" stroke="#3b82f6" />
+                                    <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
+                                    <Tooltip
+                                      formatter={(value, name) => [
+                                        (typeof name === 'string' && name.toLowerCase().includes('margin')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
+                                        name
+                                      ]}
+                                    />
+                                    <Legend />
+                                    <Bar yAxisId="left" dataKey="netIncome" fill="#3b82f6" name="Net Income ($M)" />
+                                    <Line yAxisId="right" type="monotone" dataKey="netIncomeMargin" stroke="#10b981" strokeWidth={2} name="Net Income Margin (%)" />
+                                  </ComposedChart>
+                                </ResponsiveContainer>
+                              </div>
+
+                              {/* Cash Flow Chart */}
+                              <div>
+                                <h4 className="text-md font-semibold mb-3 text-gray-700">Cash Flow</h4>
+                                <ResponsiveContainer width="100%" height={300}>
+                                  <ComposedChart data={filteredProjections}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                    <XAxis dataKey="yearLabel" stroke="#6b7280" />
+                                    <YAxis yAxisId="left" stroke="#3b82f6" />
+                                    <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
+                                    <Tooltip
+                                      formatter={(value, name) => [
+                                        (typeof name === 'string' && name.toLowerCase().includes('margin')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
+                                        name
+                                      ]}
+                                    />
+                                    <Legend />
+                                    <Bar yAxisId="left" dataKey="fcf" fill="#3b82f6" name="FCF ($M)" />
+                                    <Line yAxisId="right" type="monotone" dataKey="fcfMargin" stroke="#10b981" strokeWidth={2} name="FCF Margin (%)" />
+                                  </ComposedChart>
+                                </ResponsiveContainer>
+                              </div>
+
+                              {/* EPS Chart */}
+                              <div>
+                                <h4 className="text-md font-semibold mb-3 text-gray-700">EPS</h4>
+                                <ResponsiveContainer width="100%" height={300}>
+                                  <LineChart data={filteredProjections}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                    <XAxis dataKey="yearLabel" stroke="#6b7280" />
+                                    <YAxis stroke="#6b7280" />
+                                    <Tooltip formatter={(value) => [`$${formatOneDecimal(value)}`, 'EPS']} />
+                                    <Legend />
+                                    <Line type="monotone" dataKey="eps" stroke="#ec4899" strokeWidth={2} name="EPS ($)" />
+                                  </LineChart>
+                                </ResponsiveContainer>
+                              </div>
+
+                              {/* Summary Table for Reference */}
+                              <div className="mt-6">
+                                <h4 className="text-md font-semibold mb-3 text-gray-700">Summary Table</h4>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-sm border border-gray-200 rounded-lg">
+                                    <thead className="bg-gray-50">
+                                      <tr>
+                                        <th className="px-3 py-2 text-left font-medium text-gray-700 border-b border-r">Metric</th>
+                                        {filteredProjections.map((row) => (
+                                          <th key={row.yearLabel} className="px-3 py-2 text-center font-medium text-gray-700 border-b border-r">
+                                            {row.yearLabel}
+                                          </th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-200">
+                                      {/* Revenue Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Revenue ($M)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-gray-900 border-r">
+                                            {row.revenue?.toFixed(1)}
+                                          </td>
+                                        ))}
+                                      </tr>
+
+                                      {/* Revenue Growth Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Revenue Growth (%)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-green-700 border-r">
+                                            {row.revenueGrowth?.toFixed(1)}
+                                          </td>
+                                        ))}
+                                      </tr>
+
+                                      {/* Gross Profit Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Gross Profit ($M)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-gray-900 border-r">
+                                            {row.grossProfit?.toFixed(1)}
+                                          </td>
+                                        ))}
+                                      </tr>
+
+                                      {/* Gross Margin Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Gross Margin (%)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-green-700 border-r">
+                                            {row.grossMargin?.toFixed(1)}
+                                          </td>
+                                        ))}
+                                      </tr>
+
+                                      {/* EBITDA Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EBITDA ($M)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-gray-900 border-r">
+                                            {row.ebitda?.toFixed(1)}
+                                          </td>
+                                        ))}
+                                      </tr>
+
+                                      {/* EBITDA Margin Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">EBITDA Margin (%)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-green-700 border-r">
+                                            {row.ebitdaMargin?.toFixed(1)}
+                                          </td>
+                                        ))}
+                                      </tr>
+
+                                      {/* Net Income Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Net Income ($M)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-gray-900 border-r">
+                                            {row.netIncome?.toFixed(1)}
+                                          </td>
+                                        ))}
+                                      </tr>
+
+                                      {/* Net Income Margin Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Net Income Margin (%)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-green-700 border-r">
+                                            {row.netIncomeMargin?.toFixed(1)}
+                                          </td>
+                                        ))}
+                                      </tr>
+
+                                      {/* EPS Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EPS ($)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-gray-900 border-r">
+                                            ${row.eps?.toFixed(2)}
+                                          </td>
+                                        ))}
+                                      </tr>
+
+                                      {/* FCF Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">FCF ($M)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-gray-900 border-r">
+                                            {row.fcf?.toFixed(1)}
+                                          </td>
+                                        ))}
+                                      </tr>
+
+                                      {/* FCF Margin Row */}
+                                      <tr className="hover:bg-gray-50">
+                                        <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">FCF Margin (%)</td>
+                                        {filteredProjections.map((row) => (
+                                          <td key={row.yearLabel} className="px-3 py-2 text-center text-green-700 border-r">
+                                            {row.fcfMargin?.toFixed(1)}
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    </tbody>
+                                  </table>
+                                </div>
                               </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                    )}
-                    
+                      );
+                    })()}
+
                     {valuation.method === 'dcf' && (
                       <div>
                         <h3 className="text-lg font-semibold mb-4 text-gray-800">DCF Valuation</h3>
@@ -1232,7 +1271,7 @@ export default function DCFValuation() {
                                     {impliedPrice != null && (
                                       <div>
                                         <span className="text-gray-600">Implied Fair Share Price:</span>
-                                        <div className="font-medium text-green-700">${currentPrice.toFixed(2)} × {(1 + (upsidePct/100)).toFixed(4)} = ${impliedPrice.toFixed(2)}</div>
+                                        <div className="font-medium text-green-700">${currentPrice.toFixed(2)} × {(1 + (upsidePct / 100)).toFixed(4)} = ${impliedPrice.toFixed(2)}</div>
                                       </div>
                                     )}
                                   </div>
@@ -1255,7 +1294,7 @@ export default function DCFValuation() {
                         </div>
                       </div>
                     )}
-                    
+
                     {valuation.sections?.exitMultipleValuation && valuation.method === 'exit-multiple' && (
                       <div>
                         <h3 className="text-lg font-semibold mb-4 text-gray-800">Exit Multiple Valuation</h3>
@@ -1295,14 +1334,14 @@ export default function DCFValuation() {
                                             <div className="text-lg font-semibold text-gray-900">{multiple}x</div>
                                           </div>
                                         </div>
-                                        
+
                                         <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
                                           <div className="text-blue-800 font-medium mb-2">Fair Enterprise Value Calculation</div>
                                           <div className="text-sm text-blue-700">
                                             <span className="font-mono">${metric.toFixed(1)}M × {multiple} = ${fairEV.toFixed(1)}M</span>
                                           </div>
                                         </div>
-                                        
+
                                         <div className="grid grid-cols-2 gap-4">
                                           <div className="bg-gray-50 p-3 rounded-lg">
                                             <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Current EV</div>
@@ -1315,11 +1354,11 @@ export default function DCFValuation() {
                                             </div>
                                           </div>
                                         </div>
-                                        
+
                                         <div className="bg-green-50 border border-green-200 p-4 rounded-lg">
                                           <div className="text-green-800 font-medium mb-2">Implied Fair Share Price</div>
                                           <div className="text-sm text-green-700">
-                                            <span className="font-mono">${currentPrice.toFixed(2)} × {(1 + (upsidePct/100)).toFixed(4)} = ${impliedPrice.toFixed(2)}</span>
+                                            <span className="font-mono">${currentPrice.toFixed(2)} × {(1 + (upsidePct / 100)).toFixed(4)} = ${impliedPrice.toFixed(2)}</span>
                                           </div>
                                         </div>
                                       </div>
@@ -1340,14 +1379,14 @@ export default function DCFValuation() {
                                             <div className="text-lg font-semibold text-gray-900">{multiple}x</div>
                                           </div>
                                         </div>
-                                        
+
                                         <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
                                           <div className="text-blue-800 font-medium mb-2">Fair Enterprise Value Calculation</div>
                                           <div className="text-sm text-blue-700">
                                             <span className="font-mono">${metric.toFixed(1)}M × {multiple} = ${fairEV.toFixed(1)}M</span>
                                           </div>
                                         </div>
-                                        
+
                                         <div className="grid grid-cols-2 gap-4">
                                           <div className="bg-gray-50 p-3 rounded-lg">
                                             <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Current EV</div>
@@ -1360,11 +1399,11 @@ export default function DCFValuation() {
                                             </div>
                                           </div>
                                         </div>
-                                        
+
                                         <div className="bg-green-50 border border-green-200 p-4 rounded-lg">
                                           <div className="text-green-800 font-medium mb-2">Implied Fair Share Price</div>
                                           <div className="text-sm text-green-700">
-                                            <span className="font-mono">${currentPrice.toFixed(2)} × {(1 + (upsidePct/100)).toFixed(4)} = ${impliedPrice.toFixed(2)}</span>
+                                            <span className="font-mono">${currentPrice.toFixed(2)} × {(1 + (upsidePct / 100)).toFixed(4)} = ${impliedPrice.toFixed(2)}</span>
                                           </div>
                                         </div>
                                       </div>
@@ -1385,14 +1424,14 @@ export default function DCFValuation() {
                                             <div className="text-lg font-semibold text-gray-900">{multiple}x</div>
                                           </div>
                                         </div>
-                                        
+
                                         <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
                                           <div className="text-blue-800 font-medium mb-2">Fair Price Calculation</div>
                                           <div className="text-sm text-blue-700">
                                             <span className="font-mono">${eps.toFixed(2)} × {multiple} = ${fairPrice.toFixed(2)}</span>
                                           </div>
                                         </div>
-                                        
+
                                         <div className="grid grid-cols-2 gap-4">
                                           <div className="bg-gray-50 p-3 rounded-lg">
                                             <div className="text-gray-600 text-xs font-medium uppercase tracking-wide mb-1">Current Price</div>
@@ -1440,7 +1479,7 @@ export default function DCFValuation() {
                               </div>
                             </div>
                           )}
-                          
+
                           {/* Fallback to raw text if no calculation details */}
                           {!valuation.exitMultipleCalculation && (
                             <div className="prose prose-sm max-w-none">
@@ -1454,7 +1493,7 @@ export default function DCFValuation() {
                         </div>
                       </div>
                     )}
-                    
+
                     {/* Only show assumptions here, not the full forecast text */}
                     {valuation.sections?.assumptions && (
                       <div>
@@ -1465,16 +1504,16 @@ export default function DCFValuation() {
                               {valuation.sections.assumptions
                                 .replace(/^Assumptions and Justifications:\s*/i, '') // Remove header
                                 .split('\n').map((line, index) => {
-                                if (line.trim() === '') {
-                                  return <div key={index} className="h-3"></div>;
-                                } else {
-                                  return (
-                                    <div key={index} className="mb-2">
-                                      {line}
-                                    </div>
-                                  );
-                                }
-                              })}
+                                  if (line.trim() === '') {
+                                    return <div key={index} className="h-3"></div>;
+                                  } else {
+                                    return (
+                                      <div key={index} className="mb-2">
+                                        {line}
+                                      </div>
+                                    );
+                                  }
+                                })}
                             </div>
                           </div>
                         </div>
@@ -1484,7 +1523,7 @@ export default function DCFValuation() {
                 </CardContent>
               </Card>
             </TabsContent>
-            
+
             <TabsContent value="analysis">
               <Card>
                 <CardHeader>
@@ -1499,10 +1538,10 @@ export default function DCFValuation() {
                           <div className="prose prose-sm max-w-none">
                             <div className="text-gray-700 leading-relaxed">
                               {(() => {
-                                const sonarText = valuation.sonar 
+                                const sonarText = valuation.sonar
                                   ? [valuation.sonar.mgmt_summary, valuation.sonar.guidance_summary, valuation.sonar.recent_developments]
-                                      .filter(Boolean)
-                                      .join('\n\n')
+                                    .filter(Boolean)
+                                    .join('\n\n')
                                   : valuation.latestDevelopments || '';
                                 return sonarText.split('\n').map((line, index) => (
                                   line.trim() === '' ? <div key={index} className="h-3"></div> : <div key={index} className="mb-2">{line}</div>
@@ -1519,7 +1558,7 @@ export default function DCFValuation() {
                     {/* Historical Financials Section */}
                     <div className="mt-8">
                       <h3 className="text-xl font-bold mb-4 text-gray-800">Historical Financials (FY21-FY24)</h3>
-                      
+
                       {/* Historical Charts */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
                         {/* Revenue & Growth Chart */}
@@ -1537,7 +1576,7 @@ export default function DCFValuation() {
                                   <XAxis dataKey="year" stroke="#6b7280" />
                                   <YAxis yAxisId="left" stroke="#3b82f6" />
                                   <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
-                                  <Tooltip 
+                                  <Tooltip
                                     formatter={(value, name) => [
                                       (typeof name === 'string' && name.toLowerCase().includes('growth')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
                                       name
@@ -1578,7 +1617,7 @@ export default function DCFValuation() {
                               <XAxis dataKey="year" stroke="#6b7280" />
                               <YAxis yAxisId="left" stroke="#3b82f6" />
                               <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
-                              <Tooltip 
+                              <Tooltip
                                 formatter={(value, name) => [
                                   (typeof name === 'string' && name.toLowerCase().includes('margin')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
                                   name
@@ -1600,7 +1639,7 @@ export default function DCFValuation() {
                               <XAxis dataKey="year" stroke="#6b7280" />
                               <YAxis yAxisId="left" stroke="#3b82f6" />
                               <YAxis yAxisId="right" orientation="right" stroke="#10b981" />
-                              <Tooltip 
+                              <Tooltip
                                 formatter={(value, name) => [
                                   (typeof name === 'string' && name.toLowerCase().includes('margin')) ? `${formatOneDecimal(value)}%` : `$${formatOneDecimal(value)}M`,
                                   name
@@ -1654,7 +1693,7 @@ export default function DCFValuation() {
                                   </td>
                                 ))}
                               </tr>
-                              
+
                               {/* Revenue Growth Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Revenue Growth (%)</td>
@@ -1664,7 +1703,7 @@ export default function DCFValuation() {
                                   </td>
                                 ))}
                               </tr>
-                              
+
                               {/* Gross Profit Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Gross Profit ($M)</td>
@@ -1674,7 +1713,7 @@ export default function DCFValuation() {
                                   </td>
                                 ))}
                               </tr>
-                              
+
                               {/* Gross Margin Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Gross Margin (%)</td>
@@ -1684,7 +1723,7 @@ export default function DCFValuation() {
                                   </td>
                                 ))}
                               </tr>
-                              
+
                               {/* EBITDA Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EBITDA ($M)</td>
@@ -1694,7 +1733,7 @@ export default function DCFValuation() {
                                   </td>
                                 ))}
                               </tr>
-                              
+
                               {/* EBITDA Margin Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">EBITDA Margin (%)</td>
@@ -1704,7 +1743,7 @@ export default function DCFValuation() {
                                   </td>
                                 ))}
                               </tr>
-                              
+
                               {/* Net Income Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">Net Income ($M)</td>
@@ -1714,7 +1753,7 @@ export default function DCFValuation() {
                                   </td>
                                 ))}
                               </tr>
-                              
+
                               {/* Net Income Margin Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">Net Income Margin (%)</td>
@@ -1724,7 +1763,7 @@ export default function DCFValuation() {
                                   </td>
                                 ))}
                               </tr>
-                              
+
                               {/* EPS Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">EPS ($)</td>
@@ -1734,7 +1773,7 @@ export default function DCFValuation() {
                                   </td>
                                 ))}
                               </tr>
-                              
+
                               {/* FCF Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-blue-50">FCF ($M)</td>
@@ -1744,7 +1783,7 @@ export default function DCFValuation() {
                                   </td>
                                 ))}
                               </tr>
-                              
+
                               {/* FCF Margin Row */}
                               <tr>
                                 <td className="px-3 py-2 text-left font-medium text-gray-900 border-r bg-green-50">FCF Margin (%)</td>
@@ -1770,8 +1809,8 @@ export default function DCFValuation() {
             <Button onClick={downloadExcel} disabled={!valuation}>
               Download Excel
             </Button>
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={() => setShowFeedbackForm(!showFeedbackForm)}
               disabled={!valuation}
             >
@@ -1809,9 +1848,9 @@ export default function DCFValuation() {
                         'Regenerate Valuation'
                       )}
                     </Button>
-                    <Button 
-                      type="button" 
-                      variant="outline" 
+                    <Button
+                      type="button"
+                      variant="outline"
                       onClick={() => setShowFeedbackForm(false)}
                     >
                       Cancel
