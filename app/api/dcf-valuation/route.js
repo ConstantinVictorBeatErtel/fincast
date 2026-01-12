@@ -558,10 +558,29 @@ async function generateValuation(ticker, method, selectedMultiple, yf_data, sona
   const md = yf_data?.market_data || {};
   const companyName = yf_data?.company_name || ticker;
 
+  // Determine latest fiscal year from historical data to know where forecasts should start
+  const historicalData = yf_data?.historical_financials || [];
+  let latestFY = 2024; // Default
+  if (historicalData.length > 0) {
+    const years = historicalData.map(h => h.fiscal_year).filter(y => y && typeof y === 'number');
+    if (years.length > 0) {
+      latestFY = Math.max(...years);
+    }
+  }
+  const forecastStartYear = latestFY + 1;
+  const forecastEndYear = forecastStartYear + 4; // 5 years of forecasts
+
+  // Build forecast years string for the table (e.g., "2026 | [Value] | ...")
+  const forecastYearsRows = [];
+  for (let yr = forecastStartYear; yr <= forecastEndYear; yr++) {
+    forecastYearsRows.push(`${yr} | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]`);
+  }
+  const forecastTableRows = forecastYearsRows.join('\n');
+
   // Restore original, detailed prompts with strict output format and Sonar + yfinance context
   let prompt;
   if (method === 'dcf') {
-    prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
+    prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company from ${forecastStartYear} to ${forecastEndYear}. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
 
 The company you will be analyzing is: ${(companyName)}
 
@@ -570,12 +589,14 @@ ${userFeedback && userFeedback.trim().length ? `\nUSER FEEDBACK: ${userFeedback.
 To complete this task, follow these steps:
 IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
 
-Use the FY2024 actuals as your starting point and project forward based on:
+IMPORTANT: The latest reported fiscal year is FY${latestFY}. Use FY${latestFY} actuals as your starting point and project forward from ${forecastStartYear} to ${forecastEndYear}.
+DO NOT include FY${latestFY} in the forecast table - it is already reported. Start projections from ${forecastStartYear}.
+
 1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
 2. The yfinance data below (which provides the most current financial metrics)
 3. Your financial analysis expertise to interpret trends and project future performance
 
-1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
+1. FY${latestFY} ACTUAL FINANCIALS (from yfinance - latest reported year):
 - Revenue: ${(mkNumber(fy.revenue) / 1_000_000).toLocaleString()}M
 - Gross Margin: ${mkNumber(fy.gross_margin_pct).toFixed(1)}%
 - EBITDA: ${(mkNumber(fy.ebitda) / 1_000_000).toLocaleString()}M
@@ -592,11 +613,12 @@ Use the FY2024 actuals as your starting point and project forward based on:
 FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
 ${sonarFull || 'No Sonar data available'}
 
-4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
+4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} from ${forecastStartYear} to ${forecastEndYear}.
+   - The latest reported fiscal year is ${latestFY} - DO NOT project this year, it is already reported
+   - Start forecasts from ${forecastStartYear}
    - Analyze historical revenue growth rates
    - Consider industry trends and market conditions
-   - Estimate year-over-year revenue growth rates until 2029
-   - Calculate projected revenue figures for each year
+   - Estimate year-over-year revenue growth rates for ${forecastStartYear}-${forecastEndYear}
 
 5. Estimate gross margin:
    - Review historical gross margin trends
@@ -635,16 +657,11 @@ After completing all steps, present your final forecast in the following format:
 <forecast>
 Company Name: ${(companyName)}
 
-Financial Forecast 2024-2029:
+Financial Forecast ${forecastStartYear}-${forecastEndYear} (FY${latestFY} is already reported - start projections from ${forecastStartYear}):
 
-Year | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M)
----- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | ---------------
-2024 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2025 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2026 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2027 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2028 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
-2029 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]
+Year | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M) | EPS
+---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | --------------- | ---
+${forecastTableRows}
 
 Fair Value Calculation:
 Discount Rate: [Value]%
@@ -666,7 +683,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
 - EV/EBITDA: Industrial conglomerates, Telecoms, Infrastructure, Manufacturing, high-growth tech firms
 - Price/Sales: High-growth firms with negative or erratic earnings` : `Use ${selectedMultiple} multiple. For P/E multiples, set enterpriseValue to 0.`;
 
-    prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
+    prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company from ${forecastStartYear} to ${forecastEndYear}. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
 
 The company you will be analyzing is: ${(companyName)}
 
@@ -677,12 +694,14 @@ ${userFeedback && userFeedback.trim().length ? `\nUSER FEEDBACK: ${userFeedback.
 To complete this task, follow these steps:
 IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available:
 
-Use the FY2024 actuals as your starting point and project forward based on:
+IMPORTANT: The latest reported fiscal year is FY${latestFY}. Use FY${latestFY} actuals as your starting point and project forward from ${forecastStartYear} to ${forecastEndYear}.
+DO NOT include FY${latestFY} in the forecast table - it is already reported. Start projections from ${forecastStartYear}.
+
 1. The full Sonar response below (which contains the latest quarterly trends, management commentary, guidance, and recent developments)
 2. The yfinance data below (which provides the most current financial metrics)
 3. Your financial analysis expertise to interpret trends and project future performance
 
-1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
+1. FY${latestFY} ACTUAL FINANCIALS (from yfinance - latest reported year):
 - Revenue: ${(mkNumber(fy.revenue) / 1_000_000).toLocaleString()}M
 - Gross Margin: ${mkNumber(fy.gross_margin_pct).toFixed(1)}%
 - EBITDA: ${(mkNumber(fy.ebitda) / 1_000_000).toLocaleString()}M
@@ -699,11 +718,12 @@ Use the FY2024 actuals as your starting point and project forward based on:
 FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
 ${sonarFull || 'No Sonar data available'}
 
-4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} up to 2029.
+4. Project revenue growth TASK: Based on the MOST UPDATED financial data above, create a financial forecast for ${ticker} from ${forecastStartYear} to ${forecastEndYear}.
+   - The latest reported fiscal year is ${latestFY} - DO NOT project this year, it is already reported
+   - Start forecasts from ${forecastStartYear}
    - Analyze historical revenue growth rates
    - Consider industry trends and market conditions
-   - Estimate year-over-year revenue growth rates until 2029
-   - Calculate projected revenue figures for each year
+   - Estimate year-over-year revenue growth rates for ${forecastStartYear}-${forecastEndYear}
 
 5. Estimate gross margin:
    - Review historical gross margin trends
@@ -732,10 +752,10 @@ ${sonarFull || 'No Sonar data available'}
    - Select an appropriate multiple value based on historical ranges and forward-looking expectations
 
 10. Calculate fair value:
-    - Apply the selected exit multiple to the 2029 projected financial metric
-    - For P/E: Fair Value = 2029 EPS × P/E Multiple
-    - For EV/EBITDA: Enterprise Value = 2029 EBITDA × EV/EBITDA Multiple
-    - For EV/FCF: Enterprise Value = 2029 FCF × EV/FCF Multiple
+    - Apply the selected exit multiple to the ${forecastEndYear} projected financial metric
+    - For P/E: Fair Value = ${forecastEndYear} EPS × P/E Multiple
+    - For EV/EBITDA: Enterprise Value = ${forecastEndYear} EBITDA × EV/EBITDA Multiple
+    - For EV/FCF: Enterprise Value = ${forecastEndYear} FCF × EV/FCF Multiple
     - Convert enterprise value to equity value if using EV multiples
 
 For each step, use <financial_analysis> tags to show your thought process and calculations. Within these tags:
@@ -751,21 +771,16 @@ After completing all steps, present your final forecast in the following format:
 <forecast>
 Company Name: ${(companyName)}
 
-Financial Forecast 2024-2029:
+Financial Forecast ${forecastStartYear}-${forecastEndYear} (FY${latestFY} is already reported - start projections from ${forecastStartYear}):
 
 Year | Revenue ($M) | Revenue Growth (%) | Gross Margin (%) | EBITDA Margin (%) | FCF Margin (%) | Net Income ($M) | EPS
 ---- | ------------ | ------------------ | ---------------- | ----------------- | -------------- | --------------- | ---
-2024 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
-2025 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
-2026 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
-2027 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
-2028 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
-2029 | [Value]      | [Value]            | [Value]          | [Value]           | [Value]        | [Value]         | [Value]
+${forecastTableRows}
 
 Exit Multiple Valuation:
 Exit Multiple Type: [P/E, EV/EBITDA, or EV/FCF]
 Exit Multiple Value: [Value]
-2029 Metric Value: [Value]
+${forecastEndYear} Metric Value: [Value]
 Fair Value: $[Value] per share
 
 Current Share Price: $${mkNumber(md.current_price).toFixed(2)}
