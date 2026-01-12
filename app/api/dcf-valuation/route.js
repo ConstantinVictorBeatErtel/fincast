@@ -577,6 +577,8 @@ async function generateValuation(ticker, method, selectedMultiple, yf_data, sona
   }
   const forecastTableRows = forecastYearsRows.join('\n');
 
+  console.log(`[Forecast] latestFY=${latestFY}, forecastStartYear=${forecastStartYear}, forecastEndYear=${forecastEndYear}, years=${forecastYearsRows.length}`);
+
   // Restore original, detailed prompts with strict output format and Sonar + yfinance context
   let prompt;
   if (method === 'dcf') {
@@ -1065,14 +1067,21 @@ Return ONLY the <forecast> section as specified above, without any additional co
   let discountRate = discountMatch ? parseFloat(discountMatch[1]) : null;
   let terminalGrowth = terminalMatch ? parseFloat(terminalMatch[1]) : null;
 
-  // Calculate years to target year from today (use last projection year, not hardcoded 2029)
-  const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth() + 1;
+  // Calculate years for CAGR using fiscal year difference (e.g., FY25→FY30 = 5 years)
+  // Get last projection year
   const lastProjYear = projections.length > 0
-    ? parseInt(String(projections[projections.length - 1].year).replace(/\D/g, '')) || 2029
-    : 2029;
-  const targetYear = lastProjYear < 100 ? 2000 + lastProjYear : lastProjYear;
-  const yearsToTarget = targetYear - currentYear + (12 - currentMonth) / 12;
+    ? parseInt(String(projections[projections.length - 1].year).replace(/\D/g, '')) || 29
+    : 29;
+  const lastProjYearFull = lastProjYear < 100 ? 2000 + lastProjYear : lastProjYear;
+
+  // Get first projection year (base year for CAGR)
+  const firstProjYear = projections.length > 0
+    ? parseInt(String(projections[0].year).replace(/\D/g, '')) || 25
+    : 25;
+  const firstProjYearFull = firstProjYear < 100 ? 2000 + firstProjYear : firstProjYear;
+
+  // CAGR years = last projection year - base year (typically 5 years)
+  const cagrYears = Math.max(lastProjYearFull - firstProjYearFull + 1, 1);
 
   if (method === 'exit-multiple') {
     if (fvShareMatch) fairValue = parseFloat(fvShareMatch[1].replace(/,/g, ''));
@@ -1089,14 +1098,14 @@ Return ONLY the <forecast> section as specified above, without any additional co
     }
     if (currentPrice > 0 && fairValue > 0) {
       upside = ((fairValue - currentPrice) / currentPrice) * 100;
-      cagr = (Math.pow(fairValue / currentPrice, 1 / yearsToTarget) - 1) * 100;
+      cagr = (Math.pow(fairValue / currentPrice, 1 / cagrYears) - 1) * 100;
     }
   } else {
     if (fvMillionMatch) fairValue = parseFloat(fvMillionMatch[1].replace(/,/g, ''));
     const marketCapM = mkNumber(md.market_cap) / 1_000_000;
     if (marketCapM > 0 && fairValue > 0) {
       upside = ((fairValue - marketCapM) / marketCapM) * 100;
-      cagr = (Math.pow(fairValue / marketCapM, 1 / yearsToTarget) - 1) * 100;
+      cagr = (Math.pow(fairValue / marketCapM, 1 / cagrYears) - 1) * 100;
     }
   }
 
