@@ -166,15 +166,30 @@ async function fetchPortfolioPricesDirect(tickers) {
   if (isVercel) {
     try {
       const baseUrl = `https://${process.env.VERCEL_URL}`;
-      const response = await fetch(`${baseUrl}/api/portfolio-prices`, {
+      const url = `${baseUrl}/api/portfolio-prices`;
+
+      const headers = { 'Content-Type': 'application/json' };
+      // Add Vercel protection bypass headers if available
+      if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+        headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+      }
+      if (process.env.VERCEL_PROTECTION_BYPASS) {
+        headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+      }
+
+      console.log(`[Portfolio] Fetching prices from ${url}`);
+
+      const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify({ tickers })
       });
 
       if (response.ok) {
         return await response.json();
       }
+      const text = await response.text();
+      console.error(`[Portfolio] API Error ${response.status}: ${text.slice(0, 200)}`);
       throw new Error(`API returned ${response.status}`);
     } catch (e) {
       console.error('Vercel API fetch failed:', e);
