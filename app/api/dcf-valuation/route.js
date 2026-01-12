@@ -559,12 +559,26 @@ async function generateValuation(ticker, method, selectedMultiple, yf_data, sona
   const companyName = yf_data?.company_name || ticker;
 
   // Determine latest fiscal year from historical data to know where forecasts should start
+  // The Python script returns 'year' as "FY24" or "FY25" format, not as a number
   const historicalData = yf_data?.historical_financials || [];
   let latestFY = 2024; // Default
   if (historicalData.length > 0) {
-    const years = historicalData.map(h => h.fiscal_year).filter(y => y && typeof y === 'number');
+    const years = historicalData.map(h => {
+      // Handle both "FY24" format and "2024" format
+      const yearStr = String(h.year || h.fiscal_year || '');
+      const match = yearStr.match(/(\d{2,4})/);
+      if (match) {
+        let yr = parseInt(match[1], 10);
+        // Convert 2-digit to 4-digit (e.g., 24 -> 2024)
+        if (yr < 100) yr = 2000 + yr;
+        return yr;
+      }
+      return null;
+    }).filter(y => y && y > 2000);
+
     if (years.length > 0) {
       latestFY = Math.max(...years);
+      console.log(`[Forecast] Detected years from historical data: ${years.join(', ')}`);
     }
   }
   const forecastStartYear = latestFY + 1;
