@@ -37,7 +37,7 @@ export default function Home() {
             </div>
             
             <div className="flex items-center space-x-4">
-              {session ? (
+              {session && (
                 <>
                   <div className="flex items-center space-x-4">
                     <span className="text-sm text-gray-700">Welcome, {session.user.name || session.user.email}</span>
@@ -49,13 +49,6 @@ export default function Home() {
                     </button>
                   </div>
                 </>
-              ) : (
-                <a
-                  href="/auth/signin"
-                  className="text-sm text-blue-600 hover:text-blue-500"
-                >
-                  Sign in
-                </a>
               )}
             </div>
           </div>
@@ -127,14 +120,8 @@ export default function Home() {
         
         {activeTab === 'portfolio' && !session && (
           <div className="text-center py-12">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Sign in to access your portfolio</h2>
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Portfolio feature requires authentication</h2>
             <p className="text-gray-600 mb-6">Track your investments and view upside potential</p>
-            <a
-              href="/auth/signin"
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
-            >
-              Sign in
-            </a>
           </div>
         )}
       </div>

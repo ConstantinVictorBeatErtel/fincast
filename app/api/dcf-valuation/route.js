@@ -215,7 +215,11 @@ export async function GET(request) {
 
     const fairValue = eps > 0 ? eps * multiple : 0;
     const upside = currentPrice > 0 && fairValue > 0 ? ((fairValue - currentPrice) / currentPrice) * 100 : 0;
-    const cagr = currentPrice > 0 && fairValue > 0 ? (Math.pow(fairValue / currentPrice, 1 / 5) - 1) * 100 : 0;
+    // Calculate years to 2029 from today (2026-01-12)
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1; // 0-indexed, so add 1
+    const yearsTo2029 = 2029 - currentYear + (12 - currentMonth) / 12;
+    const cagr = currentPrice > 0 && fairValue > 0 ? (Math.pow(fairValue / currentPrice, 1 / yearsTo2029) - 1) * 100 : 0;
 
     return NextResponse.json({ error: 'LLM disabled by request and no fallback allowed' }, { status: 400 });
   } catch (error) {
@@ -1023,6 +1027,11 @@ Return ONLY the <forecast> section as specified above, without any additional co
   let discountRate = discountMatch ? parseFloat(discountMatch[1]) : null;
   let terminalGrowth = terminalMatch ? parseFloat(terminalMatch[1]) : null;
 
+  // Calculate years to 2029 from today
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth() + 1; // 0-indexed, so add 1
+  const yearsTo2029 = 2029 - currentYear + (12 - currentMonth) / 12;
+
   if (method === 'exit-multiple') {
     if (fvShareMatch) fairValue = parseFloat(fvShareMatch[1].replace(/,/g, ''));
     // Compute fair value from multiple if needed
@@ -1038,14 +1047,14 @@ Return ONLY the <forecast> section as specified above, without any additional co
     }
     if (currentPrice > 0 && fairValue > 0) {
       upside = ((fairValue - currentPrice) / currentPrice) * 100;
-      cagr = (Math.pow(fairValue / currentPrice, 1 / 5) - 1) * 100;
+      cagr = (Math.pow(fairValue / currentPrice, 1 / yearsTo2029) - 1) * 100;
     }
         } else {
     if (fvMillionMatch) fairValue = parseFloat(fvMillionMatch[1].replace(/,/g, ''));
     const marketCapM = mkNumber(md.market_cap) / 1_000_000;
     if (marketCapM > 0 && fairValue > 0) {
       upside = ((fairValue - marketCapM) / marketCapM) * 100;
-      cagr = (Math.pow(fairValue / marketCapM, 1 / 5) - 1) * 100;
+      cagr = (Math.pow(fairValue / marketCapM, 1 / yearsTo2029) - 1) * 100;
     }
   }
 

@@ -91,14 +91,19 @@ export async function POST(request) {
     // Calculate portfolio CAGR from individual holdings
     // Weighted average of individual CAGR values (assuming we have them from valuation)
     let portfolioCagr = 0;
+
+    // Calculate years to 2029 from today
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1; // 0-indexed, so add 1
+    const yearsTo2029 = 2029 - currentYear + (12 - currentMonth) / 12;
+
     Object.entries(valuationExpectedReturns.individualReturns).forEach(([ticker, data]) => {
       const holding = holdings.find(h => h.ticker === ticker);
       const weight = holding ? holding.weight / 100 : 0;
 
-      // Calculate CAGR from upside: CAGR = (1 + upside/100)^(1/5) - 1
-      // Assuming 5-year projection period
+      // Calculate CAGR from upside: CAGR = (1 + upside/100)^(1/yearsTo2029) - 1
       const upside = data.upside || 0;
-      const cagr = upside > 0 ? (Math.pow(1 + upside / 100, 1 / 5) - 1) : 0;
+      const cagr = upside > 0 ? (Math.pow(1 + upside / 100, 1 / yearsTo2029) - 1) : 0;
       portfolioCagr += weight * cagr;
     });
 
