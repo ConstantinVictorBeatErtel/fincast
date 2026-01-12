@@ -623,17 +623,17 @@ ${sonarFull || 'No Sonar data available'}
 5. Estimate gross margin:
    - Review historical gross margin trends
    - Consider factors that may impact future gross margins (e.g., cost of goods sold, pricing strategies)
-   - Project gross margin percentages for each year until 2029
+   - Project gross margin percentages for each year until ${forecastEndYear}
 
 6. Calculate EBITDA margin:
    - Analyze historical EBITDA margin trends
    - Consider factors that may impact future EBITDA margins (e.g., operating expenses, efficiency improvements)
-   - Project EBITDA margin percentages for each year until 2029
+   - Project EBITDA margin percentages for each year until ${forecastEndYear}
 
 7. Determine FCF margin:
    - Review historical FCF margin trends
    - Consider factors that may impact future FCF margins (e.g., capital expenditures, working capital changes)
-   - Project FCF margin percentages for each year until 2029
+   - Project FCF margin percentages for each year until ${forecastEndYear}
 
 8. Project net income:
    - Use the projected revenue and margin figures to calculate net income for each year
@@ -728,17 +728,17 @@ ${sonarFull || 'No Sonar data available'}
 5. Estimate gross margin:
    - Review historical gross margin trends
    - Consider factors that may impact future gross margins (e.g., cost of goods sold, pricing strategies)
-   - Project gross margin percentages for each year until 2029
+   - Project gross margin percentages for each year until ${forecastEndYear}
 
 6. Calculate EBITDA margin:
    - Analyze historical EBITDA margin trends
    - Consider factors that may impact future EBITDA margins (e.g., operating expenses, efficiency improvements)
-   - Project EBITDA margin percentages for each year until 2029
+   - Project EBITDA margin percentages for each year until ${forecastEndYear}
 
 7. Determine FCF margin:
    - Review historical FCF margin trends
    - Consider factors that may impact future FCF margins (e.g., capital expenditures, working capital changes)
-   - Project FCF margin percentages for each year until 2029
+   - Project FCF margin percentages for each year until ${forecastEndYear}
 
 8. Project net income and EPS:
    - Use the projected revenue and margin figures to calculate net income for each year
@@ -1065,10 +1065,14 @@ Return ONLY the <forecast> section as specified above, without any additional co
   let discountRate = discountMatch ? parseFloat(discountMatch[1]) : null;
   let terminalGrowth = terminalMatch ? parseFloat(terminalMatch[1]) : null;
 
-  // Calculate years to 2029 from today
+  // Calculate years to target year from today (use last projection year, not hardcoded 2029)
   const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth() + 1; // 0-indexed, so add 1
-  const yearsTo2029 = 2029 - currentYear + (12 - currentMonth) / 12;
+  const currentMonth = new Date().getMonth() + 1;
+  const lastProjYear = projections.length > 0
+    ? parseInt(String(projections[projections.length - 1].year).replace(/\D/g, '')) || 2029
+    : 2029;
+  const targetYear = lastProjYear < 100 ? 2000 + lastProjYear : lastProjYear;
+  const yearsToTarget = targetYear - currentYear + (12 - currentMonth) / 12;
 
   if (method === 'exit-multiple') {
     if (fvShareMatch) fairValue = parseFloat(fvShareMatch[1].replace(/,/g, ''));
@@ -1085,14 +1089,14 @@ Return ONLY the <forecast> section as specified above, without any additional co
     }
     if (currentPrice > 0 && fairValue > 0) {
       upside = ((fairValue - currentPrice) / currentPrice) * 100;
-      cagr = (Math.pow(fairValue / currentPrice, 1 / yearsTo2029) - 1) * 100;
+      cagr = (Math.pow(fairValue / currentPrice, 1 / yearsToTarget) - 1) * 100;
     }
   } else {
     if (fvMillionMatch) fairValue = parseFloat(fvMillionMatch[1].replace(/,/g, ''));
     const marketCapM = mkNumber(md.market_cap) / 1_000_000;
     if (marketCapM > 0 && fairValue > 0) {
       upside = ((fairValue - marketCapM) / marketCapM) * 100;
-      cagr = (Math.pow(fairValue / marketCapM, 1 / yearsTo2029) - 1) * 100;
+      cagr = (Math.pow(fairValue / marketCapM, 1 / yearsToTarget) - 1) * 100;
     }
   }
 
