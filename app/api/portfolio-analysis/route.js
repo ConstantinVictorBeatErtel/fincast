@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
 import { GET as dcfValuationGET } from '../dcf-valuation/route.js';
 
@@ -150,73 +151,94 @@ export async function POST(request) {
 
 async function fetchHistoricalData(tickers) {
   try {
-    console.log(`Fetching historical data for ${tickers.length} tickers...`);
-
-    const historicalData = {};
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setFullYear(endDate.getFullYear() - 5); // 5 years of data
-
-    // Fetch each ticker using yahoo-finance2 directly with retry logic
-    for (const ticker of tickers) {
-      let retries = 3;
-      let delay = 1000; // Start with 1 second delay
-
-      while (retries > 0) {
-        try {
-          console.log(`Fetching price data for ${ticker} using yahoo-finance2...`);
-
-          const chart = await yahooFinance.chart(ticker, {
-            period1: startDate,
-            period2: endDate,
-            interval: '1d'
-          });
-
-          const quotes = chart?.quotes || [];
-
-          if (quotes && quotes.length > 0) {
-            const priceData = {};
-            quotes.forEach(q => {
-              const date = new Date(q.date).toISOString().split('T')[0];
-              if (q.close) {
-                priceData[date] = q.close;
-              }
-            });
-            historicalData[ticker] = priceData;
-            console.log(`Fetched ${quotes.length} price points for ${ticker}`);
-          } else {
-            console.log(`No price data found for ${ticker}`);
-          }
-          break; // Success, exit retry loop
-
-        } catch (error) {
-          retries--;
-          if (error.message.includes('Too Many Requests') || error.message.includes('429')) {
-            console.log(`Rate limited for ${ticker}, waiting ${delay}ms before retry (${retries} retries left)...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            delay *= 2; // Exponential backoff
-          } else {
-            console.error(`Error fetching data for ${ticker}:`, error.message);
-            break; // Non-rate-limit error, don't retry
-          }
-        }
-      }
-
-      // Small delay between tickers to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-
-    return historicalData;
+    console.log(`Fetching historical data for ${tickers.length} tickers using Python...`);
+    return await fetchPortfolioPricesDirect(tickers);
   } catch (error) {
     console.error('Error fetching historical data:', error);
     return {};
   }
 }
 
+async function fetchPortfolioPricesDirect(tickers) {
+  const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
 
+  // On Vercel: use HTTP to Python serverless function
+  if (isVercel) {
+    try {
+      const baseUrl = `https://${process.env.VERCEL_URL}`;
+      const response = await fetch(`${baseUrl}/api/portfolio-prices`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tickers })
+      });
 
+      if (response.ok) {
+        return await response.json();
+      }
+      throw new Error(`API returned ${response.status}`);
+    } catch (e) {
+      console.error('Vercel API fetch failed:', e);
+      return {};
+    }
+  }
 
+  // Locally: spawn Python script
+  return new Promise((resolve, reject) => {
+    const scriptPath = `${process.cwd()}/scripts/fetch_portfolio_prices.py`;
+    let cmd = 'python3';
+    // If inside venv locally
+    if (require('fs').existsSync(`${process.cwd()}/venv/bin/python3`)) {
+      cmd = `${process.cwd()}/venv/bin/python3`;
+    }
 
+    console.log(`Spawning: ${cmd} ${scriptPath} ${tickers.join(' ')}`);
+
+    const python = spawn(cmd, [scriptPath, ...tickers]);
+
+    let dataString = '';
+    let errorString = '';
+
+    python.stdout.on('data', (data) => {
+      dataString += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorString += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code !== 0) {
+        console.error(`Python script exited with code ${code}: ${errorString}`);
+        resolve({});
+        return;
+      }
+
+      try {
+        const result = JSON.parse(dataString);
+        // Transform array format to object format
+        const formatted = {};
+        Object.keys(result).forEach(ticker => {
+          const prices = {};
+          result[ticker].forEach(p => {
+            prices[p.date] = p.close;
+          });
+          formatted[ticker] = prices;
+        });
+
+        console.log(`Successfully fetched prices for ${Object.keys(formatted).length} tickers`);
+        resolve(formatted);
+      } catch (e) {
+        console.error('Failed to parse Python output:', e);
+        resolve({});
+      }
+    });
+
+    python.on('error', (err) => {
+      console.error('Failed to start python script:', err);
+      resolve({});
+    });
+  });
+}
 
 function calculateReturns(historicalData) {
   const allDates = new Set();
@@ -342,48 +364,23 @@ function calculateCorrelation(returns1, returns2) {
 
 async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
   try {
-    console.log('Calculating portfolio beta using yahoo-finance2 directly...');
+    console.log('Calculating portfolio beta using Python for SPY data...');
 
-    // Fetch SPY data using yahoo-finance2 directly with retry logic
-    let retries = 3;
-    let delay = 1000;
-    let chart = null;
+    // Fetch SPY data using local Python script helper
+    const prices = await fetchPortfolioPricesDirect(['SPY']);
+    const spyData = prices['SPY'] || {};
 
-    while (retries > 0 && !chart) {
-      try {
-        chart = await yahooFinance.chart('SPY', {
-          period1: startDate,
-          period2: endDate,
-          interval: '1d'
-        });
-      } catch (error) {
-        retries--;
-        if (error.message.includes('Too Many Requests') || error.message.includes('429')) {
-          console.log(`Rate limited for SPY, waiting ${delay}ms before retry (${retries} retries left)...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          delay *= 2;
-        } else {
-          throw error;
-        }
-      }
-    }
+    const sortedDates = Object.keys(spyData).sort();
 
-    if (!chart) {
-      throw new Error('Failed to fetch SPY data after retries');
-    }
-
-    const spyQuotes = chart?.quotes || [];
-    console.log(`Fetched ${spyQuotes.length} SPY data points`);
-
-    if (spyQuotes.length === 0) {
+    if (sortedDates.length === 0) {
       throw new Error('No SPY data available');
     }
 
     // Calculate SPY returns
     const spyReturns = [];
-    for (let i = 1; i < spyQuotes.length; i++) {
-      const prevPrice = spyQuotes[i - 1].close;
-      const currPrice = spyQuotes[i].close;
+    for (let i = 1; i < sortedDates.length; i++) {
+      const prevPrice = spyData[sortedDates[i - 1]];
+      const currPrice = spyData[sortedDates[i]];
       if (prevPrice && currPrice && prevPrice > 0) {
         spyReturns.push((currPrice - prevPrice) / prevPrice);
       }
@@ -408,12 +405,8 @@ async function calculatePortfolioBeta(returns, weights, startDate, endDate) {
       const alignedStockReturns = stockReturns.slice(0, minLength);
       const alignedSpyReturns = spyReturns.slice(0, minLength);
 
-      console.log(`${ticker}: ${alignedStockReturns.length} aligned data points`);
-
       const covariance = calculateCovariance(alignedStockReturns, alignedSpyReturns);
       const beta = marketVariance === 0 ? 0 : covariance / marketVariance;
-
-      console.log(`${ticker}: beta=${beta.toFixed(4)}`);
 
       stockBetas[ticker] = beta;
       weightedBetas[ticker] = beta * weights[index];

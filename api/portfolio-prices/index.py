@@ -3,11 +3,11 @@ Vercel serverless function for fetching historical price data for portfolio anal
 Returns 5 years of daily prices for given tickers.
 """
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
 import json
 import yfinance as yf
+import pandas as pd
+import sys
 from datetime import datetime, timedelta
-
 
 class handler(BaseHTTPRequestHandler):
     """Vercel serverless function handler for portfolio price data."""
@@ -36,36 +36,79 @@ class handler(BaseHTTPRequestHandler):
             start_date = end_date - timedelta(days=5*365)
 
             result = {}
-
-            for ticker in tickers:
-                try:
-                    # Download historical data
-                    hist = yf.download(
-                        ticker,
-                        start=start_date,
-                        end=end_date,
-                        interval='1d',
-                        progress=False,
-                        auto_adjust=True
-                    )
-
-                    if hist is not None and not hist.empty:
-                        # Convert to list of daily prices
+            
+            try:
+                # Use bulk download for efficiency
+                # Always use group_by='ticker' for consistency
+                hist_data = yf.download(
+                    tickers,
+                    start=start_date,
+                    end=end_date,
+                    interval='1d',
+                    progress=False,
+                    auto_adjust=True,
+                    group_by='ticker'
+                )
+                
+                if hist_data.empty:
+                     for t in tickers:
+                         result[t] = []
+                else:
+                    for ticker in tickers:
                         prices = []
-                        for date, row in hist.iterrows():
-                            prices.append({
-                                'date': date.strftime('%Y-%m-%d'),
-                                'close': float(row['Close']),
-                                'volume': int(row['Volume']) if 'Volume' in row else 0
-                            })
-                        
-                        result[ticker] = prices
-                    else:
-                        result[ticker] = []
+                        try:
+                            df = None
+                            # Handle MultiIndex logic
+                            if isinstance(hist_data.columns, pd.MultiIndex):
+                                try:
+                                    df = hist_data[ticker]
+                                except KeyError:
+                                    df = None
+                            else:
+                                # Flat index logic
+                                if len(tickers) == 1 and tickers[0] == ticker:
+                                    df = hist_data
+                                else:
+                                    df = hist_data
 
-                except Exception as e:
-                    print(f"Error fetching data for {ticker}: {e}")
-                    result[ticker] = []
+                            if df is not None and not df.empty:
+                                if 'Close' in df.columns:
+                                    for index, row in df.iterrows():
+                                        try:
+                                            # Handle potential NaN
+                                            close_val = float(row['Close'])
+                                            if str(close_val) != 'nan':
+                                                prices.append({
+                                                    'date': index.strftime('%Y-%m-%d'),
+                                                    'close': close_val
+                                                })
+                                        except:
+                                            pass
+                                result[ticker] = prices
+                            else:
+                                result[ticker] = []
+
+                        except Exception as inner_e:
+                            print(f"Error processing {ticker}: {inner_e}")
+                            result[ticker] = []
+                            
+            except Exception as e:
+                print(f"Bulk download failed: {e}")
+                # Fallback to one-by-one
+                for ticker in tickers:
+                    try:
+                        hist = yf.Ticker(ticker).history(start=start_date, end=end_date, interval='1d', auto_adjust=True)
+                        prices = []
+                        if not hist.empty and 'Close' in hist.columns:
+                             for index, row in hist.iterrows():
+                                prices.append({
+                                    'date': index.strftime('%Y-%m-%d'),
+                                    'close': float(row['Close'])
+                                })
+                        result[ticker] = prices
+                    except Exception as e2:
+                        print(f"Fallback failed for {ticker}: {e2}")
+                        result[ticker] = []
 
             # Send successful response
             self.send_response(200)
