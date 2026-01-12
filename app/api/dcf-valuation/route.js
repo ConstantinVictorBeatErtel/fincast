@@ -59,7 +59,7 @@ async function makeOpenRouterRequest(body, timeoutMs = 45000) {
 // Function to get exchange rate from currency to USD
 async function getExchangeRate(fromCurrency, toCurrency = 'USD') {
   if (fromCurrency === toCurrency) return 1.0;
-  
+
   try {
     // Use yahoo-finance2 to get exchange rate
     const exchangeTicker = `${fromCurrency}${toCurrency}=X`;
@@ -126,8 +126,8 @@ export async function GET(request) {
     if (useLLM) {
       if (!process.env.OPENROUTER_API_KEY) {
         return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 500 });
-          }
-          try {
+      }
+      try {
         const sonar = await fetchLatestWithSonar(ticker).catch(() => null);
         let lastErr = null;
         let valuation = null;
@@ -139,19 +139,19 @@ export async function GET(request) {
           'meta-llama/llama-3.1-8b-instruct:free',
           'microsoft/phi-3-medium-128k-instruct:free'
         ];
-        
+
         for (let attempt = 1; attempt <= 5; attempt++) {
           try {
             const model = models[Math.min(attempt - 1, models.length - 1)];
             console.log(`[LLM] Attempt ${attempt}/5 for ${ticker} using model: ${model}`);
-            
+
             // Add exponential backoff delay
             if (attempt > 1) {
               const delay = Math.min(1000 * Math.pow(2, attempt - 2), 10000); // Max 10 seconds
               console.log(`[LLM] Waiting ${delay}ms before retry...`);
               await new Promise(resolve => setTimeout(resolve, delay));
             }
-            
+
             valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', '', model);
             if (valuation && Array.isArray(valuation.projections) && valuation.projections.length > 0) {
               console.log(`[LLM] Success on attempt ${attempt} with ${valuation.projections.length} projections using ${model}`);
@@ -161,7 +161,7 @@ export async function GET(request) {
           } catch (e) {
             console.log(`[LLM] Attempt ${attempt} failed:`, e.message);
             lastErr = e;
-            
+
             // If it's a rate limit error, try next model immediately
             if (e.message.includes('429') || e.message.includes('rate limit') || e.message.includes('Too Many Requests')) {
               console.log(`[LLM] Rate limit detected, trying next model...`);
@@ -273,19 +273,19 @@ export async function POST(request) {
         'meta-llama/llama-3.1-8b-instruct:free',
         'microsoft/phi-3-medium-128k-instruct:free'
       ];
-      
+
       for (let attempt = 1; attempt <= 5; attempt++) {
         try {
           const model = models[Math.min(attempt - 1, models.length - 1)];
           console.log(`[LLM] POST Attempt ${attempt}/5 for ${ticker} with feedback using model: ${model}`);
-          
+
           // Add exponential backoff delay
           if (attempt > 1) {
             const delay = Math.min(1000 * Math.pow(2, attempt - 2), 10000); // Max 10 seconds
             console.log(`[LLM] POST Waiting ${delay}ms before retry...`);
             await new Promise(resolve => setTimeout(resolve, delay));
           }
-          
+
           valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', feedback || '', model);
           if (valuation && Array.isArray(valuation.projections) && valuation.projections.length > 0) {
             console.log(`[LLM] POST Success on attempt ${attempt} with ${valuation.projections.length} projections using ${model}`);
@@ -295,7 +295,7 @@ export async function POST(request) {
         } catch (e) {
           console.log(`[LLM] POST Attempt ${attempt} failed:`, e.message);
           lastErr = e;
-          
+
           // If it's a rate limit error, try next model immediately
           if (e.message.includes('429') || e.message.includes('rate limit') || e.message.includes('Too Many Requests')) {
             console.log(`[LLM] POST Rate limit detected, trying next model...`);
@@ -368,8 +368,9 @@ async function fetchLatestWithSonar(ticker) {
   }
 }
 
-// Direct yfinance fetch using Python Vercel serverless function
+// Direct yfinance fetch using Python Vercel serverless function with JS fallback
 async function fetchYFinanceDataDirect(ticker, hdrs) {
+  // Try Python API first
   try {
     console.log(`[Python API] Fetching data for ${ticker} using Python serverless function`);
 
@@ -381,32 +382,125 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
     const url = `${baseUrl}/api/py-yf?ticker=${encodeURIComponent(ticker)}`;
     console.log(`[Python API] Calling ${url}`);
 
+    // Build headers with Vercel protection bypass if available
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+      headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    }
+    if (process.env.VERCEL_PROTECTION_BYPASS) {
+      headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
+    }
+
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
     });
 
-    if (!response.ok) {
+    if (response.ok) {
+      const data = await response.json();
+
+      if (data && Array.isArray(data.historical_financials) && data.historical_financials.length > 0) {
+        console.log(`[Python API] Successfully fetched data for ${ticker}: ${data.historical_financials.length} historical records`);
+        return data;
+      }
+      console.log(`[Python API] No valid data returned for ${ticker}`);
+    } else {
       console.log(`[Python API] Error: ${response.status} ${response.statusText}`);
+    }
+  } catch (e) {
+    console.log(`[Python API] Error: ${e.message}`);
+  }
+
+  // Fallback to yahoo-finance2 JS library
+  console.log(`[JS Fallback] Python API failed, trying yahoo-finance2 for ${ticker}`);
+  try {
+    const quoteSummary = await yahooFinance.quoteSummary(ticker, {
+      modules: ['financialData', 'incomeStatementHistory', 'incomeStatementHistoryQuarterly', 'balanceSheetHistory', 'cashflowStatementHistory', 'defaultKeyStatistics', 'summaryDetail', 'price']
+    });
+
+    if (!quoteSummary) {
+      console.log(`[JS Fallback] No data returned for ${ticker}`);
       return null;
     }
 
-    const data = await response.json();
+    const price = quoteSummary.price || {};
+    const financialData = quoteSummary.financialData || {};
+    const defaultKeyStatistics = quoteSummary.defaultKeyStatistics || {};
+    const summaryDetail = quoteSummary.summaryDetail || {};
+    const incomeHistory = quoteSummary.incomeStatementHistory?.incomeStatementHistory || [];
+    const cashflowHistory = quoteSummary.cashflowStatementHistory?.cashflowStatements || [];
 
-    if (data && Array.isArray(data.historical_financials) && data.historical_financials.length > 0) {
-      console.log(`[Python API] Successfully fetched data for ${ticker}: ${data.historical_financials.length} historical records`);
-      return data;
-    }
+    // Build historical financials from income statements
+    const historical_financials = incomeHistory.map((stmt, idx) => {
+      const cashflow = cashflowHistory[idx] || {};
+      const endDate = stmt.endDate ? new Date(stmt.endDate) : null;
+      const fiscalYear = endDate ? endDate.getFullYear() : null;
 
-    console.log(`[Python API] No valid data returned for ${ticker}`);
-    return null;
+      return {
+        fiscal_year: fiscalYear,
+        revenue: stmt.totalRevenue || 0,
+        gross_profit: stmt.grossProfit || 0,
+        operating_income: stmt.operatingIncome || 0,
+        net_income: stmt.netIncome || 0,
+        ebitda: stmt.ebitda || (stmt.operatingIncome || 0),
+        free_cash_flow: cashflow.freeCashFlow || 0,
+        eps: stmt.netIncome && defaultKeyStatistics.sharesOutstanding
+          ? stmt.netIncome / defaultKeyStatistics.sharesOutstanding
+          : 0
+      };
+    });
+
+    // Get most recent financials for fy24_financials
+    const latestIncome = incomeHistory[0] || {};
+    const latestCashflow = cashflowHistory[0] || {};
+    const revenue = latestIncome.totalRevenue || 0;
+    const grossProfit = latestIncome.grossProfit || 0;
+    const netIncome = latestIncome.netIncome || 0;
+    const sharesOutstanding = defaultKeyStatistics.sharesOutstanding || price.sharesOutstanding || 1;
+
+    const result = {
+      company_name: price.longName || price.shortName || ticker,
+      source: 'yahoo-finance2-js',
+      fy24_financials: {
+        revenue: revenue,
+        gross_profit: grossProfit,
+        gross_margin_pct: revenue > 0 ? (grossProfit / revenue) * 100 : 0,
+        operating_income: latestIncome.operatingIncome || 0,
+        net_income: netIncome,
+        ebitda: latestIncome.ebitda || financialData.ebitda || 0,
+        fcf: latestCashflow.freeCashFlow || financialData.freeCashflow || 0,
+        eps: financialData.currentPrice && summaryDetail.trailingPE
+          ? financialData.currentPrice / summaryDetail.trailingPE
+          : (netIncome / sharesOutstanding),
+        shares_outstanding: sharesOutstanding
+      },
+      market_data: {
+        current_price: financialData.currentPrice || price.regularMarketPrice || 0,
+        market_cap: price.marketCap || 0,
+        enterprise_value: defaultKeyStatistics.enterpriseValue || 0,
+        pe_ratio: summaryDetail.trailingPE || summaryDetail.forwardPE || 0
+      },
+      currency_info: {
+        original_currency: price.currency || 'USD',
+        converted_to_usd: false,
+        conversion_rate: 1.0,
+        exchange_rate_source: 'none'
+      },
+      historical_financials: historical_financials
+    };
+
+    console.log(`[JS Fallback] Successfully fetched data for ${ticker}: ${historical_financials.length} historical records`);
+    return result;
   } catch (e) {
-    console.log(`[Error] fetchYFinanceDataDirect error: ${e.message}`);
+    console.log(`[JS Fallback] Error: ${e.message}`);
   }
+
+  console.log(`[Error] All data sources failed for ${ticker}`);
   return null;
 }
+
 
 
 async function generateValuation(ticker, method, selectedMultiple, yf_data, sonarFull, userFeedback = '', model = 'x-ai/grok-code-fast-1') {
@@ -414,11 +508,11 @@ async function generateValuation(ticker, method, selectedMultiple, yf_data, sona
   const fy = yf_data?.fy24_financials || {};
   const md = yf_data?.market_data || {};
   const companyName = yf_data?.company_name || ticker;
-  
+
   // Restore original, detailed prompts with strict output format and Sonar + yfinance context
-    let prompt;
-    if (method === 'dcf') {
-      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
+  let prompt;
+  if (method === 'dcf') {
+    prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
 
 The company you will be analyzing is: ${(companyName)}
 
@@ -433,17 +527,17 @@ Use the FY2024 actuals as your starting point and project forward based on:
 3. Your financial analysis expertise to interpret trends and project future performance
 
 1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
-- Revenue: ${(mkNumber(fy.revenue)/1_000_000).toLocaleString()}M
+- Revenue: ${(mkNumber(fy.revenue) / 1_000_000).toLocaleString()}M
 - Gross Margin: ${mkNumber(fy.gross_margin_pct).toFixed(1)}%
-- EBITDA: ${(mkNumber(fy.ebitda)/1_000_000).toLocaleString()}M
-- Net Income: ${(mkNumber(fy.net_income)/1_000_000).toLocaleString()}M
+- EBITDA: ${(mkNumber(fy.ebitda) / 1_000_000).toLocaleString()}M
+- Net Income: ${(mkNumber(fy.net_income) / 1_000_000).toLocaleString()}M
 - EPS: ${mkNumber(fy.eps).toFixed(2)}
-- Shares Outstanding: ${(mkNumber(fy.shares_outstanding)/1_000_000).toLocaleString()}M
+- Shares Outstanding: ${(mkNumber(fy.shares_outstanding) / 1_000_000).toLocaleString()}M
 
 2. MARKET DATA (from yfinance - most updated):
 - Current Price: $${mkNumber(md.current_price).toFixed(2)}
-- Market Cap: ${(mkNumber(md.market_cap)/1_000_000).toLocaleString()}M
-- Enterprise Value: ${md.enterprise_value ? (mkNumber(md.enterprise_value)/1_000_000).toLocaleString() + 'M' : 'N/A'}
+- Market Cap: ${(mkNumber(md.market_cap) / 1_000_000).toLocaleString()}M
+- Enterprise Value: ${md.enterprise_value ? (mkNumber(md.enterprise_value) / 1_000_000).toLocaleString() + 'M' : 'N/A'}
 - P/E Ratio: ${md.pe_ratio ? mkNumber(md.pe_ratio).toFixed(2) : 'N/A'}
 
 FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
@@ -522,8 +616,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
 - EV/FCF: Software (mature stage), Industrial compounders, Capital-light consumer businesses
 - EV/EBITDA: Industrial conglomerates, Telecoms, Infrastructure, Manufacturing, high-growth tech firms
 - Price/Sales: High-growth firms with negative or erratic earnings` : `Use ${selectedMultiple} multiple. For P/E multiples, set enterpriseValue to 0.`;
-      
-      prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
+
+    prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company up to the year 2029. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation using exit multiple valuation.
 
 The company you will be analyzing is: ${(companyName)}
 
@@ -540,17 +634,17 @@ Use the FY2024 actuals as your starting point and project forward based on:
 3. Your financial analysis expertise to interpret trends and project future performance
 
 1. FY2024 ACTUAL FINANCIALS (from yfinance - most updated):
-- Revenue: ${(mkNumber(fy.revenue)/1_000_000).toLocaleString()}M
+- Revenue: ${(mkNumber(fy.revenue) / 1_000_000).toLocaleString()}M
 - Gross Margin: ${mkNumber(fy.gross_margin_pct).toFixed(1)}%
-- EBITDA: ${(mkNumber(fy.ebitda)/1_000_000).toLocaleString()}M
-- Net Income: ${(mkNumber(fy.net_income)/1_000_000).toLocaleString()}M
+- EBITDA: ${(mkNumber(fy.ebitda) / 1_000_000).toLocaleString()}M
+- Net Income: ${(mkNumber(fy.net_income) / 1_000_000).toLocaleString()}M
 - EPS: ${mkNumber(fy.eps).toFixed(2)}
-- Shares Outstanding: ${(mkNumber(fy.shares_outstanding)/1_000_000).toLocaleString()}M
+- Shares Outstanding: ${(mkNumber(fy.shares_outstanding) / 1_000_000).toLocaleString()}M
 
 2. MARKET DATA (from yfinance - most updated):
 - Current Price: $${mkNumber(md.current_price).toFixed(2)}
-- Market Cap: ${(mkNumber(md.market_cap)/1_000_000).toLocaleString()}M
-- Enterprise Value: ${md.enterprise_value ? (mkNumber(md.enterprise_value)/1_000_000).toLocaleString() + 'M' : 'N/A'}
+- Market Cap: ${(mkNumber(md.market_cap) / 1_000_000).toLocaleString()}M
+- Enterprise Value: ${md.enterprise_value ? (mkNumber(md.enterprise_value) / 1_000_000).toLocaleString() + 'M' : 'N/A'}
 - P/E Ratio: ${md.pe_ratio ? mkNumber(md.pe_ratio).toFixed(2) : 'N/A'}
 
 FULL SONAR RESPONSE - LATEST DEVELOPMENTS & INSIGHTS:
@@ -633,16 +727,16 @@ Assumptions and Justifications:
 </forecast>
 
 Return ONLY the <forecast> section as specified above, without any additional commentary or explanations outside of the designated areas within the forecast.`;
-    }
+  }
 
   const body = {
-      model: model,
-      messages: [
+    model: model,
+    messages: [
       { role: 'system', content: 'You are a skilled financial analyst. You MUST return your response in the EXACT format specified in the user prompt. The response MUST start with <forecast> and end with </forecast>. Do not include any text outside these tags.' },
       { role: 'user', content: prompt }
-      ],
-      temperature: 0.3,
-      max_tokens: 2000
+    ],
+    temperature: 0.3,
+    max_tokens: 2000
   };
 
   const data = await makeOpenRouterRequest(body);
@@ -658,7 +752,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
 
   // Parse simple forecast table into projections for the UI charts
   const lines = forecastText.split('\n').map(l => l.trim()).filter(Boolean);
-      let inTable = false;
+  let inTable = false;
   let header = null;
   let headerIdx = {};
   const splitRow = (line) => line.split('|').map(c => c.trim()).filter(c => c.length > 0);
@@ -685,7 +779,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       const fcf = Number(fy.fcf || 0) / 1_000_000;
       if (rev > 0 && fcf > 0) return (fcf / rev) * 100;
       if (typeof fy.fcf_margin_pct === 'number') return Number(fy.fcf_margin_pct);
-    } catch {}
+    } catch { }
     return null;
   })();
   for (const raw of lines) {
@@ -718,7 +812,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
               headerIdx.fcf = -1;
             }
           }
-        } catch {}
+        } catch { }
         continue;
       }
       continue;
@@ -758,7 +852,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
     projections.push({
       year: (yearLabel.match(/\b(20\d{2})\b/)?.[1]) || yearLabel,
       revenue,
-        revenueGrowth,
+      revenueGrowth,
       grossProfit,
       grossMargin,
       ebitda: revenue * (ebitdaMargin / 100),
@@ -779,7 +873,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       // Recompute revenue growth from series (ignore LLM-provided value)
       if (i === 0) {
         p.revenueGrowth = 0;
-    } else {
+      } else {
         const prev = projections[i - 1];
         const prevRev = Number(prev?.revenue || 0);
         const curRev = Number(p?.revenue || 0);
@@ -929,7 +1023,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
       upside = ((fairValue - currentPrice) / currentPrice) * 100;
       cagr = (Math.pow(fairValue / currentPrice, 1 / yearsTo2029) - 1) * 100;
     }
-        } else {
+  } else {
     if (fvMillionMatch) fairValue = parseFloat(fvMillionMatch[1].replace(/,/g, ''));
     const marketCapM = mkNumber(md.market_cap) / 1_000_000;
     if (marketCapM > 0 && fairValue > 0) {
@@ -939,10 +1033,10 @@ Return ONLY the <forecast> section as specified above, without any additional co
   }
 
   return {
-        rawForecast: forecastText,
+    rawForecast: forecastText,
     rawFinancialAnalysis: '',
-        companyName: companyName,
-      method,
+    companyName: companyName,
+    method,
     fairValue,
     currentSharePrice: currentPrice,
     discountRate,
