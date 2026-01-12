@@ -368,53 +368,74 @@ async function fetchLatestWithSonar(ticker) {
   }
 }
 
-// Direct yfinance fetch using Python Vercel serverless function with JS fallback
+// Direct yfinance fetch using Python script execution with JS fallback
 async function fetchYFinanceDataDirect(ticker, hdrs) {
-  // Try Python API first
+  // Try spawning Python script directly (avoids Vercel HTTP 401 protection issues)
   try {
-    console.log(`[Python API] Fetching data for ${ticker} using Python serverless function`);
+    console.log(`[Python Script] Fetching data for ${ticker} by running Python script directly`);
 
-    // Call the Python serverless function at /api/py-yf
-    const baseUrl = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3000';
+    const scriptPath = `${process.cwd()}/scripts/fetch_yfinance.py`;
+    const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
 
-    const url = `${baseUrl}/api/py-yf?ticker=${encodeURIComponent(ticker)}`;
-    console.log(`[Python API] Calling ${url}`);
-
-    // Build headers with Vercel protection bypass if available
-    const headers = {
-      'Content-Type': 'application/json',
-    };
-    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
-      headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    let pythonCmd, cmd, args;
+    if (isVercel) {
+      // On Vercel, use python3 from PATH
+      pythonCmd = 'python3';
+      cmd = pythonCmd;
+      args = [scriptPath, ticker];
+    } else {
+      // Local development - use virtual environment
+      pythonCmd = `${process.cwd()}/venv/bin/python3`;
+      const isDarwin = process.platform === 'darwin';
+      const isNodeRosetta = process.arch === 'x64';
+      cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
+      args = isDarwin && isNodeRosetta ? ['-arm64', pythonCmd, scriptPath, ticker] : [scriptPath, ticker];
     }
-    if (process.env.VERCEL_PROTECTION_BYPASS) {
-      headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
-    }
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers,
+    console.log(`[Python Script] Running: ${cmd} ${args.join(' ')}`);
+
+    const py = await new Promise((resolve) => {
+      try {
+        const child = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => { stdout += d.toString(); });
+        child.stderr.on('data', (d) => { stderr += d.toString(); });
+        child.on('close', (code) => {
+          console.log(`[Python Script] Exit code: ${code}`);
+          if (code !== 0) {
+            console.log(`[Python Script] stderr: ${stderr.substring(0, 500)}`);
+            return resolve(null);
+          }
+          try {
+            const result = JSON.parse(stdout);
+            console.log(`[Python Script] Success: ${Array.isArray(result.historical_financials) ? result.historical_financials.length : 0} historical records`);
+            resolve(result);
+          } catch (e) {
+            console.log(`[Python Script] JSON parse error: ${e.message}`);
+            console.log(`[Python Script] Raw stdout: ${stdout.substring(0, 300)}`);
+            resolve(null);
+          }
+        });
+        child.on('error', (err) => {
+          console.log(`[Python Script] Spawn error: ${err.message}`);
+          resolve(null);
+        });
+      } catch (e) {
+        console.log(`[Python Script] Setup error: ${e.message}`);
+        resolve(null);
+      }
     });
 
-    if (response.ok) {
-      const data = await response.json();
-
-      if (data && Array.isArray(data.historical_financials) && data.historical_financials.length > 0) {
-        console.log(`[Python API] Successfully fetched data for ${ticker}: ${data.historical_financials.length} historical records`);
-        return data;
-      }
-      console.log(`[Python API] No valid data returned for ${ticker}`);
-    } else {
-      console.log(`[Python API] Error: ${response.status} ${response.statusText}`);
+    if (py && Array.isArray(py.historical_financials) && py.historical_financials.length > 0) {
+      return py;
     }
   } catch (e) {
-    console.log(`[Python API] Error: ${e.message}`);
+    console.log(`[Python Script] Error: ${e.message}`);
   }
 
   // Fallback to yahoo-finance2 JS library
-  console.log(`[JS Fallback] Python API failed, trying yahoo-finance2 for ${ticker}`);
+  console.log(`[JS Fallback] Python script failed, trying yahoo-finance2 for ${ticker}`);
   try {
     const quoteSummary = await yahooFinance.quoteSummary(ticker, {
       modules: ['financialData', 'incomeStatementHistory', 'incomeStatementHistoryQuarterly', 'balanceSheetHistory', 'cashflowStatementHistory', 'defaultKeyStatistics', 'summaryDetail', 'price']
