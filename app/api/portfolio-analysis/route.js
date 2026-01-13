@@ -605,8 +605,9 @@ async function getValuationExpectedReturns(holdings, method) {
       const mockRequest = { url: mockUrl.toString() };
 
       // Call the dcf-valuation GET function directly with timeout
+      // Timeout set to 58s to maximize time for LLM while staying under Vercel's 60s function limit
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Valuation timeout')), 55000)
+        setTimeout(() => reject(new Error('Valuation timeout')), 58000)
       );
 
       const valuationResponse = await Promise.race([
