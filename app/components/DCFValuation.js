@@ -121,7 +121,9 @@ export default function DCFValuation() {
       });
 
       // Validate the raw data structure
-      if (!data.rawForecast) {
+      // Agentic mode returns projections directly, standard mode returns rawForecast
+      const isAgenticResponse = data.source === 'agentic' && Array.isArray(data.projections);
+      if (!data.rawForecast && !isAgenticResponse) {
         console.error('Missing raw forecast data');
         throw new Error('Invalid data structure: Missing forecast data');
       }
@@ -1927,9 +1929,9 @@ export default function DCFValuation() {
                       <div key={idx} className="border-l-4 border-blue-300 pl-4 py-2">
                         <div className="flex items-center gap-2 mb-1">
                           <span className={`px-2 py-0.5 rounded text-xs font-medium ${step.step === 'analysis' ? 'bg-purple-100 text-purple-700' :
-                              step.step === 'research' ? 'bg-blue-100 text-blue-700' :
-                                step.step === 'forecast' ? 'bg-green-100 text-green-700' :
-                                  'bg-orange-100 text-orange-700'
+                            step.step === 'research' ? 'bg-blue-100 text-blue-700' :
+                              step.step === 'forecast' ? 'bg-green-100 text-green-700' :
+                                'bg-orange-100 text-orange-700'
                             }`}>
                             {step.step.charAt(0).toUpperCase() + step.step.slice(1)}
                           </span>
