@@ -1028,18 +1028,39 @@ export default function DCFValuation() {
                 )}
                 {valuation.source === 'agentic' && (
                   <>
-                    <div>
-                      <h3 className="text-sm font-medium text-gray-500">Exit Multiple</h3>
-                      <p className="text-2xl font-bold">
-                        {valuation.exitMultipleValue || 'N/A'}x {valuation.exitMultipleType || 'P/E'}
-                      </p>
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-medium text-gray-500">Current Price</h3>
-                      <p className="text-2xl font-bold text-gray-600">
-                        ${valuation.currentSharePrice?.toFixed(2) || 'N/A'}
-                      </p>
-                    </div>
+                    {/* DCF mode: show WACC and Terminal Growth */}
+                    {(valuation.method === 'dcf' || valuation.valuationMethod === 'dcf') ? (
+                      <>
+                        <div>
+                          <h3 className="text-sm font-medium text-gray-500">WACC</h3>
+                          <p className="text-2xl font-bold">
+                            {valuation.dcfCalculation?.wacc?.toFixed(1) || '10.0'}%
+                          </p>
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-medium text-gray-500">Terminal Growth</h3>
+                          <p className="text-2xl font-bold">
+                            {valuation.dcfCalculation?.terminalGrowthRate?.toFixed(1) || '2.5'}%
+                          </p>
+                        </div>
+                      </>
+                    ) : (
+                      /* Exit Multiple mode: show multiple info */
+                      <>
+                        <div>
+                          <h3 className="text-sm font-medium text-gray-500">Exit Multiple</h3>
+                          <p className="text-2xl font-bold">
+                            {valuation.exitMultipleValue || 'N/A'}x {valuation.exitMultipleType || 'P/E'}
+                          </p>
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-medium text-gray-500">Current Price</h3>
+                          <p className="text-2xl font-bold text-gray-600">
+                            ${valuation.currentSharePrice?.toFixed(2) || 'N/A'}
+                          </p>
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -1129,9 +1150,9 @@ export default function DCFValuation() {
                             <div className="text-gray-500 text-xs font-medium uppercase mb-2">DCF Breakdown</div>
                             <div className="space-y-1 font-mono text-sm">
                               <div>PV of FCFs: ${valuation.dcfCalculation.pv_fcf_sum?.toFixed(0)}M</div>
-                              <div>+ Terminal Value: ${valuation.dcfCalculation.terminal_value?.toFixed(0)}M</div>
+                              <div>+ PV of Terminal Value: ${valuation.dcfCalculation.pv_terminal_value?.toFixed(0)}M</div>
                               <div className="border-t pt-1">= Enterprise Value: ${valuation.dcfCalculation.enterprise_value?.toFixed(0)}M</div>
-                              <div>− Net Debt: ${valuation.dcfCalculation.net_debt || 0}M</div>
+                              <div>− Net Debt: ${valuation.dcfCalculation.net_debt?.toFixed(0) || 0}M</div>
                               <div className="border-t pt-1">= Equity Value: ${valuation.dcfCalculation.equity_value?.toFixed(0)}M</div>
                               <div>÷ Shares: {(valuation.dcfCalculation.shares_outstanding / 1_000_000)?.toFixed(1)}M</div>
                               <div className="border-t pt-1 font-bold">= Fair Value/Share: ${valuation.dcfCalculation.fair_value_per_share?.toFixed(2)}</div>

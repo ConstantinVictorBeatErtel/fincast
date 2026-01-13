@@ -696,7 +696,45 @@ Output JSON:
                         fair_value_per_share: dcfFairValue,
                         fcf_projections: fcfProjections
                     };
+                } else {
+                    // Fallback: WACC <= terminal growth (invalid), use FCF data for display
+                    console.log('[AgenticForecaster] DCF calculation invalid (WACC <= terminal growth), using fallback');
+                    dcfCalculationData = {
+                        wacc: wacc * 100,
+                        terminalGrowthRate: terminalGrowth * 100,
+                        pv_fcf_sum: pvFcfSum / 1_000_000,
+                        terminal_value: 0,
+                        pv_terminal_value: 0,
+                        enterprise_value: pvFcfSum / 1_000_000,
+                        net_debt: netDebt / 1_000_000,
+                        equity_value: (pvFcfSum - netDebt) / 1_000_000,
+                        shares_outstanding: sharesOutstanding,
+                        fair_value_per_share: 0,
+                        fcf_projections: fcfProjections,
+                        calculation_issue: 'WACC must be greater than terminal growth rate'
+                    };
                 }
+            } else if (isDCF) {
+                // DCF requested but no projections available
+                console.log('[AgenticForecaster] DCF requested but no projections available, using fallback');
+                dcfCalculationData = {
+                    wacc: 10,
+                    terminalGrowthRate: 2.5,
+                    pv_fcf_sum: 0,
+                    terminal_value: 0,
+                    enterprise_value: 0,
+                    net_debt: netDebt / 1_000_000,
+                    equity_value: 0,
+                    shares_outstanding: sharesOutstanding,
+                    fair_value_per_share: 0,
+                    calculation_issue: 'No projection data available for DCF calculation'
+                };
+            }
+
+            // If DCF was requested but calculation failed, fall back to exit multiple
+            if (isDCF && dcfFairValue === 0 && calculatedValue === 0) {
+                console.log('[AgenticForecaster] DCF calculation produced no value, falling back to LLM fair value');
+                // Use LLM's fair value as fallback
             }
 
             // Determine fair value based on method
