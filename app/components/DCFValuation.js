@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,6 +28,7 @@ export default function DCFValuation() {
   const [analysisMode, setAnalysisMode] = useState('standard'); // 'standard' or 'agentic'
   const [agenticProgress, setAgenticProgress] = useState(null); // { step: 1-4, message: string }
   const [showResearchTrail, setShowResearchTrail] = useState(false);
+  const loadingRef = useRef(false); // Ref for tracking loading state in async callbacks
 
   // Debug effect to log valuation changes
   useEffect(() => {
@@ -72,26 +73,26 @@ export default function DCFValuation() {
     }
 
     try {
-      // Route to agentic API if in agentic mode
+      // Route to agentic API if in agentic mode (pass method for DCF vs exit-multiple)
       const apiUrl = analysisMode === 'agentic'
-        ? `/api/agentic-valuation?ticker=${ticker}`
+        ? `/api/agentic-valuation?ticker=${ticker}&method=${method}`
         : `/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}&llm=1`;
 
       // Set progress for agentic mode with simulated step progression
-      let progressInterval = null;
+      loadingRef.current = true;
       if (analysisMode === 'agentic') {
         setAgenticProgress({ step: 1, message: 'Analyzing historical data...' });
 
-        // Simulate progress through steps (actual timing varies, this is approximate)
+        // Simulate progress through steps using ref to check if still loading
         const progressSteps = [
-          { step: 2, message: 'Researching web for latest developments...', delay: 15000 },
-          { step: 3, message: 'Generating financial projections...', delay: 45000 },
-          { step: 4, message: 'Validating forecast assumptions...', delay: 75000 }
+          { step: 2, message: 'Researching web for latest developments...', delay: 12000 },
+          { step: 3, message: 'Generating financial projections...', delay: 35000 },
+          { step: 4, message: 'Validating forecast assumptions...', delay: 70000 }
         ];
 
         progressSteps.forEach(({ step, message, delay }) => {
           setTimeout(() => {
-            if (loading) setAgenticProgress({ step, message });
+            if (loadingRef.current) setAgenticProgress({ step, message });
           }, delay);
         });
       }
@@ -304,6 +305,7 @@ export default function DCFValuation() {
       setError(err.message);
       setRetrying(false);
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
   };
@@ -459,7 +461,12 @@ export default function DCFValuation() {
       }
 
       // Guard: only replace current valuation if feedback response is usable
-      const hasUsableForecast = !!newValuation?.rawForecast &&
+      // Agentic mode returns projections array with source='agentic'
+      const isAgenticUsable = newValuation?.source === 'agentic' &&
+        Array.isArray(newValuation.projections) && newValuation.projections.length > 0;
+
+      const hasUsableForecast = isAgenticUsable || (
+        !!newValuation?.rawForecast &&
         (
           newValuation.rawForecast.includes('Year | Revenue') ||
           Array.isArray(newValuation.tableData) && newValuation.tableData.length > 0 ||
@@ -470,7 +477,8 @@ export default function DCFValuation() {
             !!newValuation.sections.assumptions ||
             !!newValuation.sections.financialAnalysis
           ))
-        );
+        )
+      );
 
       if (!hasUsableForecast) {
         console.warn('Feedback response missing usable forecast. Keeping existing results.');
@@ -932,10 +940,10 @@ export default function DCFValuation() {
                   <div
                     key={step}
                     className={`w-3 h-3 rounded-full transition-all duration-500 ${step < agenticProgress.step
-                        ? 'bg-green-500'
-                        : step === agenticProgress.step
-                          ? 'bg-blue-500 animate-pulse'
-                          : 'bg-gray-300'
+                      ? 'bg-green-500'
+                      : step === agenticProgress.step
+                        ? 'bg-blue-500 animate-pulse'
+                        : 'bg-gray-300'
                       }`}
                   />
                 ))}
