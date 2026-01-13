@@ -1099,10 +1099,54 @@ export default function DCFValuation() {
                   </div>
                 )}
 
-                {/* Agentic mode: Calculation breakdown */}
+                {/* Agentic mode: DCF Calculation breakdown */}
+                {valuation.source === 'agentic' && valuation.dcfCalculation && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <h4 className="text-sm font-medium text-gray-600 mb-3">DCF Valuation Calculation</h4>
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <div className="space-y-3 text-sm">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                          <div className="bg-white p-3 rounded-lg">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-1">WACC</div>
+                            <div className="text-lg font-semibold">{valuation.dcfCalculation.wacc?.toFixed(1)}%</div>
+                          </div>
+                          <div className="bg-white p-3 rounded-lg">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-1">Terminal Growth</div>
+                            <div className="text-lg font-semibold">{valuation.dcfCalculation.terminalGrowthRate?.toFixed(1)}%</div>
+                          </div>
+                          <div className="bg-white p-3 rounded-lg">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-1">Fair Value</div>
+                            <div className="text-lg font-semibold text-green-600">${valuation.dcfCalculation.fairValue?.toFixed(2)}</div>
+                          </div>
+                          <div className="bg-white p-3 rounded-lg">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-1">Current Price</div>
+                            <div className="text-lg font-semibold text-gray-600">${valuation.dcfCalculation.currentPrice?.toFixed(2)}</div>
+                          </div>
+                        </div>
+
+                        {valuation.dcfCalculation.pv_fcf_sum && (
+                          <div className="bg-white p-3 rounded-lg border border-green-100">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-2">DCF Breakdown</div>
+                            <div className="space-y-1 font-mono text-sm">
+                              <div>PV of FCFs: ${valuation.dcfCalculation.pv_fcf_sum?.toFixed(0)}M</div>
+                              <div>+ Terminal Value: ${valuation.dcfCalculation.terminal_value?.toFixed(0)}M</div>
+                              <div className="border-t pt-1">= Enterprise Value: ${valuation.dcfCalculation.enterprise_value?.toFixed(0)}M</div>
+                              <div>− Net Debt: ${valuation.dcfCalculation.net_debt || 0}M</div>
+                              <div className="border-t pt-1">= Equity Value: ${valuation.dcfCalculation.equity_value?.toFixed(0)}M</div>
+                              <div>÷ Shares: {(valuation.dcfCalculation.shares_outstanding / 1_000_000)?.toFixed(1)}M</div>
+                              <div className="border-t pt-1 font-bold">= Fair Value/Share: ${valuation.dcfCalculation.fair_value_per_share?.toFixed(2)}</div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Agentic mode: Exit Multiple Calculation breakdown */}
                 {valuation.source === 'agentic' && valuation.exitMultipleCalculation && (
                   <div className="mt-4 pt-4 border-t border-gray-200">
-                    <h4 className="text-sm font-medium text-gray-600 mb-3">Valuation Calculation</h4>
+                    <h4 className="text-sm font-medium text-gray-600 mb-3">Exit Multiple Valuation</h4>
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                       <div className="space-y-3 text-sm">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1124,10 +1168,24 @@ export default function DCFValuation() {
                           </div>
                         </div>
 
-                        {valuation.exitMultipleCalculation.calculationMethod && (
+                        {/* EV-to-Share Bridge for EV-based multiples */}
+                        {valuation.exitMultipleCalculation.isEVBased ? (
+                          <div className="bg-white p-3 rounded-lg border border-blue-100">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-2">EV to Per-Share Calculation</div>
+                            <div className="space-y-1 font-mono text-sm">
+                              <div>{valuation.exitMultipleCalculation.calculationMethod}</div>
+                              <div className="border-t pt-1">Enterprise Value: ${valuation.exitMultipleCalculation.enterpriseValue?.toFixed(0)}M</div>
+                              <div>− Net Debt: ${valuation.exitMultipleCalculation.netDebt?.toFixed(0)}M</div>
+                              <div className="border-t pt-1">= Equity Value: ${valuation.exitMultipleCalculation.equityValue?.toFixed(0)}M</div>
+                              <div>÷ Shares: {valuation.exitMultipleCalculation.sharesOutstandingMillions?.toFixed(1)}M</div>
+                              <div className="border-t pt-1 font-bold">= Fair Value/Share: ${valuation.exitMultipleCalculation.fairValue?.toFixed(2)}</div>
+                            </div>
+                          </div>
+                        ) : (
                           <div className="bg-white p-3 rounded-lg border border-blue-100">
                             <div className="text-gray-500 text-xs font-medium uppercase mb-1">Calculation</div>
                             <div className="font-mono text-sm">{valuation.exitMultipleCalculation.calculationMethod}</div>
+                            <div className="font-mono text-sm mt-1">= Fair Value/Share: ${valuation.exitMultipleCalculation.fairValue?.toFixed(2)}</div>
                           </div>
                         )}
 

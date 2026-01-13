@@ -603,16 +603,118 @@ Output JSON:
                 calculatedValue = sharesOutstanding > 0 ? equityValue / sharesOutstanding : 0;
                 metricUsed = terminalFcf / 1_000_000;
                 calculationMethod = `$${(terminalFcf / 1_000_000).toFixed(0)}M FCF × ${exitMultipleValue}x = $${(enterpriseValue / 1_000_000).toFixed(0)}M EV`;
+            } else if (exitMultipleType === 'Price/Sales' || exitMultipleType === 'P/S') {
+                // Price/Sales: Enterprise Value / Sales
+                const enterpriseValue = terminalRevenue * exitMultipleValue;
+                const netDebt = companyData?.market_data?.net_debt || 0;
+                const equityValue = enterpriseValue - netDebt;
+                calculatedValue = sharesOutstanding > 0 ? equityValue / sharesOutstanding : 0;
+                metricUsed = terminalRevenue / 1_000_000;
+                calculationMethod = `$${(terminalRevenue / 1_000_000).toFixed(0)}M Revenue × ${exitMultipleValue}x = $${(enterpriseValue / 1_000_000).toFixed(0)}M EV`;
             }
 
-            // Fallback to LLM's fair value if calculation failed
-            const fairValue = calculatedValue > 0 ? calculatedValue : (draftForecast.fair_value_per_share || 0);
+            // Get net debt for bridge calculation
+            const netDebt = companyData?.market_data?.net_debt || 0;
+
+            // Calculate EV for bridge (for EV-based multiples)
+            let enterpriseValue = 0;
+            let equityValue = 0;
+            if (exitMultipleType === 'EV/EBITDA') {
+                enterpriseValue = terminalEbitda * exitMultipleValue;
+                equityValue = enterpriseValue - netDebt;
+            } else if (exitMultipleType === 'EV/FCF') {
+                enterpriseValue = terminalFcf * exitMultipleValue;
+                equityValue = enterpriseValue - netDebt;
+            } else if (exitMultipleType === 'Price/Sales' || exitMultipleType === 'P/S') {
+                enterpriseValue = terminalRevenue * exitMultipleValue;
+                equityValue = enterpriseValue - netDebt;
+            }
+
+            // Check if this is a DCF valuation
+            const isDCF = this.valuationMethod === 'dcf' || draftForecast.valuation_method === 'DCF';
+
+            // SERVER-SIDE DCF CALCULATION (always compute, don't rely on LLM)
+            let dcfFairValue = 0;
+            let dcfCalculationData = null;
+
+            if (isDCF && projections.length > 0) {
+                // Get WACC and terminal growth rate (from LLM or use defaults)
+                const wacc = (draftForecast.wacc || 10) / 100; // Convert percentage to decimal
+                const terminalGrowth = (draftForecast.terminal_growth_rate || 2.5) / 100;
+
+                // Calculate present value of each year's FCF
+                let pvFcfSum = 0;
+                const fcfProjections = [];
+
+                for (let i = 0; i < projections.length; i++) {
+                    const proj = projections[i];
+                    const revenue = Number(proj.revenue || 0) * 1_000_000; // Convert from millions
+                    const fcfMargin = Number(proj.fcfMargin || 0) / 100;
+                    const fcf = revenue * fcfMargin;
+
+                    // Discount factor = 1 / (1 + wacc)^(year)
+                    const year = i + 1;
+                    const discountFactor = 1 / Math.pow(1 + wacc, year);
+                    const pvFcf = fcf * discountFactor;
+
+                    pvFcfSum += pvFcf;
+                    fcfProjections.push({
+                        year: proj.year,
+                        fcf: fcf / 1_000_000, // Back to millions
+                        discountFactor,
+                        pvFcf: pvFcf / 1_000_000
+                    });
+                }
+
+                // Calculate terminal value using Gordon Growth Model
+                // TV = FCF_terminal × (1 + g) / (WACC - g)
+                if (wacc > terminalGrowth) {
+                    const terminalFcfValue = terminalFcf; // Already in full dollars from earlier
+                    const terminalValue = (terminalFcfValue * (1 + terminalGrowth)) / (wacc - terminalGrowth);
+
+                    // Discount terminal value to present
+                    const terminalYearNumber = projections.length;
+                    const tvDiscountFactor = 1 / Math.pow(1 + wacc, terminalYearNumber);
+                    const pvTerminalValue = terminalValue * tvDiscountFactor;
+
+                    // Total enterprise value = PV of FCFs + PV of Terminal Value
+                    const dcfEnterpriseValue = pvFcfSum + pvTerminalValue;
+                    const dcfEquityValue = dcfEnterpriseValue - netDebt;
+
+                    dcfFairValue = sharesOutstanding > 0 ? dcfEquityValue / sharesOutstanding : 0;
+
+                    dcfCalculationData = {
+                        wacc: wacc * 100, // Back to percentage for display
+                        terminalGrowthRate: terminalGrowth * 100,
+                        pv_fcf_sum: pvFcfSum / 1_000_000,
+                        terminal_value: terminalValue / 1_000_000,
+                        pv_terminal_value: pvTerminalValue / 1_000_000,
+                        enterprise_value: dcfEnterpriseValue / 1_000_000,
+                        net_debt: netDebt / 1_000_000,
+                        equity_value: dcfEquityValue / 1_000_000,
+                        shares_outstanding: sharesOutstanding,
+                        fair_value_per_share: dcfFairValue,
+                        fcf_projections: fcfProjections
+                    };
+                }
+            }
+
+            // Determine fair value based on method
+            let fairValue;
+            if (isDCF && dcfFairValue > 0) {
+                fairValue = dcfFairValue;
+            } else if (calculatedValue > 0) {
+                fairValue = calculatedValue;
+            } else {
+                fairValue = draftForecast.fair_value_per_share || 0;
+            }
+
             const upside = currentPrice > 0 && fairValue > 0
                 ? ((fairValue - currentPrice) / currentPrice) * 100
                 : 0;
 
             // Build calculation breakdown for frontend
-            const exitMultipleCalculation = {
+            const exitMultipleCalculation = isDCF ? null : {
                 terminalYear: terminalYear.year || 'FY30',
                 terminalRevenue: terminalRevenue / 1_000_000,
                 terminalEbitda: terminalEbitda / 1_000_000,
@@ -623,16 +725,32 @@ Output JSON:
                 exitMultipleValue,
                 metricUsed,
                 calculationMethod,
+                // Add EV-to-share bridge for EV-based multiples
+                enterpriseValue: enterpriseValue / 1_000_000,
+                netDebt: netDebt / 1_000_000,
+                equityValue: equityValue / 1_000_000,
+                sharesOutstanding: sharesOutstanding,
+                sharesOutstandingMillions: sharesOutstanding / 1_000_000,
                 fairValue,
                 currentPrice,
                 upside,
-                sharesOutstanding
+                // For P/E, show the EPS × multiple calculation
+                isEVBased: ['EV/EBITDA', 'EV/FCF', 'Price/Sales', 'P/S'].includes(exitMultipleType)
             };
+
+            // Build DCF calculation breakdown (use server-computed data)
+            const dcfCalculation = isDCF && dcfCalculationData ? {
+                ...dcfCalculationData,
+                fairValue,
+                currentPrice,
+                upside
+            } : null;
 
             return {
                 // Standard forecast fields (compatible with existing UI)
                 companyName: companyData?.company_name || ticker,
-                method: 'agentic',
+                method: isDCF ? 'dcf' : 'exit-multiple',
+                valuationMethod: isDCF ? 'dcf' : 'exit-multiple',
                 fairValue: fairValue,
                 currentSharePrice: currentPrice,
                 exitMultipleType: exitMultipleType,
@@ -648,8 +766,9 @@ Output JSON:
                     .map(s => s.output?.findings || '')
                     .join('\n\n'),
 
-                // Calculation breakdown
+                // Calculation breakdowns (one will be null depending on method)
                 exitMultipleCalculation: exitMultipleCalculation,
+                dcfCalculation: dcfCalculation,
 
                 // Agentic-specific fields
                 research_trail: this.researchTrail,
