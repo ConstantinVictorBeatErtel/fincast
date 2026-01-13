@@ -994,7 +994,7 @@ export default function DCFValuation() {
                     {valuation.method}
                   </p>
                 </div>
-                {valuation.method === 'dcf' && (
+                {valuation.method === 'dcf' && valuation.source !== 'agentic' && (
                   <>
                     <div>
                       <h3 className="text-sm font-medium text-gray-500">Discount Rate</h3>
