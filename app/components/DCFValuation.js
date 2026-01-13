@@ -320,12 +320,17 @@ export default function DCFValuation() {
     setError(null);
 
     try {
-      const response = await fetch(`/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}&llm=1`, {
-        method: 'POST',
+      // Route to appropriate API based on analysis mode
+      const apiUrl = analysisMode === 'agentic'
+        ? `/api/agentic-valuation?ticker=${ticker}&feedback=${encodeURIComponent(feedback)}`
+        : `/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}&llm=1`;
+
+      const response = await fetch(apiUrl, {
+        method: analysisMode === 'agentic' ? 'GET' : 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ feedback }),
+        body: analysisMode === 'agentic' ? undefined : JSON.stringify({ feedback }),
       });
 
       let data;
@@ -843,6 +848,12 @@ export default function DCFValuation() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {/* Usage Instructions */}
+      <div className="mb-6 text-sm text-gray-600 bg-gray-50 p-4 rounded-lg">
+        <p className="font-medium mb-1">How to use:</p>
+        <p>Enter a stock ticker, select a valuation method, and click Generate. <strong>Standard Forecast</strong> uses AI + market data for quick analysis (~10s). <strong>Agentic Analysis</strong> researches the web and validates assumptions for deeper insights (~1-2 min).</p>
+      </div>
+
       <form onSubmit={handleSubmit} className="mb-8">
         <div className="flex gap-4 flex-wrap">
           <Input
@@ -910,30 +921,14 @@ export default function DCFValuation() {
         <div className="flex flex-col justify-center items-center py-8 space-y-4">
           <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
 
-          {/* Agentic progress indicator */}
+          {/* Agentic progress indicator - simplified */}
           {analysisMode === 'agentic' && agenticProgress && (
-            <div className="text-center space-y-2">
+            <div className="text-center">
               <p className="text-sm font-medium text-gray-700">
-                Step {agenticProgress.step}/4: {agenticProgress.message}
+                {agenticProgress.message}
               </p>
-              <div className="flex gap-2 justify-center">
-                {[1, 2, 3, 4].map((step) => (
-                  <div
-                    key={step}
-                    className={`w-3 h-3 rounded-full ${step < agenticProgress.step
-                      ? 'bg-green-500'
-                      : step === agenticProgress.step
-                        ? 'bg-blue-500 animate-pulse'
-                        : 'bg-gray-300'
-                      }`}
-                  />
-                ))}
-              </div>
-              <p className="text-xs text-gray-500">
-                {agenticProgress.step === 1 && '⏳ Analyzing data and creating research plan...'}
-                {agenticProgress.step === 2 && '🔍 Searching the web for recent developments...'}
-                {agenticProgress.step === 3 && '📊 Generating forecast with research insights...'}
-                {agenticProgress.step === 4 && '✅ Validating assumptions and confidence...'}
+              <p className="text-xs text-gray-400 mt-1">
+                This may take 1-2 minutes
               </p>
             </div>
           )}
@@ -960,11 +955,15 @@ export default function DCFValuation() {
                 <div>
                   <h3 className="text-sm font-medium text-gray-500">Fair Value</h3>
                   <p className="text-2xl font-bold">
-                    {valuation.method === 'exit-multiple'
-                      ? (typeof valuation.currentSharePrice === 'number' && typeof valuation.upside === 'number'
-                        ? `$${(valuation.currentSharePrice * (1 + (valuation.upside / 100))).toFixed(2)} per share`
+                    {valuation.source === 'agentic'
+                      ? (typeof valuation.fairValue === 'number'
+                        ? `$${valuation.fairValue.toFixed(2)} per share`
                         : 'N/A')
-                      : `$${valuation.fairValue?.toLocaleString()} million`
+                      : valuation.method === 'exit-multiple'
+                        ? (typeof valuation.currentSharePrice === 'number' && typeof valuation.upside === 'number'
+                          ? `$${(valuation.currentSharePrice * (1 + (valuation.upside / 100))).toFixed(2)} per share`
+                          : 'N/A')
+                        : `$${valuation.fairValue?.toLocaleString()} million`
                     }
                   </p>
                 </div>
@@ -1006,6 +1005,22 @@ export default function DCFValuation() {
                     </div>
                   </>
                 )}
+                {valuation.source === 'agentic' && (
+                  <>
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-500">Exit Multiple</h3>
+                      <p className="text-2xl font-bold">
+                        {valuation.exitMultipleValue || 'N/A'}x {valuation.exitMultipleType || 'P/E'}
+                      </p>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-medium text-gray-500">Current Price</h3>
+                      <p className="text-2xl font-bold text-gray-600">
+                        ${valuation.currentSharePrice?.toFixed(2) || 'N/A'}
+                      </p>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Add CAGR display */}
@@ -1018,7 +1033,14 @@ export default function DCFValuation() {
                     </p>
                   </div>
                   <div>
-                    <h3 className="text-sm font-medium text-gray-500">2029 Upside</h3>
+                    <h3 className="text-sm font-medium text-gray-500">
+                      {(() => {
+                        // Get the last projection year for dynamic label
+                        const lastProj = valuation.projections?.[valuation.projections?.length - 1];
+                        const lastYear = lastProj?.year ? String(lastProj.year).replace('FY', '20') : '2029';
+                        return `${lastYear.length === 2 ? '20' + lastYear : lastYear} Upside`;
+                      })()}
+                    </h3>
                     <p className="text-xl font-bold text-green-600">
                       {valuation.upside?.toFixed(1) || 0}%
                     </p>
@@ -1096,12 +1118,27 @@ export default function DCFValuation() {
                       const latestHistoricalYear = historicalYears.length > 0 ? Math.max(...historicalYears) : 2024;
 
                       // Filter projections to only show years AFTER the latest historical year
+                      // Also calculate first year growth from last historical year
+                      const lastHistoricalFinancial = (valuation.historicalFinancials || [])
+                        .sort((a, b) => getYearNumber(b.year) - getYearNumber(a.year))[0];
+                      const lastHistoricalRevenue = lastHistoricalFinancial?.revenue || 0;
+
                       const filteredProjections = valuation.projections
                         .filter(p => getYearNumber(p.year) > latestHistoricalYear)
-                        .map(p => ({
-                          ...p,
-                          yearLabel: formatYearAsFY(p.year) // Add FY formatted label
-                        }));
+                        .map((p, index, arr) => {
+                          let calculatedGrowth = p.revenueGrowth;
+
+                          // For first projection year, calculate growth from last historical year
+                          if (index === 0 && (calculatedGrowth === 0 || !calculatedGrowth) && lastHistoricalRevenue > 0 && p.revenue > 0) {
+                            calculatedGrowth = ((p.revenue - lastHistoricalRevenue) / lastHistoricalRevenue) * 100;
+                          }
+
+                          return {
+                            ...p,
+                            revenueGrowth: calculatedGrowth,
+                            yearLabel: formatYearAsFY(p.year) // Add FY formatted label
+                          };
+                        });
 
                       if (filteredProjections.length === 0) return null;
 
