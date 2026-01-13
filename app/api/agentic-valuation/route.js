@@ -5,8 +5,8 @@ import { AgenticForecaster } from '@/app/services/agenticForecaster';
 
 export const dynamic = 'force-dynamic';
 
-// Extended timeout for agentic workflow (up to 60 seconds)
-export const maxDuration = 60;
+// Extended timeout for agentic workflow - Vercel Pro supports up to 300 seconds
+export const maxDuration = 300;
 
 /**
  * Fetch yfinance data - reusing logic from dcf-valuation route

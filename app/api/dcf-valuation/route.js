@@ -92,6 +92,9 @@ async function getExchangeRate(fromCurrency, toCurrency = 'USD') {
 
 export const dynamic = 'force-dynamic';
 
+// Extended timeout for Vercel Pro (300 seconds max)
+export const maxDuration = 300;
+
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);

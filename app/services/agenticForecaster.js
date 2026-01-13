@@ -48,8 +48,9 @@ export class AgenticForecaster {
         this.totalTokens = { input: 0, output: 0 };
         this.webSearchCount = 0;
         this.startTime = null;
-        this.maxLLMCalls = 10; // Guardrail
+        this.maxLLMCalls = 6; // Reduced for Vercel 60s limit
         this.llmCallCount = 0;
+        this.timeoutMs = 60000; // 60 second timeout per API call (Vercel Pro)
     }
 
     /**
@@ -83,10 +84,11 @@ export class AgenticForecaster {
         const tools = enableWebSearch ? [{
             type: 'web_search_20250305',
             name: 'web_search',
-            max_uses: 5
+            max_uses: 2 // Reduced for speed
         }] : [];
 
         try {
+            // Direct API call - Vercel Pro handles 300s overall timeout
             const response = await this.client.messages.create({
                 model: 'claude-sonnet-4-20250514',
                 max_tokens: 4096,
@@ -206,7 +208,8 @@ Create a focused research plan. Output JSON:
      */
     async step2_webResearch(ticker, researchPlan, companyName) {
         const questions = researchPlan?.research_questions || [];
-        const topQuestions = questions.slice(0, 5); // Max 5 research questions
+        // OPTIMIZED: Only 2 research questions max for Vercel 60s limit
+        const topQuestions = questions.slice(0, 2);
 
         const systemPrompt = `You are a financial research analyst for ${companyName} (${ticker}).
 Use web_search to find current, credible information. Focus on:

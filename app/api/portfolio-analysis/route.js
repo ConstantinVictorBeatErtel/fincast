@@ -3,6 +3,11 @@ import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
 import { GET as dcfValuationGET } from '../dcf-valuation/route.js';
 
+export const dynamic = 'force-dynamic';
+
+// Extended timeout for Vercel Pro (300 seconds max)
+export const maxDuration = 300;
+
 export async function POST(request) {
   try {
     const { holdings, method = 'exit-multiple', correlationOnly = false } = await request.json();
