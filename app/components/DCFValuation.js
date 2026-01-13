@@ -921,13 +921,26 @@ export default function DCFValuation() {
         <div className="flex flex-col justify-center items-center py-8 space-y-4">
           <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
 
-          {/* Agentic progress indicator - simplified */}
+          {/* Agentic progress indicator with step dots */}
           {analysisMode === 'agentic' && agenticProgress && (
-            <div className="text-center">
+            <div className="text-center space-y-3">
               <p className="text-sm font-medium text-gray-700">
-                {agenticProgress.message}
+                Step {agenticProgress.step}/4: {agenticProgress.message}
               </p>
-              <p className="text-xs text-gray-400 mt-1">
+              <div className="flex gap-2 justify-center">
+                {[1, 2, 3, 4].map((step) => (
+                  <div
+                    key={step}
+                    className={`w-3 h-3 rounded-full transition-all duration-500 ${step < agenticProgress.step
+                        ? 'bg-green-500'
+                        : step === agenticProgress.step
+                          ? 'bg-blue-500 animate-pulse'
+                          : 'bg-gray-300'
+                      }`}
+                  />
+                ))}
+              </div>
+              <p className="text-xs text-gray-400">
                 This may take 1-2 minutes
               </p>
             </div>
@@ -1074,6 +1087,48 @@ export default function DCFValuation() {
                           </span>
                         );
                       })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Agentic mode: Calculation breakdown */}
+                {valuation.source === 'agentic' && valuation.exitMultipleCalculation && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <h4 className="text-sm font-medium text-gray-600 mb-3">Valuation Calculation</h4>
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <div className="space-y-3 text-sm">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                          <div className="bg-white p-3 rounded-lg">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-1">Terminal Year</div>
+                            <div className="text-lg font-semibold">{valuation.exitMultipleCalculation.terminalYear}</div>
+                          </div>
+                          <div className="bg-white p-3 rounded-lg">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-1">Exit Multiple</div>
+                            <div className="text-lg font-semibold">{valuation.exitMultipleCalculation.exitMultipleValue}x {valuation.exitMultipleCalculation.exitMultipleType}</div>
+                          </div>
+                          <div className="bg-white p-3 rounded-lg">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-1">Fair Value</div>
+                            <div className="text-lg font-semibold text-green-600">${valuation.exitMultipleCalculation.fairValue?.toFixed(2)}</div>
+                          </div>
+                          <div className="bg-white p-3 rounded-lg">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-1">Current Price</div>
+                            <div className="text-lg font-semibold text-gray-600">${valuation.exitMultipleCalculation.currentPrice?.toFixed(2)}</div>
+                          </div>
+                        </div>
+
+                        {valuation.exitMultipleCalculation.calculationMethod && (
+                          <div className="bg-white p-3 rounded-lg border border-blue-100">
+                            <div className="text-gray-500 text-xs font-medium uppercase mb-1">Calculation</div>
+                            <div className="font-mono text-sm">{valuation.exitMultipleCalculation.calculationMethod}</div>
+                          </div>
+                        )}
+
+                        <div className="text-xs text-gray-500">
+                          Terminal Revenue: ${valuation.exitMultipleCalculation.terminalRevenue?.toFixed(0)}M |
+                          Terminal EBITDA: ${valuation.exitMultipleCalculation.terminalEbitda?.toFixed(0)}M |
+                          Terminal FCF: ${valuation.exitMultipleCalculation.terminalFcf?.toFixed(0)}M
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}

@@ -471,12 +471,84 @@ Output JSON:
 
             console.log(`[AgenticForecaster] Complete: ${totalTime.toFixed(1)}s, $${totalCost.toFixed(4)}, ${this.llmCallCount} LLM calls, ${this.webSearchCount} web searches`);
 
-            // Build result in format compatible with existing frontend
+            // Get market data
             const currentPrice = companyData?.market_data?.current_price || 0;
-            const fairValue = draftForecast.fair_value_per_share || 0;
+            const sharesOutstanding = companyData?.fy24_financials?.shares_outstanding ||
+                companyData?.market_data?.shares_outstanding || 1;
+
+            // Get projections and find terminal year data
+            const projections = draftForecast.projections || [];
+            const terminalYear = projections[projections.length - 1] || {};
+
+            // Get exit multiple info
+            const exitMultipleType = draftForecast.exit_multiple_type || 'P/E';
+            const exitMultipleValue = draftForecast.exit_multiple_value || 20;
+
+            // Calculate terminal values based on multiple type
+            const terminalRevenue = Number(terminalYear.revenue || 0) * 1_000_000; // Convert from millions
+            const terminalEbitda = terminalRevenue * (Number(terminalYear.ebitdaMargin || 0) / 100);
+            const terminalFcf = terminalRevenue * (Number(terminalYear.fcfMargin || 0) / 100);
+            const terminalNetIncome = Number(terminalYear.netIncome || 0) * 1_000_000;
+            const terminalEps = Number(terminalYear.eps || 0);
+
+            // Calculate enterprise/equity value based on multiple type
+            let calculatedValue = 0;
+            let calculationMethod = '';
+            let metricUsed = 0;
+
+            if (exitMultipleType === 'P/E' || exitMultipleType === 'PE') {
+                // P/E uses equity value directly
+                if (terminalEps > 0) {
+                    calculatedValue = terminalEps * exitMultipleValue;
+                    metricUsed = terminalEps;
+                    calculationMethod = `${terminalEps.toFixed(2)} EPS × ${exitMultipleValue}x P/E`;
+                } else if (terminalNetIncome > 0 && sharesOutstanding > 0) {
+                    const impliedEps = terminalNetIncome / sharesOutstanding;
+                    calculatedValue = impliedEps * exitMultipleValue;
+                    metricUsed = impliedEps;
+                    calculationMethod = `$${(impliedEps).toFixed(2)} EPS × ${exitMultipleValue}x P/E`;
+                }
+            } else if (exitMultipleType === 'EV/EBITDA') {
+                // EV/EBITDA: Enterprise Value / EBITDA
+                const enterpriseValue = terminalEbitda * exitMultipleValue;
+                const netDebt = companyData?.market_data?.net_debt || 0;
+                const equityValue = enterpriseValue - netDebt;
+                calculatedValue = sharesOutstanding > 0 ? equityValue / sharesOutstanding : 0;
+                metricUsed = terminalEbitda / 1_000_000; // Back to millions for display
+                calculationMethod = `$${(terminalEbitda / 1_000_000).toFixed(0)}M EBITDA × ${exitMultipleValue}x = $${(enterpriseValue / 1_000_000).toFixed(0)}M EV`;
+            } else if (exitMultipleType === 'EV/FCF') {
+                // EV/FCF: Enterprise Value / Free Cash Flow
+                const enterpriseValue = terminalFcf * exitMultipleValue;
+                const netDebt = companyData?.market_data?.net_debt || 0;
+                const equityValue = enterpriseValue - netDebt;
+                calculatedValue = sharesOutstanding > 0 ? equityValue / sharesOutstanding : 0;
+                metricUsed = terminalFcf / 1_000_000;
+                calculationMethod = `$${(terminalFcf / 1_000_000).toFixed(0)}M FCF × ${exitMultipleValue}x = $${(enterpriseValue / 1_000_000).toFixed(0)}M EV`;
+            }
+
+            // Fallback to LLM's fair value if calculation failed
+            const fairValue = calculatedValue > 0 ? calculatedValue : (draftForecast.fair_value_per_share || 0);
             const upside = currentPrice > 0 && fairValue > 0
                 ? ((fairValue - currentPrice) / currentPrice) * 100
                 : 0;
+
+            // Build calculation breakdown for frontend
+            const exitMultipleCalculation = {
+                terminalYear: terminalYear.year || 'FY30',
+                terminalRevenue: terminalRevenue / 1_000_000,
+                terminalEbitda: terminalEbitda / 1_000_000,
+                terminalFcf: terminalFcf / 1_000_000,
+                terminalNetIncome: terminalNetIncome / 1_000_000,
+                terminalEps: terminalEps,
+                exitMultipleType,
+                exitMultipleValue,
+                metricUsed,
+                calculationMethod,
+                fairValue,
+                currentPrice,
+                upside,
+                sharesOutstanding
+            };
 
             return {
                 // Standard forecast fields (compatible with existing UI)
@@ -484,18 +556,21 @@ Output JSON:
                 method: 'agentic',
                 fairValue: fairValue,
                 currentSharePrice: currentPrice,
-                exitMultipleType: draftForecast.exit_multiple_type || 'P/E',
-                exitMultipleValue: draftForecast.exit_multiple_value || 20,
+                exitMultipleType: exitMultipleType,
+                exitMultipleValue: exitMultipleValue,
                 upside: upside,
                 cagr: fairValue > 0 && currentPrice > 0
                     ? (Math.pow(fairValue / currentPrice, 1 / 5) - 1) * 100
                     : 0,
-                projections: draftForecast.projections || [],
+                projections: projections,
                 historicalFinancials: companyData?.historical_financials || [],
                 latestDevelopments: this.researchTrail
                     .filter(s => s.step === 'research')
                     .map(s => s.output?.findings || '')
                     .join('\n\n'),
+
+                // Calculation breakdown
+                exitMultipleCalculation: exitMultipleCalculation,
 
                 // Agentic-specific fields
                 research_trail: this.researchTrail,
