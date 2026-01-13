@@ -196,7 +196,23 @@ async function fetchPortfolioPricesDirect(tickers) {
       });
 
       if (response.ok) {
-        return await response.json();
+        const result = await response.json();
+        // Transform array format to object format (same as local spawn)
+        const formatted = {};
+        Object.keys(result).forEach(ticker => {
+          const prices = {};
+          if (Array.isArray(result[ticker])) {
+            result[ticker].forEach(p => {
+              prices[p.date] = p.close;
+            });
+          } else {
+            // Already in object format
+            Object.assign(prices, result[ticker]);
+          }
+          formatted[ticker] = prices;
+        });
+        console.log(`[Portfolio] Transformed data for ${Object.keys(formatted).length} tickers`);
+        return formatted;
       }
       const text = await response.text();
       console.error(`[Portfolio] API Error ${response.status}: ${text.slice(0, 200)}`);
@@ -207,18 +223,27 @@ async function fetchPortfolioPricesDirect(tickers) {
     }
   }
 
-  // Locally: spawn Python script
+  // Locally: spawn Python script (matching yfinance-data pattern)
   return new Promise((resolve, reject) => {
     const scriptPath = `${process.cwd()}/scripts/fetch_portfolio_prices.py`;
-    let cmd = 'python3';
-    // If inside venv locally
-    if (require('fs').existsSync(`${process.cwd()}/venv/bin/python3`)) {
-      cmd = `${process.cwd()}/venv/bin/python3`;
-    }
+    const fs = require('fs');
 
-    console.log(`Spawning: ${cmd} ${scriptPath} ${tickers.join(' ')}`);
+    // Check for venv python, fallback to system python3
+    const venvPython = `${process.cwd()}/venv/bin/python3`;
+    const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
 
-    const python = spawn(cmd, [scriptPath, ...tickers]);
+    // Handle macOS Rosetta architecture mismatch
+    const isDarwin = process.platform === 'darwin';
+    const isNodeRosetta = process.arch === 'x64';
+    const cmd = isDarwin && isNodeRosetta ? '/usr/bin/arch' : pythonCmd;
+    const args = isDarwin && isNodeRosetta
+      ? ['-arm64', pythonCmd, scriptPath, ...tickers]
+      : [scriptPath, ...tickers];
+
+    console.log(`[Portfolio] Spawning: ${cmd} ${args.join(' ')}`);
+    console.log(`[Portfolio] Script exists: ${fs.existsSync(scriptPath)}`);
+
+    const python = spawn(cmd, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
 
     let dataString = '';
     let errorString = '';
@@ -233,7 +258,7 @@ async function fetchPortfolioPricesDirect(tickers) {
 
     python.on('close', (code) => {
       if (code !== 0) {
-        console.error(`Python script exited with code ${code}: ${errorString}`);
+        console.error(`[Portfolio] Python script exited with code ${code}: ${errorString.slice(0, 500)}`);
         resolve({});
         return;
       }
@@ -244,22 +269,26 @@ async function fetchPortfolioPricesDirect(tickers) {
         const formatted = {};
         Object.keys(result).forEach(ticker => {
           const prices = {};
-          result[ticker].forEach(p => {
-            prices[p.date] = p.close;
-          });
+          if (Array.isArray(result[ticker])) {
+            result[ticker].forEach(p => {
+              prices[p.date] = p.close;
+            });
+          } else {
+            Object.assign(prices, result[ticker]);
+          }
           formatted[ticker] = prices;
         });
 
-        console.log(`Successfully fetched prices for ${Object.keys(formatted).length} tickers`);
+        console.log(`[Portfolio] Successfully fetched prices for ${Object.keys(formatted).length} tickers`);
         resolve(formatted);
       } catch (e) {
-        console.error('Failed to parse Python output:', e);
+        console.error('[Portfolio] Failed to parse Python output:', e);
         resolve({});
       }
     });
 
     python.on('error', (err) => {
-      console.error('Failed to start python script:', err);
+      console.error('[Portfolio] Failed to start python script:', err);
       resolve({});
     });
   });
