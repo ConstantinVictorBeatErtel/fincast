@@ -264,9 +264,36 @@ Search for recent, credible sources. Synthesize your findings with specific data
      * Step 3: Draft Forecast Generation
      * Synthesize all research into financial projections
      */
-    async step3_draftForecast(ticker, companyData, researchFindings) {
+    async step3_draftForecast(ticker, companyData, researchFindings, options = {}) {
+        const { method = 'exit-multiple', multipleType = 'auto', feedback = null } = options;
+
+        // Build valuation method instructions
+        const isDCF = method === 'dcf';
+        const valuationInstructions = isDCF
+            ? `Use DISCOUNTED CASH FLOW (DCF) valuation:
+- Calculate WACC (use appropriate cost of equity and debt)
+- Project Free Cash Flows for each year
+- Calculate Terminal Value using a terminal growth rate (2-3%)
+- Discount all cash flows back to present value
+- Divide total equity value by shares outstanding for fair value per share`
+            : `Use EXIT MULTIPLE valuation:
+- Apply the specified exit multiple to the terminal year metric
+- ${multipleType !== 'auto'
+                ? `YOU MUST USE ${multipleType} as the exit multiple type. This is required by the user.`
+                : 'Choose the most appropriate multiple (P/E, EV/EBITDA, EV/FCF, or Price/Sales)'}
+- Calculate Enterprise Value, then subtract net debt to get Equity Value
+- Divide by shares outstanding for fair value per share`;
+
+        // Include user feedback if provided
+        const feedbackSection = feedback
+            ? `\n\nUSER FEEDBACK (YOU MUST INCORPORATE THIS):\n${feedback}\n\nAdjust your projections and assumptions based on the above feedback.`
+            : '';
+
         const systemPrompt = `You are a financial analyst creating a 5-year forecast for ${ticker}.
-Base your projections on the research conducted. Be specific about which findings informed each assumption.`;
+Base your projections on the research conducted. Be specific about which findings informed each assumption.
+
+VALUATION METHOD: ${isDCF ? 'Discounted Cash Flow (DCF)' : 'Exit Multiple'}
+${valuationInstructions}${feedbackSection}`;
 
         // Build research summary
         const researchSummary = researchFindings.map((r, i) =>
@@ -295,6 +322,38 @@ Base your projections on the research conducted. Be specific about which finding
         const forecastStart = latestFY + 1;
         const forecastEnd = forecastStart + 4;
 
+        // Get shares outstanding for the prompt
+        const sharesOutstanding = companyData?.fy24_financials?.shares_outstanding ||
+            companyData?.market_data?.shares_outstanding || 0;
+        const netDebt = companyData?.market_data?.net_debt || 0;
+
+        // Build the JSON schema based on valuation method
+        const valuationFields = isDCF
+            ? `"wacc": <percentage as number>,
+  "terminal_growth_rate": <percentage as number>,
+  "fair_value_per_share": <number - PV of all cash flows / shares outstanding>,
+  "valuation_method": "DCF",
+  "dcf_calculation": {
+    "pv_fcf_sum": <present value of forecast period FCFs in millions>,
+    "terminal_value": <terminal value in millions>,
+    "enterprise_value": <total EV in millions>,
+    "equity_value": <EV minus net debt in millions>,
+    "shares_outstanding": <number of shares>,
+    "fair_value_per_share": <equity value / shares>
+  }`
+            : `"exit_multiple_type": "${multipleType !== 'auto' ? multipleType : '<P/E or EV/EBITDA or EV/FCF or Price/Sales>'}",
+  "exit_multiple_value": <number - the multiple you are applying>,
+  "fair_value_per_share": <number - calculated from the multiple>,
+  "valuation_method": "exit-multiple",
+  "exit_multiple_calculation": {
+    "terminal_metric": <terminal year value of the metric being multiplied, in millions for EV-based or EPS for P/E>,
+    "enterprise_value": <for EV multiples: metric × multiple, in millions>,
+    "net_debt": ${netDebt / 1_000_000},
+    "equity_value": <EV - net debt, in millions>,
+    "shares_outstanding": ${sharesOutstanding},
+    "fair_value_per_share": <equity_value / shares OR EPS × P/E>
+  }`;
+
         const userMessage = `Based on all research conducted, generate a ${forecastStart}-${forecastEnd} forecast for ${ticker}.
 
 LATEST ACTUAL DATA (FY${latestFY}):
@@ -303,6 +362,8 @@ LATEST ACTUAL DATA (FY${latestFY}):
 - EBITDA: $${((fy.ebitda || 0) / 1_000_000).toFixed(0)}M
 - Net Income: $${((fy.net_income || 0) / 1_000_000).toFixed(0)}M
 - EPS: $${(fy.eps || 0).toFixed(2)}
+- Shares Outstanding: ${(sharesOutstanding / 1_000_000).toFixed(1)}M
+- Net Debt: $${(netDebt / 1_000_000).toFixed(0)}M
 
 RESEARCH FINDINGS:
 ${researchSummary}
@@ -322,9 +383,7 @@ Generate your forecast as JSON:
     }
     // ... for each year through ${forecastEnd}
   ],
-  "fair_value_per_share": <number>,
-  "exit_multiple_type": "P/E or EV/EBITDA or EV/FCF",
-  "exit_multiple_value": <number>,
+  ${valuationFields},
   "key_assumptions": [
     {"assumption": "description", "source": "which research informed this"}
   ]
@@ -421,8 +480,17 @@ Output JSON:
 
     /**
      * Main entry point - orchestrate the full agentic workflow
+     * @param {string} ticker - Stock ticker symbol
+     * @param {Object} companyData - Company financial data
+     * @param {string|null} sonarInsights - Initial insights from Perplexity
+     * @param {Object} options - Configuration options
+     * @param {string} options.method - 'dcf' or 'exit-multiple'
+     * @param {string} options.multipleType - 'auto', 'P/E', 'EV/EBITDA', 'EV/FCF', 'Price/Sales'
+     * @param {string|null} options.feedback - User feedback for refinement
      */
-    async generateForecast(ticker, companyData, sonarInsights) {
+    async generateForecast(ticker, companyData, sonarInsights, options = {}) {
+        const { method = 'exit-multiple', multipleType = 'auto', feedback = null } = options;
+
         this.startTime = Date.now();
         this.conversationHistory = [];
         this.researchTrail = [];
@@ -430,7 +498,13 @@ Output JSON:
         this.webSearchCount = 0;
         this.llmCallCount = 0;
 
-        console.log(`[AgenticForecaster] Starting agentic forecast for ${ticker}`);
+        // Store options for use in steps
+        this.valuationMethod = method;
+        this.multipleType = multipleType;
+        this.userFeedback = feedback;
+
+        console.log(`[AgenticForecaster] Starting agentic forecast for ${ticker} (method: ${method}, multiple: ${multipleType})`);
+        if (feedback) console.log(`[AgenticForecaster] User feedback: ${feedback.substring(0, 100)}...`);
 
         try {
             // Step 1: Initial Analysis
@@ -445,9 +519,14 @@ Output JSON:
                 companyData?.company_name || ticker
             );
 
-            // Step 3: Draft Forecast
+            // Step 3: Draft Forecast - pass method, multiple, and feedback
             console.log('[AgenticForecaster] Step 3: Draft Forecast');
-            const draftForecast = await this.step3_draftForecast(ticker, companyData, researchFindings);
+            const draftForecast = await this.step3_draftForecast(
+                ticker,
+                companyData,
+                researchFindings,
+                { method, multipleType, feedback }
+            );
 
             // Step 4: Validation
             console.log('[AgenticForecaster] Step 4: Validation');

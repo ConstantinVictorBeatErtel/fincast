@@ -202,6 +202,9 @@ export async function GET(request) {
     try {
         const { searchParams } = new URL(request.url);
         const ticker = searchParams.get('ticker');
+        const method = searchParams.get('method') || 'exit-multiple'; // 'dcf' or 'exit-multiple'
+        const multiple = searchParams.get('multiple') || 'auto'; // 'auto', 'P/E', 'EV/EBITDA', etc.
+        const feedback = searchParams.get('feedback') || null; // User feedback for refinement
 
         if (!ticker) {
             return NextResponse.json({ error: 'Ticker symbol is required' }, { status: 400 });
@@ -215,7 +218,8 @@ export async function GET(request) {
             }, { status: 500 });
         }
 
-        console.log(`[Agentic] Starting agentic valuation for ${ticker}`);
+        console.log(`[Agentic] Starting agentic valuation for ${ticker} (method: ${method}, multiple: ${multiple})`);
+        if (feedback) console.log(`[Agentic] With feedback: ${feedback.substring(0, 100)}...`);
 
         // Fetch base data
         const [yf, sonarInsights] = await Promise.all([
@@ -235,9 +239,13 @@ export async function GET(request) {
             historical_financials: []
         };
 
-        // Run agentic workflow
+        // Run agentic workflow with method, multiple, and feedback
         const forecaster = new AgenticForecaster();
-        const result = await forecaster.generateForecast(ticker, companyData, sonarInsights);
+        const result = await forecaster.generateForecast(ticker, companyData, sonarInsights, {
+            method: method,
+            multipleType: multiple,
+            feedback: feedback
+        });
 
         return NextResponse.json(result);
 

@@ -73,9 +73,9 @@ export default function DCFValuation() {
     }
 
     try {
-      // Route to agentic API if in agentic mode (pass method for DCF vs exit-multiple)
+      // Route to agentic API if in agentic mode (pass method and multiple for DCF vs exit-multiple)
       const apiUrl = analysisMode === 'agentic'
-        ? `/api/agentic-valuation?ticker=${ticker}&method=${method}`
+        ? `/api/agentic-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}`
         : `/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}&llm=1`;
 
       // Set progress for agentic mode with simulated step progression
@@ -322,9 +322,9 @@ export default function DCFValuation() {
     setError(null);
 
     try {
-      // Route to appropriate API based on analysis mode
+      // Route to appropriate API based on analysis mode (include method, multiple, and feedback)
       const apiUrl = analysisMode === 'agentic'
-        ? `/api/agentic-valuation?ticker=${ticker}&feedback=${encodeURIComponent(feedback)}`
+        ? `/api/agentic-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}&feedback=${encodeURIComponent(feedback)}`
         : `/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}&llm=1`;
 
       const response = await fetch(apiUrl, {
