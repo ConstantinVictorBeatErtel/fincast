@@ -50,7 +50,7 @@ export class AgenticForecaster {
         this.startTime = null;
         this.maxLLMCalls = 6; // Reduced for Vercel 60s limit
         this.llmCallCount = 0;
-        this.timeoutMs = 60000; // 60 second timeout per API call (Vercel Pro)
+        this.timeoutMs = 90000; // 90 second timeout per API call (increased for complex DCF prompts)
     }
 
     /**
