@@ -165,7 +165,17 @@ async function fetchPortfolioPricesDirect(tickers) {
   // On Vercel: use HTTP to Python serverless function
   if (isVercel) {
     try {
-      const baseUrl = `https://${process.env.VERCEL_URL}`;
+      // Use PY_YF_URL to get production base URL to avoid preview deployment 401s
+      // This mirrors the working pattern from dcf-valuation
+      const pyYfUrl = process.env.PY_YF_URL;
+      let baseUrl;
+      if (pyYfUrl) {
+        // Extract production domain from PY_YF_URL (e.g., https://fincast.vercel.app/api/py-yf -> https://fincast.vercel.app)
+        const match = pyYfUrl.match(/^(https?:\/\/[^\/]+)/);
+        baseUrl = match ? match[1] : `https://${process.env.VERCEL_URL}`;
+      } else {
+        baseUrl = `https://${process.env.VERCEL_URL}`;
+      }
       const url = `${baseUrl}/api/portfolio-prices`;
 
       const headers = { 'Content-Type': 'application/json' };
