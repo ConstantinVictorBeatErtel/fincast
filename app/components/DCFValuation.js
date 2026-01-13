@@ -77,9 +77,23 @@ export default function DCFValuation() {
         ? `/api/agentic-valuation?ticker=${ticker}`
         : `/api/dcf-valuation?ticker=${ticker}&method=${method}&multiple=${selectedMultiple}&llm=1`;
 
-      // Set progress for agentic mode
+      // Set progress for agentic mode with simulated step progression
+      let progressInterval = null;
       if (analysisMode === 'agentic') {
         setAgenticProgress({ step: 1, message: 'Analyzing historical data...' });
+
+        // Simulate progress through steps (actual timing varies, this is approximate)
+        const progressSteps = [
+          { step: 2, message: 'Researching web for latest developments...', delay: 15000 },
+          { step: 3, message: 'Generating financial projections...', delay: 45000 },
+          { step: 4, message: 'Validating forecast assumptions...', delay: 75000 }
+        ];
+
+        progressSteps.forEach(({ step, message, delay }) => {
+          setTimeout(() => {
+            if (loading) setAgenticProgress({ step, message });
+          }, delay);
+        });
       }
 
       const response = await fetch(apiUrl);
@@ -200,6 +214,38 @@ export default function DCFValuation() {
             }
             if (parsed.length > 0) data.projections = parsed;
           }
+        }
+
+        // Normalize agentic projections: compute derived fields from margins if missing
+        if (data.source === 'agentic' && Array.isArray(data.projections)) {
+          data.projections = data.projections.map(row => {
+            const revenue = Number(row.revenue || 0);
+            const grossMargin = Number(row.grossMargin || 0);
+            const ebitdaMargin = Number(row.ebitdaMargin || 0);
+            const fcfMargin = Number(row.fcfMargin || 0);
+            const netIncome = Number(row.netIncome || 0);
+
+            return {
+              ...row,
+              year: String(row.year || ''),
+              revenue,
+              revenueGrowth: Number(row.revenueGrowth || 0),
+              // Compute gross profit from margin if not provided
+              grossProfit: row.grossProfit || (revenue * (grossMargin / 100)),
+              grossMargin,
+              // Compute EBITDA from margin if not provided
+              ebitda: row.ebitda || (revenue * (ebitdaMargin / 100)),
+              ebitdaMargin,
+              // Compute FCF from margin if not provided  
+              freeCashFlow: row.freeCashFlow || row.fcf || (revenue * (fcfMargin / 100)),
+              fcf: row.fcf || row.freeCashFlow || (revenue * (fcfMargin / 100)),
+              fcfMargin,
+              netIncome,
+              // Compute net income margin if not provided
+              netIncomeMargin: row.netIncomeMargin || (revenue > 0 ? (netIncome / revenue) * 100 : 0),
+              eps: Number(row.eps || 0),
+            };
+          });
         }
       } catch (normErr) {
         console.warn('Projection normalization failed:', normErr);
@@ -836,7 +882,7 @@ export default function DCFValuation() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="standard">Standard Forecast</SelectItem>
-              <SelectItem value="agentic">Agentic Analysis ⚡</SelectItem>
+              <SelectItem value="agentic">Agentic Analysis</SelectItem>
             </SelectContent>
           </Select>
 
@@ -847,18 +893,10 @@ export default function DCFValuation() {
                 {analysisMode === 'agentic' ? 'Researching...' : 'Generating...'}
               </>
             ) : (
-              analysisMode === 'agentic' ? 'Run Agentic Analysis' : 'Generate Valuation'
+              'Generate Valuation'
             )}
           </Button>
         </div>
-
-        {/* Agentic mode info */}
-        {analysisMode === 'agentic' && !loading && (
-          <div className="mt-3 text-sm text-gray-500 flex items-center gap-2">
-            <span className="inline-block w-2 h-2 bg-blue-500 rounded-full"></span>
-            Agentic mode: Claude researches the web, validates assumptions, and assigns confidence scores (~30-60s, ~$0.30)
-          </div>
-        )}
       </form>
 
       {error && (
@@ -1014,19 +1052,6 @@ export default function DCFValuation() {
                           </span>
                         );
                       })}
-                    </div>
-
-                    {/* Cost and web search info */}
-                    <div className="mt-3 text-xs text-gray-500 flex flex-wrap gap-4">
-                      {typeof valuation.total_cost === 'number' && (
-                        <span>💰 Analysis cost: ${valuation.total_cost.toFixed(4)}</span>
-                      )}
-                      {typeof valuation.web_searches === 'number' && (
-                        <span>🔍 Web searches: {valuation.web_searches}</span>
-                      )}
-                      {typeof valuation.total_time_seconds === 'number' && (
-                        <span>⏱️ Time: {valuation.total_time_seconds.toFixed(1)}s</span>
-                      )}
                     </div>
                   </div>
                 )}

@@ -10,10 +10,10 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 
-// Pricing per million tokens (Claude Sonnet 4)
+// Pricing per million tokens (Claude Haiku 3.5 - much cheaper than Sonnet)
 const PRICING = {
-    input: 3.00 / 1_000_000,
-    output: 15.00 / 1_000_000,
+    input: 0.80 / 1_000_000,
+    output: 4.00 / 1_000_000,
     webSearchPerRequest: 0.01 // Approximate cost per web search
 };
 
@@ -89,8 +89,9 @@ export class AgenticForecaster {
 
         try {
             // Direct API call - Vercel Pro handles 300s overall timeout
+            // Using Claude Haiku for cost efficiency (~10x cheaper than Sonnet)
             const response = await this.client.messages.create({
-                model: 'claude-sonnet-4-20250514',
+                model: 'claude-3-5-haiku-20241022',
                 max_tokens: 4096,
                 system: systemPrompt,
                 messages: this.conversationHistory,
