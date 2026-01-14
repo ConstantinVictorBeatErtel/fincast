@@ -1010,7 +1010,7 @@ export default function DCFValuation() {
                     </div>
                   </>
                 )}
-                {valuation.method === 'exit-multiple' && (
+                {valuation.method === 'exit-multiple' && valuation.source !== 'agentic' && (
                   <>
                     <div>
                       <h3 className="text-sm font-medium text-gray-500">Exit Multiple</h3>
