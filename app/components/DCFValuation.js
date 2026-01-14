@@ -25,7 +25,7 @@ export default function DCFValuation() {
   const [retrying, setRetrying] = useState(false);
 
   // Agentic mode state
-  const [analysisMode, setAnalysisMode] = useState('standard'); // 'standard' or 'agentic'
+  const [analysisMode, setAnalysisMode] = useState('agentic'); // 'standard' or 'agentic'
   const [agenticProgress, setAgenticProgress] = useState(null); // { step: 1-4, message: string }
   const [showResearchTrail, setShowResearchTrail] = useState(false);
   const loadingRef = useRef(false); // Ref for tracking loading state in async callbacks
