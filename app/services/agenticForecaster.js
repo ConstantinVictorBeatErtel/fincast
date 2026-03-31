@@ -1,7 +1,7 @@
 /**
  * AgenticForecaster - Multi-step agentic research workflow for financial analysis
  * 
- * Uses OpenRouter with DeepSeek for:
+ * Uses OpenRouter with DeepSeek for core reasoning and Perplexity Sonar for current research:
  * Step 1: Initial Analysis - Analyze data, identify gaps, create research plan
  * Step 2: Research synthesis - 3-5 targeted follow-up prompts based on the research plan
  * Step 3: Draft Forecast - Synthesize research into projections
@@ -11,6 +11,7 @@
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
 const OPENROUTER_MODEL = 'deepseek/deepseek-chat';
+const OPENROUTER_RESEARCH_MODEL = 'perplexity/sonar';
 // Fallback model for future use: google/gemini-2.5-flash
 
 // Approximate pricing placeholders for LLM cost tracking.
@@ -78,14 +79,13 @@ export class AgenticForecaster {
 
         this.llmCallCount++;
         const stepStart = Date.now();
+        const model = enableWebSearch ? OPENROUTER_RESEARCH_MODEL : OPENROUTER_MODEL;
         const messages = [
             { role: 'system', content: systemPrompt },
             ...this.conversationHistory,
             {
                 role: 'user',
-                content: enableWebSearch
-                    ? `${userMessage}\n\nIf current external sourcing is unavailable in this session, say so plainly instead of inventing citations.`
-                    : userMessage
+                content: userMessage
             }
         ];
         const controller = new AbortController();
@@ -102,10 +102,10 @@ export class AgenticForecaster {
                     'X-Title': 'Fincast Agentic'
                 },
                 body: JSON.stringify({
-                    model: OPENROUTER_MODEL,
+                    model,
                     messages,
                     temperature: 0.3,
-                    max_tokens: 4096
+                    max_tokens: enableWebSearch ? 2500 : 4096
                 }),
                 signal: controller.signal
             });
@@ -118,6 +118,7 @@ export class AgenticForecaster {
 
             const data = await response.json();
             const messageContent = data?.choices?.[0]?.message?.content;
+            const citations = Array.isArray(data?.citations) ? data.citations : [];
             const textContent = Array.isArray(messageContent)
                 ? messageContent
                     .map((part) => part?.text || part?.content || '')
@@ -127,6 +128,9 @@ export class AgenticForecaster {
             // Track token usage
             this.totalTokens.input += data?.usage?.prompt_tokens || 0;
             this.totalTokens.output += data?.usage?.completion_tokens || 0;
+            if (enableWebSearch) {
+                this.webSearchCount++;
+            }
 
             // Add assistant response to conversation history
             this.conversationHistory.push({
@@ -142,7 +146,7 @@ export class AgenticForecaster {
 
             return {
                 text: textContent,
-                sources: [],
+                sources: citations,
                 tokens: (data?.usage?.prompt_tokens || 0) + (data?.usage?.completion_tokens || 0),
                 duration
             };
