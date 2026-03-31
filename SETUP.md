@@ -33,8 +33,8 @@ NEXTAUTH_SECRET="your-nextauth-secret-key-here"
 GOOGLE_CLIENT_ID="your-google-client-id"
 GOOGLE_CLIENT_SECRET="your-google-client-secret"
 
-# Claude AI
-ANTHROPIC_API_KEY="your-claude-api-key"
+# OpenRouter
+OPENROUTER_API_KEY="your-openrouter-api-key"
 ```
 
 ### 4. Set up Local Database (Optional)
@@ -95,7 +95,7 @@ NEXTAUTH_URL="https://your-domain.vercel.app"
 NEXTAUTH_SECRET="generate-a-random-secret-key"
 GOOGLE_CLIENT_ID="your-google-client-id"
 GOOGLE_CLIENT_SECRET="your-google-client-secret"
-ANTHROPIC_API_KEY="your-claude-api-key"
+OPENROUTER_API_KEY="your-openrouter-api-key"
 ```
 
 ### 4. Deploy Database Schema

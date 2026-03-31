@@ -3,6 +3,8 @@ import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
 import { AgenticForecaster } from '@/app/services/agenticForecaster';
 
+const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
+
 export const dynamic = 'force-dynamic';
 
 // Extended timeout for agentic workflow - Vercel Pro supports up to 300 seconds
@@ -167,14 +169,13 @@ async function fetchSonarInsights(ticker) {
     if (!process.env.OPENROUTER_API_KEY) return null;
 
     try {
-        const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
                 'Content-Type': 'application/json',
-                'HTTP-Referer': referer,
+                'HTTP-Referer': OPENROUTER_REFERER,
+                'Referer': OPENROUTER_REFERER,
                 'X-Title': 'Fincast Agentic'
             },
             body: JSON.stringify({
@@ -210,10 +211,9 @@ export async function GET(request) {
             return NextResponse.json({ error: 'Ticker symbol is required' }, { status: 400 });
         }
 
-        // Check for Anthropic API key
-        if (!process.env.ANTHROPIC_API_KEY) {
+        if (!process.env.OPENROUTER_API_KEY) {
             return NextResponse.json({
-                error: 'ANTHROPIC_API_KEY not configured. Agentic mode requires Anthropic API access.',
+                error: 'OPENROUTER_API_KEY not configured. Agentic mode requires OpenRouter access.',
                 fallback_available: true
             }, { status: 500 });
         }

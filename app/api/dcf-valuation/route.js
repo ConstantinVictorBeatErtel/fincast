@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
-import { headers as nextHeaders } from 'next/headers';
 import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
+
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
+const PRIMARY_VALUATION_MODEL = 'deepseek/deepseek-chat';
+// Fallback model for future use: google/gemini-2.5-flash
+const LLM_MAX_ATTEMPTS = 3;
 
 // Helper function to make OpenRouter API calls with timeout handling
 async function makeOpenRouterRequest(body, timeoutMs = 45000) {
@@ -9,16 +14,13 @@ async function makeOpenRouterRequest(body, timeoutMs = 45000) {
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const referer = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': referer,
-        'Referer': referer,
-        'Origin': referer,
+        'HTTP-Referer': OPENROUTER_REFERER,
+        'Referer': OPENROUTER_REFERER,
         'X-Title': 'Fincast Valuation App'
       },
       body: JSON.stringify(body),
@@ -134,19 +136,10 @@ export async function GET(request) {
         const sonar = await fetchLatestWithSonar(ticker).catch(() => null);
         let lastErr = null;
         let valuation = null;
-        // Try different models with exponential backoff
-        const models = [
-          'x-ai/grok-code-fast-1',
-          'x-ai/grok-beta',
-          'openai/gpt-4o-mini',
-          'meta-llama/llama-3.1-8b-instruct:free',
-          'microsoft/phi-3-medium-128k-instruct:free'
-        ];
 
-        for (let attempt = 1; attempt <= 5; attempt++) {
+        for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt++) {
           try {
-            const model = models[Math.min(attempt - 1, models.length - 1)];
-            console.log(`[LLM] Attempt ${attempt}/5 for ${ticker} using model: ${model}`);
+            console.log(`[LLM] Attempt ${attempt}/${LLM_MAX_ATTEMPTS} for ${ticker} using model: ${PRIMARY_VALUATION_MODEL}`);
 
             // Add exponential backoff delay
             if (attempt > 1) {
@@ -155,9 +148,9 @@ export async function GET(request) {
               await new Promise(resolve => setTimeout(resolve, delay));
             }
 
-            valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', '', model);
+            valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', '', PRIMARY_VALUATION_MODEL);
             if (valuation && Array.isArray(valuation.projections) && valuation.projections.length > 0) {
-              console.log(`[LLM] Success on attempt ${attempt} with ${valuation.projections.length} projections using ${model}`);
+              console.log(`[LLM] Success on attempt ${attempt} with ${valuation.projections.length} projections using ${PRIMARY_VALUATION_MODEL}`);
               break;
             }
             lastErr = new Error('Missing projections');
@@ -268,19 +261,16 @@ export async function POST(request) {
       const sonar = await fetchLatestWithSonar(ticker).catch(() => null);
       let lastErr = null;
       let valuation = null;
-      // Try different models with exponential backoff
-      const models = [
-        'x-ai/grok-code-fast-1',
-        'x-ai/grok-beta',
-        'openai/gpt-4o-mini',
-        'meta-llama/llama-3.1-8b-instruct:free',
-        'microsoft/phi-3-medium-128k-instruct:free'
-      ];
+      const feedbackHistory = feedback && feedback.trim()
+        ? [{
+          role: 'user',
+          content: `USER FEEDBACK: ${feedback.trim()}\n\nPlease incorporate this feedback into your analysis, revise the valuation, and return ONLY the same <forecast> output format.`
+        }]
+        : [];
 
-      for (let attempt = 1; attempt <= 5; attempt++) {
+      for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt++) {
         try {
-          const model = models[Math.min(attempt - 1, models.length - 1)];
-          console.log(`[LLM] POST Attempt ${attempt}/5 for ${ticker} with feedback using model: ${model}`);
+          console.log(`[LLM] POST Attempt ${attempt}/${LLM_MAX_ATTEMPTS} for ${ticker} with feedback using model: ${PRIMARY_VALUATION_MODEL}`);
 
           // Add exponential backoff delay
           if (attempt > 1) {
@@ -289,9 +279,18 @@ export async function POST(request) {
             await new Promise(resolve => setTimeout(resolve, delay));
           }
 
-          valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', feedback || '', model);
+          valuation = await generateValuation(
+            ticker,
+            method,
+            selectedMultiple,
+            yf,
+            sonar?.full_response || '',
+            feedback || '',
+            PRIMARY_VALUATION_MODEL,
+            feedbackHistory
+          );
           if (valuation && Array.isArray(valuation.projections) && valuation.projections.length > 0) {
-            console.log(`[LLM] POST Success on attempt ${attempt} with ${valuation.projections.length} projections using ${model}`);
+            console.log(`[LLM] POST Success on attempt ${attempt} with ${valuation.projections.length} projections using ${PRIMARY_VALUATION_MODEL}`);
             break;
           }
           lastErr = new Error('Missing projections');
@@ -613,7 +612,16 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
 
 
 
-async function generateValuation(ticker, method, selectedMultiple, yf_data, sonarFull, userFeedback = '', model = 'x-ai/grok-code-fast-1') {
+async function generateValuation(
+  ticker,
+  method,
+  selectedMultiple,
+  yf_data,
+  sonarFull,
+  userFeedback = '',
+  model = PRIMARY_VALUATION_MODEL,
+  conversationHistory = []
+) {
   const mkNumber = (v) => Number(v || 0);
   const fy = yf_data?.fy24_financials || {};
   const md = yf_data?.market_data || {};
@@ -656,12 +664,14 @@ async function generateValuation(ticker, method, selectedMultiple, yf_data, sona
 
   // Restore original, detailed prompts with strict output format and Sonar + yfinance context
   let prompt;
+  const shouldEmbedFeedback = Boolean(userFeedback && userFeedback.trim().length && conversationHistory.length === 0);
+
   if (method === 'dcf') {
     prompt = `You are a skilled financial analyst tasked with creating a precise financial forecast for a company from ${forecastStartYear} to ${forecastEndYear}. This forecast will include projections for revenue growth, gross margin, EBITDA margin, FCF margin, EPS, and net income, ultimately leading to a fair value calculation for the company.
 
 The company you will be analyzing is: ${(companyName)}
 
-${userFeedback && userFeedback.trim().length ? `\nUSER FEEDBACK: ${userFeedback.trim()}\n\nPlease incorporate this feedback into your analysis and adjust the assumptions/projections accordingly.\n` : ''}
+${shouldEmbedFeedback ? `\nUSER FEEDBACK: ${userFeedback.trim()}\n\nPlease incorporate this feedback into your analysis and adjust the assumptions/projections accordingly.\n` : ''}
 
 To complete this task, follow these steps:
 IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available.
@@ -769,7 +779,7 @@ The company you will be analyzing is: ${(companyName)}
 
 ${multipleTypeInstruction}
 
-${userFeedback && userFeedback.trim().length ? `\nUSER FEEDBACK: ${userFeedback.trim()}\n\nPlease incorporate this feedback into your analysis and adjust the assumptions/projections accordingly.\n` : ''}
+${shouldEmbedFeedback ? `\nUSER FEEDBACK: ${userFeedback.trim()}\n\nPlease incorporate this feedback into your analysis and adjust the assumptions/projections accordingly.\n` : ''}
 
 To complete this task, follow these steps:
 IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available.
@@ -880,7 +890,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
     model: model,
     messages: [
       { role: 'system', content: 'You are a skilled financial analyst. You MUST return your response in the EXACT format specified in the user prompt. The response MUST start with <forecast> and end with </forecast>. Do not include any text outside these tags.' },
-      { role: 'user', content: prompt }
+      { role: 'user', content: prompt },
+      ...conversationHistory
     ],
     temperature: 0.3,
     max_tokens: 2000

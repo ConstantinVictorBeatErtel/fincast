@@ -1,16 +1,19 @@
 /**
  * AgenticForecaster - Multi-step agentic research workflow for financial analysis
  * 
- * Uses Anthropic Claude with web_search tool to:
+ * Uses OpenRouter with DeepSeek for:
  * Step 1: Initial Analysis - Analyze data, identify gaps, create research plan
- * Step 2: Web Research - 3-5 targeted web searches based on research plan
+ * Step 2: Research synthesis - 3-5 targeted follow-up prompts based on the research plan
  * Step 3: Draft Forecast - Synthesize research into projections
  * Step 4: Validation - Self-check assumptions, assign confidence scores
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
+const OPENROUTER_MODEL = 'deepseek/deepseek-chat';
+// Fallback model for future use: google/gemini-2.5-flash
 
-// Pricing per million tokens (Claude Haiku 3.5 - much cheaper than Sonnet)
+// Approximate pricing placeholders for LLM cost tracking.
 const PRICING = {
     input: 0.80 / 1_000_000,
     output: 4.00 / 1_000_000,
@@ -20,7 +23,7 @@ const PRICING = {
 /**
  * @typedef {Object} AgenticStep
  * @property {'analysis' | 'research' | 'forecast' | 'validation'} step
- * @property {string} input - Prompt sent to Claude
+ * @property {string} input - Prompt sent to the model
  * @property {any} output - Parsed response
  * @property {Object} metadata
  * @property {number} metadata.tokens_used
@@ -40,9 +43,7 @@ const PRICING = {
 
 export class AgenticForecaster {
     constructor(apiKey) {
-        this.client = new Anthropic({
-            apiKey: apiKey || process.env.ANTHROPIC_API_KEY
-        });
+        this.apiKey = apiKey || process.env.OPENROUTER_API_KEY;
         this.conversationHistory = [];
         this.researchTrail = [];
         this.totalTokens = { input: 0, output: 0 };
@@ -65,78 +66,92 @@ export class AgenticForecaster {
     }
 
     /**
-     * Make a Claude API call with optional web_search tool
+     * Make an OpenRouter chat completion call while preserving conversation history.
      */
-    async callClaude(systemPrompt, userMessage, enableWebSearch = false, stepName = 'unknown') {
+    async callModel(systemPrompt, userMessage, enableWebSearch = false, stepName = 'unknown') {
         if (this.llmCallCount >= this.maxLLMCalls) {
             throw new Error(`Rate limit reached: max ${this.maxLLMCalls} LLM calls per forecast`);
+        }
+        if (!this.apiKey) {
+            throw new Error('OPENROUTER_API_KEY not configured');
         }
 
         this.llmCallCount++;
         const stepStart = Date.now();
-
-        // Add user message to conversation history
-        this.conversationHistory.push({
-            role: 'user',
-            content: userMessage
-        });
-
-        const tools = enableWebSearch ? [{
-            type: 'web_search_20250305',
-            name: 'web_search',
-            max_uses: 2 // Reduced for speed
-        }] : [];
+        const messages = [
+            { role: 'system', content: systemPrompt },
+            ...this.conversationHistory,
+            {
+                role: 'user',
+                content: enableWebSearch
+                    ? `${userMessage}\n\nIf current external sourcing is unavailable in this session, say so plainly instead of inventing citations.`
+                    : userMessage
+            }
+        ];
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
         try {
-            // Direct API call - Vercel Pro handles 300s overall timeout
-            // Using Claude Haiku for cost efficiency (~10x cheaper than Sonnet)
-            const response = await this.client.messages.create({
-                model: 'claude-3-5-haiku-20241022',
-                max_tokens: 4096,
-                system: systemPrompt,
-                messages: this.conversationHistory,
-                tools: tools.length > 0 ? tools : undefined
+            const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': OPENROUTER_REFERER,
+                    'Referer': OPENROUTER_REFERER,
+                    'X-Title': 'Fincast Agentic'
+                },
+                body: JSON.stringify({
+                    model: OPENROUTER_MODEL,
+                    messages,
+                    temperature: 0.3,
+                    max_tokens: 4096
+                }),
+                signal: controller.signal
             });
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({ error: { message: 'Failed to parse provider error' } }));
+                throw new Error(error.error?.message || error.message || `Provider error ${response.status}`);
+            }
+
+            const data = await response.json();
+            const messageContent = data?.choices?.[0]?.message?.content;
+            const textContent = Array.isArray(messageContent)
+                ? messageContent
+                    .map((part) => part?.text || part?.content || '')
+                    .join('')
+                : (messageContent || '');
 
             // Track token usage
-            this.totalTokens.input += response.usage?.input_tokens || 0;
-            this.totalTokens.output += response.usage?.output_tokens || 0;
-
-            // Extract text content and web search results
-            let textContent = '';
-            let sources = [];
-
-            for (const block of response.content) {
-                if (block.type === 'text') {
-                    textContent += block.text;
-                } else if (block.type === 'web_search_tool_result') {
-                    this.webSearchCount++;
-                    // Extract sources from web search results
-                    if (block.content && Array.isArray(block.content)) {
-                        for (const result of block.content) {
-                            if (result.type === 'web_search_result' && result.url) {
-                                sources.push(result.url);
-                            }
-                        }
-                    }
-                }
-            }
+            this.totalTokens.input += data?.usage?.prompt_tokens || 0;
+            this.totalTokens.output += data?.usage?.completion_tokens || 0;
 
             // Add assistant response to conversation history
             this.conversationHistory.push({
+                role: 'user',
+                content: userMessage
+            });
+            this.conversationHistory.push({
                 role: 'assistant',
-                content: response.content
+                content: textContent
             });
 
             const duration = Date.now() - stepStart;
 
             return {
                 text: textContent,
-                sources,
-                tokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0),
+                sources: [],
+                tokens: (data?.usage?.prompt_tokens || 0) + (data?.usage?.completion_tokens || 0),
                 duration
             };
         } catch (error) {
+            clearTimeout(timeoutId);
+            if (error.name === 'AbortError') {
+                console.error(`[AgenticForecaster] Timeout in ${stepName} after ${this.timeoutMs}ms`);
+                throw new Error('Request timed out');
+            }
             console.error(`[AgenticForecaster] Error in ${stepName}:`, error.message);
             throw error;
         }
@@ -176,7 +191,7 @@ Create a focused research plan. Output JSON:
   "metrics_to_focus": ["which financial metrics matter most for this company"]
 }`;
 
-        const result = await this.callClaude(systemPrompt, userMessage, false, 'analysis');
+        const result = await this.callModel(systemPrompt, userMessage, false, 'analysis');
 
         // Parse JSON from response
         let parsed = {};
@@ -213,7 +228,7 @@ Create a focused research plan. Output JSON:
         const topQuestions = questions.slice(0, 2);
 
         const systemPrompt = `You are a financial research analyst for ${companyName} (${ticker}).
-Use web_search to find current, credible information. Focus on:
+Focus on current, credible information already surfaced in the workflow. When a source cannot be verified from context, say so clearly. Focus on:
 - Official company communications (earnings calls, guidance, IR)
 - Analyst reports and estimates
 - Industry news and trends
@@ -233,7 +248,7 @@ Synthesize findings clearly and note source credibility.`;
 Search for recent, credible sources. Synthesize your findings with specific data points, numbers, and dates when available.`;
 
             try {
-                const result = await this.callClaude(systemPrompt, userMessage, true, `research_${i + 1}`);
+                const result = await this.callModel(systemPrompt, userMessage, true, `research_${i + 1}`);
 
                 researchFindings.push({
                     query,
@@ -389,7 +404,7 @@ Generate your forecast as JSON:
   ]
 }`;
 
-        const result = await this.callClaude(systemPrompt, userMessage, false, 'forecast');
+        const result = await this.callModel(systemPrompt, userMessage, false, 'forecast');
 
         let parsed = {};
         try {
@@ -447,7 +462,7 @@ Output JSON:
   "additional_research_needed": ["queries if needs_more_research is true"]
 }`;
 
-        const result = await this.callClaude(systemPrompt, userMessage, false, 'validation');
+        const result = await this.callModel(systemPrompt, userMessage, false, 'validation');
 
         let parsed = {};
         try {

@@ -55,9 +55,9 @@ npm install
 cp .env.example .env.local
 ```
 
-Add your Claude AI API key:
+Add your OpenRouter API key:
 ```
-ANTHROPIC_API_KEY=your_api_key_here
+OPENROUTER_API_KEY=your_api_key_here
 ```
 
 4. Run the development server:
