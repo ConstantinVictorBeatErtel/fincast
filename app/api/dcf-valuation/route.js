@@ -8,6 +8,48 @@ const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
 const PRIMARY_VALUATION_MODEL = 'deepseek/deepseek-chat';
 // Fallback model for future use: google/gemini-2.5-flash
 const LLM_MAX_ATTEMPTS = 3;
+const NON_LINEAR_FORECAST_INSTRUCTIONS = `
+CRITICAL FORECAST SHAPE RULES:
+- Do NOT use the same revenue growth rate in every forecast year.
+- Do NOT use a mechanical equal-step margin ramp across every year.
+- Show at least 3 distinct revenue growth values across the forecast horizon.
+- Make the year-to-year pattern reflect catalyst timing, digestion periods, competitive pressure, or normalization.
+- If a metric stays flat or near-flat, explicitly justify that with company-specific maturity or contract structure.
+- Avoid template-like linear forecasts.`;
+
+function countDistinctRounded(values, decimals = 1) {
+  const scale = 10 ** decimals;
+  return new Set(
+    values
+      .filter((value) => Number.isFinite(value))
+      .map((value) => Math.round(value * scale) / scale)
+  ).size;
+}
+
+function hasArithmeticProgression(values, tolerance = 0.15) {
+  const cleaned = values.filter((value) => Number.isFinite(value));
+  if (cleaned.length < 4) return false;
+  const diffs = cleaned.slice(1).map((value, index) => value - cleaned[index]);
+  const baseline = diffs[0];
+  return diffs.every((diff) => Math.abs(diff - baseline) <= tolerance);
+}
+
+function getLinearProjectionFlags(projections = []) {
+  const metrics = {
+    revenueGrowth: projections.map((projection) => Number(projection?.revenueGrowth)),
+    grossMargin: projections.map((projection) => Number(projection?.grossMargin)),
+    ebitdaMargin: projections.map((projection) => Number(projection?.ebitdaMargin)),
+    fcfMargin: projections.map((projection) => Number(projection?.fcfMargin)),
+  };
+
+  return Object.entries(metrics)
+    .map(([name, values]) => ({
+      name,
+      distinct: countDistinctRounded(values),
+      arithmetic: hasArithmeticProgression(values),
+    }))
+    .filter((metric) => metric.distinct <= 2 || metric.arithmetic);
+}
 
 // Helper function to make OpenRouter API calls with timeout handling
 async function makeOpenRouterRequest(body, timeoutMs = 45000) {
@@ -623,7 +665,8 @@ async function generateValuation(
   sonarFull,
   userFeedback = '',
   model = PRIMARY_VALUATION_MODEL,
-  conversationHistory = []
+  conversationHistory = [],
+  allowLinearityRetry = true
 ) {
   const mkNumber = (v) => Number(v || 0);
   const fy = yf_data?.fy24_financials || {};
@@ -678,6 +721,7 @@ ${shouldEmbedFeedback ? `\nUSER FEEDBACK: ${userFeedback.trim()}\n\nPlease incor
 
 To complete this task, follow these steps:
 IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available.
+${NON_LINEAR_FORECAST_INSTRUCTIONS}
 
 ⚠️ CRITICAL: Pay special attention to the GROWTH CATALYSTS section in the Sonar data below. These non-linear drivers (capacity expansions, new contracts, product launches, industry tailwinds) should be EXPLICITLY incorporated into your projections. Do not simply extrapolate historical trends - model the impact of specific catalysts on revenue and margins.
 
@@ -786,6 +830,7 @@ ${shouldEmbedFeedback ? `\nUSER FEEDBACK: ${userFeedback.trim()}\n\nPlease incor
 
 To complete this task, follow these steps:
 IMPORTANT: Use the following MOST UPDATED financial data and insights for your analysis. This represents the most current and reliable information available.
+${NON_LINEAR_FORECAST_INSTRUCTIONS}
 
 ⚠️ CRITICAL: Pay special attention to the GROWTH CATALYSTS section in the Sonar data below. These non-linear drivers (capacity expansions, new contracts, product launches, industry tailwinds) should be EXPLICITLY incorporated into your projections. Do not simply extrapolate historical trends - model the impact of specific catalysts on revenue and margins.
 
@@ -896,8 +941,8 @@ Return ONLY the <forecast> section as specified above, without any additional co
       { role: 'user', content: prompt },
       ...conversationHistory
     ],
-    temperature: 0.3,
-    max_tokens: 2000
+    temperature: 0.45,
+    max_tokens: 2600
   };
 
   const data = await makeOpenRouterRequest(body);
@@ -1125,6 +1170,51 @@ Return ONLY the <forecast> section as specified above, without any additional co
       p.netIncomeMargin = clamp(p.netIncomeMargin);
       p.eps = clamp(p.eps);
     }
+  }
+
+  const linearFlags = getLinearProjectionFlags(projections);
+  const revenueGrowthFlags = linearFlags.find((metric) => metric.name === 'revenueGrowth');
+  const shouldRetryForLinearity = allowLinearityRetry &&
+    projections.length >= 4 &&
+    (
+      linearFlags.length >= 2 ||
+      (revenueGrowthFlags && revenueGrowthFlags.distinct <= 2)
+    );
+
+  if (shouldRetryForLinearity) {
+    console.log(
+      `[Forecast] Retrying ${ticker} ${method} forecast due to linearity flags: ${linearFlags
+        .map((flag) => `${flag.name}(distinct=${flag.distinct}, arithmetic=${flag.arithmetic})`)
+        .join(', ')}`
+    );
+
+    return generateValuation(
+      ticker,
+      method,
+      selectedMultiple,
+      yf_data,
+      sonarFull,
+      userFeedback,
+      model,
+      [
+        ...conversationHistory,
+        { role: 'assistant', content: text },
+        {
+          role: 'user',
+          content: `The previous forecast is too template-like and mechanically linear.
+
+Revise ONLY the <forecast> block and keep the exact same output format.
+
+Mandatory corrections:
+- Use at least 3 distinct revenue growth rates across the forecast horizon.
+- Do not use equal-step margin ramps for gross margin, EBITDA margin, or FCF margin.
+- Make year-to-year changes reflect catalyst timing, digestion periods, competitive pressure, mix shifts, or normalization.
+- If any metric is intentionally flat, justify that with company-specific maturity or contract structure inside the assumptions section.
+- Keep the valuation internally consistent with the revised projections.`
+        }
+      ],
+      false
+    );
   }
 
   // Extract sections and scalar fields from forecast text

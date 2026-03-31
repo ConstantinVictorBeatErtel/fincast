@@ -13,6 +13,14 @@ const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
 const OPENROUTER_MODEL = 'deepseek/deepseek-chat';
 const OPENROUTER_RESEARCH_MODEL = 'perplexity/sonar';
 // Fallback model for future use: google/gemini-2.5-flash
+const NON_LINEAR_FORECAST_INSTRUCTIONS = `
+CRITICAL FORECAST SHAPE RULES:
+- Do NOT use the same revenue growth rate in every forecast year.
+- Do NOT use a mechanical equal-step margin ramp across every year.
+- Show at least 3 distinct revenue growth values across the forecast horizon.
+- Make the year-to-year pattern reflect catalyst timing, digestion periods, competitive pressure, or normalization.
+- If a metric stays flat or near-flat, explicitly justify that with company-specific maturity or contract structure.
+- Avoid template-like linear forecasts.`;
 
 // Approximate pricing placeholders for LLM cost tracking.
 const PRICING = {
@@ -20,6 +28,40 @@ const PRICING = {
     output: 4.00 / 1_000_000,
     webSearchPerRequest: 0.01 // Approximate cost per web search
 };
+
+function countDistinctRounded(values, decimals = 1) {
+    const scale = 10 ** decimals;
+    return new Set(
+        values
+            .filter((value) => Number.isFinite(value))
+            .map((value) => Math.round(value * scale) / scale)
+    ).size;
+}
+
+function hasArithmeticProgression(values, tolerance = 0.15) {
+    const cleaned = values.filter((value) => Number.isFinite(value));
+    if (cleaned.length < 4) return false;
+    const diffs = cleaned.slice(1).map((value, index) => value - cleaned[index]);
+    const baseline = diffs[0];
+    return diffs.every((diff) => Math.abs(diff - baseline) <= tolerance);
+}
+
+function getLinearProjectionFlags(projections = []) {
+    const metrics = {
+        revenueGrowth: projections.map((projection) => Number(projection?.revenueGrowth)),
+        grossMargin: projections.map((projection) => Number(projection?.grossMargin)),
+        ebitdaMargin: projections.map((projection) => Number(projection?.ebitdaMargin)),
+        fcfMargin: projections.map((projection) => Number(projection?.fcfMargin)),
+    };
+
+    return Object.entries(metrics)
+        .map(([name, values]) => ({
+            name,
+            distinct: countDistinctRounded(values),
+            arithmetic: hasArithmeticProgression(values),
+        }))
+        .filter((metric) => metric.distinct <= 2 || metric.arithmetic);
+}
 
 /**
  * @typedef {Object} AgenticStep
@@ -69,7 +111,7 @@ export class AgenticForecaster {
     /**
      * Make an OpenRouter chat completion call while preserving conversation history.
      */
-    async callModel(systemPrompt, userMessage, enableWebSearch = false, stepName = 'unknown') {
+    async callModel(systemPrompt, userMessage, enableWebSearch = false, stepName = 'unknown', requestOptions = {}) {
         if (this.llmCallCount >= this.maxLLMCalls) {
             throw new Error(`Rate limit reached: max ${this.maxLLMCalls} LLM calls per forecast`);
         }
@@ -80,6 +122,8 @@ export class AgenticForecaster {
         this.llmCallCount++;
         const stepStart = Date.now();
         const model = enableWebSearch ? OPENROUTER_RESEARCH_MODEL : OPENROUTER_MODEL;
+        const temperature = requestOptions.temperature ?? 0.3;
+        const maxTokens = requestOptions.maxTokens ?? (enableWebSearch ? 2500 : 4096);
         const messages = [
             { role: 'system', content: systemPrompt },
             ...this.conversationHistory,
@@ -104,8 +148,8 @@ export class AgenticForecaster {
                 body: JSON.stringify({
                     model,
                     messages,
-                    temperature: 0.3,
-                    max_tokens: enableWebSearch ? 2500 : 4096
+                    temperature,
+                    max_tokens: maxTokens
                 }),
                 signal: controller.signal
             });
@@ -312,7 +356,8 @@ Search for recent, credible sources. Synthesize your findings with specific data
 Base your projections on the research conducted. Be specific about which findings informed each assumption.
 
 VALUATION METHOD: ${isDCF ? 'Discounted Cash Flow (DCF)' : 'Exit Multiple'}
-${valuationInstructions}${feedbackSection}`;
+${valuationInstructions}
+${NON_LINEAR_FORECAST_INSTRUCTIONS}${feedbackSection}`;
 
         // Build research summary
         const researchSummary = researchFindings.map((r, i) =>
@@ -408,7 +453,10 @@ Generate your forecast as JSON:
   ]
 }`;
 
-        const result = await this.callModel(systemPrompt, userMessage, false, 'forecast');
+        const result = await this.callModel(systemPrompt, userMessage, false, 'forecast', {
+            temperature: 0.45,
+            maxTokens: 4600
+        });
 
         let parsed = {};
         try {
@@ -419,6 +467,52 @@ Generate your forecast as JSON:
         } catch (e) {
             console.log('[AgenticForecaster] Failed to parse forecast JSON');
             parsed = { raw_forecast: result.text };
+        }
+
+        const firstPassFlags = getLinearProjectionFlags(parsed?.projections || []);
+        const revenueGrowthFlags = firstPassFlags.find((metric) => metric.name === 'revenueGrowth');
+        const shouldRetryForLinearity = Array.isArray(parsed?.projections) &&
+            parsed.projections.length >= 4 &&
+            (
+                firstPassFlags.length >= 2 ||
+                (revenueGrowthFlags && revenueGrowthFlags.distinct <= 2)
+            );
+
+        if (shouldRetryForLinearity) {
+            console.log(
+                `[AgenticForecaster] Retrying forecast for ${ticker} due to linearity flags: ${firstPassFlags
+                    .map((flag) => `${flag.name}(distinct=${flag.distinct}, arithmetic=${flag.arithmetic})`)
+                    .join(', ')}`
+            );
+
+            const retryResult = await this.callModel(
+                systemPrompt,
+                `The prior forecast is too mechanically linear.
+
+Return ONLY corrected JSON in the same schema as before.
+
+Mandatory fixes:
+- Use at least 3 distinct revenue growth rates across the forecast horizon.
+- Do not use equal-step margin ramps for grossMargin, ebitdaMargin, or fcfMargin.
+- Make year-to-year changes reflect catalyst timing, digestion periods, mix shifts, competitive pressure, or normalization.
+- If any metric stays flat, justify that with company-specific maturity or contract structure.
+- Keep the valuation internally consistent with the revised projections and assumptions.`,
+                false,
+                'forecast_revision',
+                {
+                    temperature: 0.55,
+                    maxTokens: 4600
+                }
+            );
+
+            try {
+                const jsonMatch = retryResult.text.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    parsed = JSON.parse(jsonMatch[0]);
+                }
+            } catch (e) {
+                console.log('[AgenticForecaster] Failed to parse corrected forecast JSON');
+            }
         }
 
         this.researchTrail.push({
