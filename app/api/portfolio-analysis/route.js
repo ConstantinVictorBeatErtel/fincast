@@ -167,63 +167,43 @@ async function fetchHistoricalData(tickers) {
 async function fetchPortfolioPricesDirect(tickers) {
   const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
 
-  // On Vercel: use HTTP to Python serverless function
+  const fetchPortfolioPricesWithYahooFinance = async () => {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(endDate.getFullYear() - 5);
+
+    const entries = await Promise.all(
+      tickers.map(async (ticker) => {
+        try {
+          const chart = await yahooFinance.chart(ticker, {
+            period1: startDate,
+            period2: endDate,
+            interval: '1d'
+          });
+          const prices = {};
+          for (const quote of chart?.quotes || []) {
+            if (quote?.date && typeof quote.close === 'number') {
+              prices[new Date(quote.date).toISOString().split('T')[0]] = quote.close;
+            }
+          }
+          return [ticker, prices];
+        } catch (error) {
+          console.error(`[Portfolio] JS price fetch failed for ${ticker}:`, error.message);
+          return [ticker, {}];
+        }
+      })
+    );
+
+    return Object.fromEntries(entries);
+  };
+
+  // On Vercel: use the JS Yahoo Finance path and avoid Python serverless packaging entirely.
   if (isVercel) {
     try {
-      // Use PY_YF_URL to get production base URL to avoid preview deployment 401s
-      // This mirrors the working pattern from dcf-valuation
-      const pyYfUrl = process.env.PY_YF_URL;
-      let baseUrl;
-      if (pyYfUrl) {
-        // Extract production domain from PY_YF_URL (e.g., https://fincast.vercel.app/api/py-yf -> https://fincast.vercel.app)
-        const match = pyYfUrl.match(/^(https?:\/\/[^\/]+)/);
-        baseUrl = match ? match[1] : `https://${process.env.VERCEL_URL}`;
-      } else {
-        baseUrl = `https://${process.env.VERCEL_URL}`;
-      }
-      const url = `${baseUrl}/api/portfolio-prices`;
-
-      const headers = { 'Content-Type': 'application/json' };
-      // Add Vercel protection bypass headers if available
-      if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
-        headers['x-vercel-automation-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-      }
-      if (process.env.VERCEL_PROTECTION_BYPASS) {
-        headers['x-vercel-protection-bypass'] = process.env.VERCEL_PROTECTION_BYPASS;
-      }
-
-      console.log(`[Portfolio] Fetching prices from ${url}`);
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify({ tickers })
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        // Transform array format to object format (same as local spawn)
-        const formatted = {};
-        Object.keys(result).forEach(ticker => {
-          const prices = {};
-          if (Array.isArray(result[ticker])) {
-            result[ticker].forEach(p => {
-              prices[p.date] = p.close;
-            });
-          } else {
-            // Already in object format
-            Object.assign(prices, result[ticker]);
-          }
-          formatted[ticker] = prices;
-        });
-        console.log(`[Portfolio] Transformed data for ${Object.keys(formatted).length} tickers`);
-        return formatted;
-      }
-      const text = await response.text();
-      console.error(`[Portfolio] API Error ${response.status}: ${text.slice(0, 200)}`);
-      throw new Error(`API returned ${response.status}`);
+      console.log('[Portfolio] Using JS historical price fetch on Vercel');
+      return await fetchPortfolioPricesWithYahooFinance();
     } catch (e) {
-      console.error('Vercel API fetch failed:', e);
+      console.error('Vercel JS price fetch failed:', e);
       return {};
     }
   }

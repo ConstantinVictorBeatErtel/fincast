@@ -15,6 +15,7 @@ export const maxDuration = 300;
  */
 async function fetchYFinanceData(ticker) {
     const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
+    const pyYfUrl = process.env.PY_YF_URL;
 
     if (!isVercel) {
         // Local development: spawn Python script directly
@@ -57,14 +58,10 @@ async function fetchYFinanceData(ticker) {
         } catch (e) {
             console.log(`[Agentic] Python script error: ${e.message}`);
         }
-    } else {
-        // Vercel: call Python API
+    } else if (pyYfUrl) {
+        // Vercel: use an external Python API only if explicitly configured
         try {
-            const pyYfUrl = process.env.PY_YF_URL;
-            const baseUrl = pyYfUrl
-                ? pyYfUrl.replace(/\?.*$/, '')
-                : `https://${process.env.VERCEL_URL}/api/py-yf`;
-            const url = `${baseUrl}?ticker=${encodeURIComponent(ticker)}`;
+            const url = `${pyYfUrl.replace(/\?.*$/, '')}?ticker=${encodeURIComponent(ticker)}`;
 
             const headers = { 'Content-Type': 'application/json' };
             if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
@@ -86,6 +83,8 @@ async function fetchYFinanceData(ticker) {
         } catch (e) {
             console.log(`[Agentic] Python API error: ${e.message}`);
         }
+    } else {
+        console.log('[Agentic] No external PY_YF_URL configured on Vercel, using JS fallback');
     }
 
     // Fallback to yahoo-finance2

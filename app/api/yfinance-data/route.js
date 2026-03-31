@@ -15,6 +15,73 @@ function safeFloat(value, defaultValue = 0) {
   }
 }
 
+async function fetchWithYahooFinance2(ticker) {
+  const quoteSummary = await yahooFinance.quoteSummary(ticker, {
+    modules: ['financialData', 'incomeStatementHistory', 'incomeStatementHistoryQuarterly', 'balanceSheetHistory', 'cashflowStatementHistory', 'defaultKeyStatistics', 'summaryDetail', 'price']
+  });
+
+  if (!quoteSummary) return null;
+
+  const price = quoteSummary.price || {};
+  const financialData = quoteSummary.financialData || {};
+  const defaultKeyStatistics = quoteSummary.defaultKeyStatistics || {};
+  const summaryDetail = quoteSummary.summaryDetail || {};
+  const incomeHistory = quoteSummary.incomeStatementHistory?.incomeStatementHistory || [];
+  const cashflowHistory = quoteSummary.cashflowStatementHistory?.cashflowStatements || [];
+  const latestIncome = incomeHistory[0] || {};
+  const latestCashflow = cashflowHistory[0] || {};
+  const revenue = safeFloat(latestIncome.totalRevenue);
+  const grossProfit = safeFloat(latestIncome.grossProfit);
+  const netIncome = safeFloat(latestIncome.netIncome);
+  const sharesOutstanding = safeFloat(defaultKeyStatistics.sharesOutstanding || price.sharesOutstanding || 1, 1);
+
+  const historical_financials = incomeHistory.map((stmt, idx) => {
+    const cashflow = cashflowHistory[idx] || {};
+    const endDate = stmt.endDate ? new Date(stmt.endDate) : null;
+    return {
+      fiscal_year: endDate ? endDate.getFullYear() : null,
+      revenue: safeFloat(stmt.totalRevenue),
+      gross_profit: safeFloat(stmt.grossProfit),
+      operating_income: safeFloat(stmt.operatingIncome),
+      net_income: safeFloat(stmt.netIncome),
+      ebitda: safeFloat(stmt.ebitda || stmt.operatingIncome),
+      free_cash_flow: safeFloat(cashflow.freeCashFlow),
+      eps: stmt.netIncome && sharesOutstanding ? safeFloat(stmt.netIncome) / sharesOutstanding : 0
+    };
+  });
+
+  return {
+    company_name: price.longName || price.shortName || ticker,
+    source: 'yahoo-finance2-js',
+    fy24_financials: {
+      revenue,
+      gross_profit: grossProfit,
+      gross_margin_pct: revenue > 0 ? (grossProfit / revenue) * 100 : 0,
+      operating_income: safeFloat(latestIncome.operatingIncome),
+      net_income: netIncome,
+      ebitda: safeFloat(latestIncome.ebitda || financialData.ebitda),
+      fcf: safeFloat(latestCashflow.freeCashFlow || financialData.freeCashflow),
+      eps: financialData.currentPrice && summaryDetail.trailingPE
+        ? safeFloat(financialData.currentPrice) / safeFloat(summaryDetail.trailingPE, 1)
+        : (netIncome / sharesOutstanding),
+      shares_outstanding: sharesOutstanding
+    },
+    market_data: {
+      current_price: safeFloat(financialData.currentPrice || price.regularMarketPrice),
+      market_cap: safeFloat(price.marketCap),
+      enterprise_value: safeFloat(defaultKeyStatistics.enterpriseValue),
+      pe_ratio: safeFloat(summaryDetail.trailingPE || summaryDetail.forwardPE)
+    },
+    currency_info: {
+      original_currency: price.currency || 'USD',
+      converted_to_usd: false,
+      conversion_rate: 1.0,
+      exchange_rate_source: 'none'
+    },
+    historical_financials
+  };
+}
+
 
 
 export async function GET(request) {
@@ -84,7 +151,7 @@ export async function GET(request) {
       });
     });
 
-    // On Vercel/production: prefer external Python API first
+    // On Vercel/production: prefer external Python API only if explicitly configured
     let result = null;
     const isProd = !!process.env.VERCEL_URL || process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
     let externalPyApi = process.env.PY_YF_URL;
@@ -204,6 +271,15 @@ export async function GET(request) {
         }
       } catch (e) {
         console.warn('External PY_YF_URL dev fallback error:', e?.message);
+      }
+    }
+
+    if (!result) {
+      try {
+        console.log('Using yahoo-finance2 JS fallback');
+        result = await fetchWithYahooFinance2(ticker);
+      } catch (fallbackError) {
+        console.warn('yahoo-finance2 fallback failed:', fallbackError?.message);
       }
     }
 

@@ -431,20 +431,14 @@ MANAGEMENT COMMENTARY & GUIDANCE:
 // Direct yfinance fetch - HTTP to Python API (Vercel) or spawn locally, with JS fallback
 async function fetchYFinanceDataDirect(ticker, hdrs) {
   const isVercel = !!process.env.VERCEL_URL || process.env.VERCEL === '1';
+  const pyYfUrl = process.env.PY_YF_URL;
 
-  // On Vercel: use HTTP to Python serverless function
-  // Locally: spawn Python script directly
-  if (isVercel) {
+  // On Vercel: optionally use an external Python API only if explicitly configured.
+  if (isVercel && pyYfUrl) {
     // Try Python API via HTTP with timeout to leave time for LLM
     const startTime = Date.now();
     try {
-      // PY_YF_URL can be set to production URL to avoid preview deployment 401s
-      const pyYfUrl = process.env.PY_YF_URL;
-      const baseUrl = pyYfUrl
-        ? pyYfUrl.replace(/\?.*$/, '')
-        : `https://${process.env.VERCEL_URL}/api/py-yf`;
-
-      const url = `${baseUrl}?ticker=${encodeURIComponent(ticker)}`;
+      const url = `${pyYfUrl.replace(/\?.*$/, '')}?ticker=${encodeURIComponent(ticker)}`;
       console.log(`[Python API] Calling ${url}`);
 
       // Build headers with Vercel protection bypass if available
@@ -482,7 +476,7 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
         console.log(`[Python API] Error in ${elapsed}ms: ${e.message}`);
       }
     }
-  } else {
+  } else if (!isVercel) {
     // Local development: spawn Python script directly
     try {
       console.log(`[Python Script] Fetching data for ${ticker} locally`);
@@ -528,6 +522,8 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
     } catch (e) {
       console.log(`[Python Script] Error: ${e.message}`);
     }
+  } else {
+    console.log('[Python API] No external PY_YF_URL configured on Vercel, using JS fallback');
   }
 
   // Fallback to yahoo-finance2 JS library

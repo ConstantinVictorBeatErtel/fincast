@@ -1,7 +1,0 @@
-{
-  "functions": {
-    "fetch_company_data.py": {
-      "runtime": "@vercel/python@3.0.0"
-    }
-  }
-} 
