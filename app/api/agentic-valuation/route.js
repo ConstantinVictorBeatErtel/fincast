@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
 import { AgenticForecaster } from '@/app/services/agenticForecaster';
+import { fetchSecFinancialData } from '@/lib/server/fundamentals';
 
 const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
 
@@ -157,8 +158,15 @@ async function fetchYFinanceData(ticker) {
         };
     } catch (e) {
         console.log(`[Agentic] JS fallback error: ${e.message}`);
-        return null;
     }
+
+    const secFallback = await fetchSecFinancialData(ticker).catch(() => null);
+    if (secFallback) {
+        console.log(`[Agentic] SEC fallback success for ${ticker}`);
+        return secFallback;
+    }
+
+    return null;
 }
 
 /**

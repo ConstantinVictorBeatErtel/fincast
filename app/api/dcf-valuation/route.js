@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
+import { fetchSecFinancialData } from '@/lib/server/fundamentals';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
@@ -600,6 +601,12 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
     return result;
   } catch (e) {
     console.log(`[JS Fallback] Error: ${e.message}`);
+  }
+
+  const secFallback = await fetchSecFinancialData(ticker).catch(() => null);
+  if (secFallback) {
+    console.log(`[SEC Fallback] Success for ${ticker}: ${secFallback.historical_financials?.length || 0} historical records`);
+    return secFallback;
   }
 
   console.log(`[Error] All data sources failed for ${ticker}`);

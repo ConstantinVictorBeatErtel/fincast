@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
+import { fetchSecFinancialData } from '@/lib/server/fundamentals';
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
@@ -280,6 +281,13 @@ export async function GET(request) {
         result = await fetchWithYahooFinance2(ticker);
       } catch (fallbackError) {
         console.warn('yahoo-finance2 fallback failed:', fallbackError?.message);
+      }
+    }
+
+    if (!result) {
+      result = await fetchSecFinancialData(ticker).catch(() => null);
+      if (result) {
+        console.log('Using SEC/Stooq fallback');
       }
     }
 
