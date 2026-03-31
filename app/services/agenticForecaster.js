@@ -63,6 +63,38 @@ function getLinearProjectionFlags(projections = []) {
         .filter((metric) => metric.distinct <= 2 || metric.arithmetic);
 }
 
+function getPerShareValuationSanityIssues({ valuationPerShare, currentPrice }) {
+    const issues = [];
+
+    if (!Number.isFinite(valuationPerShare) || valuationPerShare <= 0) {
+        issues.push('the fair value per share is missing or non-positive');
+    }
+
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+        issues.push('the current share price is missing or non-positive');
+    }
+
+    if (Number.isFinite(valuationPerShare) && valuationPerShare > 0 && Number.isFinite(currentPrice) && currentPrice > 0) {
+        const upside = ((valuationPerShare - currentPrice) / currentPrice) * 100;
+        const cagr = (Math.pow(valuationPerShare / currentPrice, 1 / 5) - 1) * 100;
+        const ratio = valuationPerShare / currentPrice;
+
+        if (ratio > 8 || ratio < 0.2) {
+            issues.push(`the fair value per share (${valuationPerShare.toFixed(2)}) is too far from the current share price (${currentPrice.toFixed(2)})`);
+        }
+
+        if (!Number.isFinite(upside) || Math.abs(upside) > 1000) {
+            issues.push(`the upside percentage (${Number.isFinite(upside) ? upside.toFixed(1) : 'NaN'}%) is not credible`);
+        }
+
+        if (!Number.isFinite(cagr) || cagr > 100 || cagr < -40) {
+            issues.push(`the CAGR (${Number.isFinite(cagr) ? cagr.toFixed(1) : 'NaN'}%) is not credible`);
+        }
+    }
+
+    return issues;
+}
+
 /**
  * @typedef {Object} AgenticStep
  * @property {'analysis' | 'research' | 'forecast' | 'validation'} step
@@ -471,25 +503,33 @@ Generate your forecast as JSON:
 
         const firstPassFlags = getLinearProjectionFlags(parsed?.projections || []);
         const revenueGrowthFlags = firstPassFlags.find((metric) => metric.name === 'revenueGrowth');
-        const shouldRetryForLinearity = Array.isArray(parsed?.projections) &&
+        const linearityIssues = Array.isArray(parsed?.projections) &&
             parsed.projections.length >= 4 &&
             (
                 firstPassFlags.length >= 2 ||
                 (revenueGrowthFlags && revenueGrowthFlags.distinct <= 2)
-            );
+            )
+            ? firstPassFlags.map((flag) => `${flag.name}(distinct=${flag.distinct}, arithmetic=${flag.arithmetic})`)
+            : [];
+        const valuationIssues = getPerShareValuationSanityIssues({
+            valuationPerShare: Number(parsed?.fair_value_per_share || 0),
+            currentPrice: Number(companyData?.market_data?.current_price || 0)
+        });
+        const retryIssues = [...linearityIssues, ...valuationIssues];
 
-        if (shouldRetryForLinearity) {
+        if (retryIssues.length > 0) {
             console.log(
-                `[AgenticForecaster] Retrying forecast for ${ticker} due to linearity flags: ${firstPassFlags
-                    .map((flag) => `${flag.name}(distinct=${flag.distinct}, arithmetic=${flag.arithmetic})`)
-                    .join(', ')}`
+                `[AgenticForecaster] Retrying forecast for ${ticker} due to sanity issues: ${retryIssues.join('; ')}`
             );
 
             const retryResult = await this.callModel(
                 systemPrompt,
-                `The prior forecast is too mechanically linear.
+                `The prior forecast needs correction.
 
 Return ONLY corrected JSON in the same schema as before.
+
+Issues to fix:
+- ${retryIssues.join('\n- ')}
 
 Mandatory fixes:
 - Use at least 3 distinct revenue growth rates across the forecast horizon.

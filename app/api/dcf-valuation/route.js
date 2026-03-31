@@ -51,6 +51,35 @@ function getLinearProjectionFlags(projections = []) {
     .filter((metric) => metric.distinct <= 2 || metric.arithmetic);
 }
 
+function getPerShareValuationSanityIssues({ valuationPerShare, currentPrice, upside, cagr }) {
+  const issues = [];
+
+  if (!Number.isFinite(valuationPerShare) || valuationPerShare <= 0) {
+    issues.push('the implied fair value per share is missing or non-positive');
+  }
+
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+    issues.push('the current share price is missing or non-positive');
+  }
+
+  if (Number.isFinite(valuationPerShare) && valuationPerShare > 0 && Number.isFinite(currentPrice) && currentPrice > 0) {
+    const ratio = valuationPerShare / currentPrice;
+    if (ratio > 8 || ratio < 0.2) {
+      issues.push(`the implied fair value per share (${valuationPerShare.toFixed(2)}) is too far from the current share price (${currentPrice.toFixed(2)})`);
+    }
+  }
+
+  if (!Number.isFinite(upside) || Math.abs(upside) > 1000) {
+    issues.push(`the upside percentage (${Number.isFinite(upside) ? upside.toFixed(1) : 'NaN'}%) is not credible`);
+  }
+
+  if (!Number.isFinite(cagr) || cagr > 100 || cagr < -40) {
+    issues.push(`the CAGR (${Number.isFinite(cagr) ? cagr.toFixed(1) : 'NaN'}%) is not credible`);
+  }
+
+  return issues;
+}
+
 // Helper function to make OpenRouter API calls with timeout handling
 async function makeOpenRouterRequest(body, timeoutMs = 45000) {
   const controller = new AbortController();
@@ -1174,48 +1203,13 @@ Return ONLY the <forecast> section as specified above, without any additional co
 
   const linearFlags = getLinearProjectionFlags(projections);
   const revenueGrowthFlags = linearFlags.find((metric) => metric.name === 'revenueGrowth');
-  const shouldRetryForLinearity = allowLinearityRetry &&
-    projections.length >= 4 &&
+  const linearityIssues = projections.length >= 4 &&
     (
       linearFlags.length >= 2 ||
       (revenueGrowthFlags && revenueGrowthFlags.distinct <= 2)
-    );
-
-  if (shouldRetryForLinearity) {
-    console.log(
-      `[Forecast] Retrying ${ticker} ${method} forecast due to linearity flags: ${linearFlags
-        .map((flag) => `${flag.name}(distinct=${flag.distinct}, arithmetic=${flag.arithmetic})`)
-        .join(', ')}`
-    );
-
-    return generateValuation(
-      ticker,
-      method,
-      selectedMultiple,
-      yf_data,
-      sonarFull,
-      userFeedback,
-      model,
-      [
-        ...conversationHistory,
-        { role: 'assistant', content: text },
-        {
-          role: 'user',
-          content: `The previous forecast is too template-like and mechanically linear.
-
-Revise ONLY the <forecast> block and keep the exact same output format.
-
-Mandatory corrections:
-- Use at least 3 distinct revenue growth rates across the forecast horizon.
-- Do not use equal-step margin ramps for gross margin, EBITDA margin, or FCF margin.
-- Make year-to-year changes reflect catalyst timing, digestion periods, competitive pressure, mix shifts, or normalization.
-- If any metric is intentionally flat, justify that with company-specific maturity or contract structure inside the assumptions section.
-- Keep the valuation internally consistent with the revised projections.`
-        }
-      ],
-      false
-    );
-  }
+    )
+    ? linearFlags.map((flag) => `${flag.name}(distinct=${flag.distinct}, arithmetic=${flag.arithmetic})`)
+    : [];
 
   // Extract sections and scalar fields from forecast text
   const extractBetween = (textSrc, startRe, endRe) => {
@@ -1292,6 +1286,52 @@ Mandatory corrections:
       upside = ((fairValue - marketCapM) / marketCapM) * 100;
       cagr = (Math.pow(fairValue / marketCapM, 1 / cagrYears) - 1) * 100;
     }
+  }
+
+  const sharesOutstanding = mkNumber(fy.shares_outstanding) || mkNumber(md.shares_outstanding);
+  const impliedFairValuePerShare = method === 'dcf'
+    ? (sharesOutstanding > 0 ? (fairValue * 1_000_000) / sharesOutstanding : 0)
+    : fairValue;
+  const valuationIssues = getPerShareValuationSanityIssues({
+    valuationPerShare: impliedFairValuePerShare,
+    currentPrice,
+    upside,
+    cagr
+  });
+  const retryIssues = [...linearityIssues, ...valuationIssues];
+
+  if (allowLinearityRetry && retryIssues.length > 0) {
+    console.log(`[Forecast] Retrying ${ticker} ${method} forecast due to sanity issues: ${retryIssues.join('; ')}`);
+
+    return generateValuation(
+      ticker,
+      method,
+      selectedMultiple,
+      yf_data,
+      sonarFull,
+      userFeedback,
+      model,
+      [
+        ...conversationHistory,
+        { role: 'assistant', content: text },
+        {
+          role: 'user',
+          content: `The previous forecast needs correction.
+
+Revise ONLY the <forecast> block and keep the exact same output format.
+
+Issues to fix:
+- ${retryIssues.join('\n- ')}
+
+Mandatory corrections:
+- Keep the valuation internally consistent with the revised projections.
+- Make sure the implied fair value per share is credible relative to the current share price.
+- Avoid template-like linear forecasts and equal-step margin ramps.
+- If a metric is flat or near-flat, justify that with company-specific maturity or contract structure.`
+        }
+      ],
+      false
+    );
   }
 
   return {
