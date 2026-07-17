@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
-import { fetchSecFinancialData } from '@/lib/server/fundamentals';
+import { fetchSecFinancialData, ensureCurrentPrice } from '@/lib/server/fundamentals';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
@@ -200,6 +200,10 @@ export async function GET(request) {
       };
     }
 
+    // Without a current price the valuation reports $0.00 and 0% upside/CAGR,
+    // so backfill it from a live quote when the data source came back empty.
+    await ensureCurrentPrice(yf, ticker);
+
     if (useLLM) {
       if (!process.env.OPENROUTER_API_KEY) {
         return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 500 });
@@ -325,6 +329,10 @@ export async function POST(request) {
         historical_financials: []
       };
     }
+
+    // Without a current price the valuation reports $0.00 and 0% upside/CAGR,
+    // so backfill it from a live quote when the data source came back empty.
+    await ensureCurrentPrice(yf, ticker);
 
     if (!process.env.OPENROUTER_API_KEY) {
       return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 500 });

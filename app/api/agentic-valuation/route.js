@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
 import { AgenticForecaster } from '@/app/services/agenticForecaster';
-import { fetchSecFinancialData } from '@/lib/server/fundamentals';
+import { fetchSecFinancialData, ensureCurrentPrice } from '@/lib/server/fundamentals';
 
 const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
 
@@ -245,6 +245,10 @@ export async function GET(request) {
             source: 'minimal',
             historical_financials: []
         };
+
+        // Without a current price the response reports $0.00 and 0% upside/CAGR,
+        // so backfill it from a live quote when the data source came back empty.
+        await ensureCurrentPrice(companyData, ticker);
 
         // Run agentic workflow with method, multiple, and feedback
         const forecaster = new AgenticForecaster();
