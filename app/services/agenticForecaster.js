@@ -8,11 +8,12 @@
  * Step 4: Validation - Self-check assumptions, assign confidence scores
  */
 
+import { getValuationModels } from '@/lib/server/models';
+
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
-const OPENROUTER_MODEL = 'deepseek/deepseek-chat';
+const OPENROUTER_MODELS = getValuationModels();
 const OPENROUTER_RESEARCH_MODEL = 'perplexity/sonar';
-// Fallback model for future use: google/gemini-2.5-flash
 const NON_LINEAR_FORECAST_INSTRUCTIONS = `
 CRITICAL FORECAST SHAPE RULES:
 - Do NOT use the same revenue growth rate in every forecast year.
@@ -153,7 +154,10 @@ export class AgenticForecaster {
 
         this.llmCallCount++;
         const stepStart = Date.now();
-        const model = enableWebSearch ? OPENROUTER_RESEARCH_MODEL : OPENROUTER_MODEL;
+        // Research steps need Sonar's web access; everything else walks the
+        // free-model list so a retired slug or per-model rate limit doesn't
+        // kill the whole forecast.
+        const candidateModels = enableWebSearch ? [OPENROUTER_RESEARCH_MODEL] : OPENROUTER_MODELS;
         const temperature = requestOptions.temperature ?? 0.3;
         const maxTokens = requestOptions.maxTokens ?? (enableWebSearch ? 2500 : 4096);
         const messages = [
@@ -168,31 +172,41 @@ export class AgenticForecaster {
         const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
         try {
-            const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.apiKey}`,
-                    'Content-Type': 'application/json',
-                    'HTTP-Referer': OPENROUTER_REFERER,
-                    'Referer': OPENROUTER_REFERER,
-                    'X-Title': 'Fincast Agentic'
-                },
-                body: JSON.stringify({
-                    model,
-                    messages,
-                    temperature,
-                    max_tokens: maxTokens
-                }),
-                signal: controller.signal
-            });
+            let data = null;
+            let lastModelError = null;
+            for (const model of candidateModels) {
+                const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${this.apiKey}`,
+                        'Content-Type': 'application/json',
+                        'HTTP-Referer': OPENROUTER_REFERER,
+                        'Referer': OPENROUTER_REFERER,
+                        'X-Title': 'Fincast Agentic'
+                    },
+                    body: JSON.stringify({
+                        model,
+                        messages,
+                        temperature,
+                        max_tokens: maxTokens
+                    }),
+                    signal: controller.signal
+                });
+
+                if (response.ok) {
+                    data = await response.json();
+                    break;
+                }
+
+                const error = await response.json().catch(() => ({ error: { message: 'Failed to parse provider error' } }));
+                lastModelError = new Error(error.error?.message || error.message || `Provider error ${response.status}`);
+                console.warn(`[AgenticForecaster] Model ${model} failed in ${stepName} (${response.status}): ${lastModelError.message}`);
+            }
             clearTimeout(timeoutId);
 
-            if (!response.ok) {
-                const error = await response.json().catch(() => ({ error: { message: 'Failed to parse provider error' } }));
-                throw new Error(error.error?.message || error.message || `Provider error ${response.status}`);
+            if (!data) {
+                throw lastModelError || new Error('All candidate models failed');
             }
-
-            const data = await response.json();
             const messageContent = data?.choices?.[0]?.message?.content;
             const citations = Array.isArray(data?.citations) ? data.citations : [];
             const textContent = Array.isArray(messageContent)
