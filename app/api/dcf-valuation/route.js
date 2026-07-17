@@ -1,13 +1,20 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
-import { fetchSecFinancialData } from '@/lib/server/fundamentals';
+import { fetchSecFinancialData, ensureCurrentPrice } from '@/lib/server/fundamentals';
+import { getValuationModels } from '@/lib/server/models';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
-const PRIMARY_VALUATION_MODEL = 'deepseek/deepseek-chat';
-// Fallback model for future use: google/gemini-2.5-flash
-const LLM_MAX_ATTEMPTS = 3;
+const VALUATION_MODELS = getValuationModels();
+const PRIMARY_VALUATION_MODEL = VALUATION_MODELS[0];
+const LLM_MAX_ATTEMPTS = Math.max(3, VALUATION_MODELS.length);
+
+// Rotate through the free-model list so a retired slug or per-model rate
+// limit doesn't sink every retry.
+function modelForAttempt(attempt) {
+  return VALUATION_MODELS[(attempt - 1) % VALUATION_MODELS.length];
+}
 const NON_LINEAR_FORECAST_INSTRUCTIONS = `
 CRITICAL FORECAST SHAPE RULES:
 - Do NOT use the same revenue growth rate in every forecast year.
@@ -200,6 +207,10 @@ export async function GET(request) {
       };
     }
 
+    // Without a current price the valuation reports $0.00 and 0% upside/CAGR,
+    // so backfill it from a live quote when the data source came back empty.
+    await ensureCurrentPrice(yf, ticker);
+
     if (useLLM) {
       if (!process.env.OPENROUTER_API_KEY) {
         return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 500 });
@@ -211,7 +222,8 @@ export async function GET(request) {
 
         for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt++) {
           try {
-            console.log(`[LLM] Attempt ${attempt}/${LLM_MAX_ATTEMPTS} for ${ticker} using model: ${PRIMARY_VALUATION_MODEL}`);
+            const attemptModel = modelForAttempt(attempt);
+            console.log(`[LLM] Attempt ${attempt}/${LLM_MAX_ATTEMPTS} for ${ticker} using model: ${attemptModel}`);
 
             // Add exponential backoff delay
             if (attempt > 1) {
@@ -220,9 +232,9 @@ export async function GET(request) {
               await new Promise(resolve => setTimeout(resolve, delay));
             }
 
-            valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', '', PRIMARY_VALUATION_MODEL);
+            valuation = await generateValuation(ticker, method, selectedMultiple, yf, sonar?.full_response || '', '', attemptModel);
             if (valuation && Array.isArray(valuation.projections) && valuation.projections.length > 0) {
-              console.log(`[LLM] Success on attempt ${attempt} with ${valuation.projections.length} projections using ${PRIMARY_VALUATION_MODEL}`);
+              console.log(`[LLM] Success on attempt ${attempt} with ${valuation.projections.length} projections using ${attemptModel}`);
               break;
             }
             lastErr = new Error('Missing projections');
@@ -326,6 +338,10 @@ export async function POST(request) {
       };
     }
 
+    // Without a current price the valuation reports $0.00 and 0% upside/CAGR,
+    // so backfill it from a live quote when the data source came back empty.
+    await ensureCurrentPrice(yf, ticker);
+
     if (!process.env.OPENROUTER_API_KEY) {
       return NextResponse.json({ error: 'OPENROUTER_API_KEY not configured' }, { status: 500 });
     }
@@ -342,7 +358,8 @@ export async function POST(request) {
 
       for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt++) {
         try {
-          console.log(`[LLM] POST Attempt ${attempt}/${LLM_MAX_ATTEMPTS} for ${ticker} with feedback using model: ${PRIMARY_VALUATION_MODEL}`);
+          const attemptModel = modelForAttempt(attempt);
+          console.log(`[LLM] POST Attempt ${attempt}/${LLM_MAX_ATTEMPTS} for ${ticker} with feedback using model: ${attemptModel}`);
 
           // Add exponential backoff delay
           if (attempt > 1) {
@@ -358,11 +375,11 @@ export async function POST(request) {
             yf,
             sonar?.full_response || '',
             feedback || '',
-            PRIMARY_VALUATION_MODEL,
+            attemptModel,
             feedbackHistory
           );
           if (valuation && Array.isArray(valuation.projections) && valuation.projections.length > 0) {
-            console.log(`[LLM] POST Success on attempt ${attempt} with ${valuation.projections.length} projections using ${PRIMARY_VALUATION_MODEL}`);
+            console.log(`[LLM] POST Success on attempt ${attempt} with ${valuation.projections.length} projections using ${attemptModel}`);
             break;
           }
           lastErr = new Error('Missing projections');
