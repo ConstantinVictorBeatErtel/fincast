@@ -16,7 +16,6 @@ run_dir/
 **/*.ipynb
 **/.DS_Store
 **/__pycache__/
-prisma/
 
 # Large caches or data
 **/*.parquet
