@@ -1,135 +1,88 @@
-# Fincast - Financial Valuation & Portfolio Management
+# Fincast — Financial Valuation & Portfolio Management
 
-A comprehensive financial analysis platform that provides DCF (Discounted Cash Flow) and Exit Multiple valuations for stocks, with portfolio management capabilities.
+AI-assisted equity valuation for public stocks: DCF and exit-multiple workflows with Claude-generated forward assumptions over live market data, plus authenticated portfolio tracking.
+
+**Live app:** [fincast-agent.vercel.app](https://fincast-agent.vercel.app/)
 
 ## Features
 
-### 🏦 Financial Valuation
-- **DCF Analysis**: Discounted Cash Flow valuation with customizable discount rates and terminal growth
-- **Exit Multiple Analysis**: P/E, EV/EBITDA, EV/FCF, and EV/Sales multiple valuations
-- **AI-Powered Analysis**: Uses Claude AI to analyze financial data and generate projections
-- **Real-time Data**: Fetches current market data and financial statements
+### Financial valuation
+- **DCF analysis** — discount rate, terminal growth, and five-year cash-flow projections
+- **Exit multiple analysis** — P/E, EV/EBITDA, EV/FCF, and EV/Sales with AI-selected multiples
+- **Two analysis modes** — Standard Forecast (~10s) and Agentic Analysis (~1–2 min with web research)
+- **Excel export** — download valuation summaries and performance tables
 
-### 📊 Portfolio Management
-- **User Authentication**: Secure login with email/password and Google OAuth
-- **Portfolio Tracking**: Add stocks to your portfolio and track valuations
-- **Upside Analysis**: View potential upside and CAGR for each holding
-- **Excel Export**: Download detailed valuation reports
+### Portfolio management
+- **User authentication** — email/password and Google OAuth via NextAuth.js
+- **Portfolio tracking** — persist holdings in Postgres (Prisma)
+- **Upside analysis** — fair value, upside %, and CAGR per holding
 
-### 🎯 Key Metrics
-- **Fair Value**: Per-share or enterprise value calculations
-- **Upside Potential**: Percentage gain from current price to fair value
-- **CAGR**: Compound Annual Growth Rate projections
-- **Financial Projections**: 5-year revenue, margin, and cash flow forecasts
+## Tech stack
 
-## Tech Stack
+- **Frontend:** Next.js 14, React, Tailwind CSS
+- **Backend:** Next.js API routes, Claude via OpenRouter
+- **Database:** Postgres via Prisma
+- **Auth:** NextAuth.js
+- **Deployment:** Vercel
 
-- **Frontend**: Next.js 14, React, TypeScript, Tailwind CSS
-- **Backend**: Next.js API Routes, Claude AI API
-- **Database**: Vercel Postgres (planned)
-- **Authentication**: NextAuth.js (planned)
-- **Deployment**: Vercel
-
-## Getting Started
+## Getting started
 
 ### Prerequisites
 - Node.js 18+
-- npm or yarn
-- Claude AI API key
+- npm
+- OpenRouter API key (for Claude)
+- Postgres database URL (for auth + portfolio)
 
 ### Installation
 
-1. Clone the repository:
 ```bash
-git clone <your-repo-url>
-cd Fincast
-```
-
-2. Install dependencies:
-```bash
+git clone https://github.com/ConstantinVictorBeatErtel/fincast.git
+cd fincast
 npm install
-```
-
-3. Set up environment variables:
-```bash
-cp .env.example .env.local
-```
-
-Add your OpenRouter API key:
-```
-OPENROUTER_API_KEY=your_api_key_here
-```
-
-4. Run the development server:
-```bash
+cp env.example .env.local
+# fill in OPENROUTER_API_KEY, DATABASE_URL, NEXTAUTH_SECRET, etc.
 npm run dev
 ```
 
-5. Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:3000](http://localhost:3000).
 
 ## Usage
 
-### Basic Valuation
-1. Enter a stock ticker (e.g., AAPL, MSFT, NVDA)
-2. Select valuation method (DCF or Exit Multiple)
-3. Click "Generate Valuation"
-4. View detailed financial analysis and projections
+1. Enter a ticker (e.g. AAPL, MSFT, NVDA)
+2. Pick DCF or Exit Multiple, and Standard or Agentic mode
+3. Click **Generate Valuation**
+4. Sign in to save stocks to a portfolio and track valuations over time
 
-### Portfolio Management (Coming Soon)
-1. Create an account or sign in with Google
-2. Add stocks to your portfolio
-3. Track valuations and upside potential
-4. Export portfolio reports
+## API
 
-## API Endpoints
+### `GET /api/dcf-valuation`
 
-### GET /api/dcf-valuation
-Generate a valuation for a stock.
+| Parameter | Description |
+|-----------|-------------|
+| `ticker` | Stock symbol (required) |
+| `method` | `dcf` or `exit-multiple` (default: `dcf`) |
+| `multiple` | `auto`, `P/E`, `EV/EBITDA`, etc. (default: `auto`) |
 
-**Parameters:**
-- `ticker`: Stock symbol (required)
-- `method`: Valuation method - 'dcf' or 'exit-multiple' (default: 'dcf')
-- `multiple`: Exit multiple type - 'auto', 'P/E', 'EV/EBITDA', etc. (default: 'auto')
+Example: `/api/dcf-valuation?ticker=AAPL&method=exit-multiple&multiple=P/E`
 
-**Example:**
-```
-GET /api/dcf-valuation?ticker=AAPL&method=exit-multiple&multiple=P/E
-```
+### `POST /api/dcf-valuation`
 
-### POST /api/dcf-valuation
-Regenerate valuation with user feedback.
+Regenerate with user feedback in the JSON body: `{ "feedback": "..." }`.
 
-**Body:**
-```json
-{
-  "feedback": "Please increase growth rate by 2% and use 35x P/E multiple"
-}
-```
+## Project layout
 
-## Deployment
-
-This project is optimized for Vercel deployment:
-
-1. Connect your GitHub repository to Vercel
-2. Add environment variables in Vercel dashboard
-3. Deploy automatically on push to main branch
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
+| Path | Purpose |
+|------|---------|
+| `app/components/DCFValuation.js` | Main valuation UI (orchestrator) |
+| `app/hooks/useDCFValuation.js` | Valuation state, API calls, retry logic |
+| `app/lib/dcf/` | Formatters, response normalization, Excel export |
+| `app/api/dcf-valuation/` | Standard valuation API |
+| `app/api/agentic-valuation/` | Multi-step agentic valuation API |
+| `app/api/portfolio/` | Portfolio CRUD |
+| `app/api/auth/` | NextAuth routes |
+| `tests/` | Manual integration scripts (Yahoo Finance, Python API) |
+| `python_service/` | Optional Python data helpers |
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Roadmap
-
-- [ ] User authentication with NextAuth.js
-- [ ] Portfolio management with Vercel Postgres
-- [ ] Real-time stock price updates
-- [ ] Advanced financial metrics
-- [ ] Mobile app
-- [ ] Social features and sharing
+MIT — see [LICENSE](LICENSE).
