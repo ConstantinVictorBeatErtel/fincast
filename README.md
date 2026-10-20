@@ -69,6 +69,16 @@ Example: `/api/dcf-valuation?ticker=AAPL&method=exit-multiple&multiple=P/E`
 
 Regenerate with user feedback in the JSON body: `{ "feedback": "..." }`.
 
+### Forecast engine
+
+The deterministic, auditable forecast engine lives in `engine/` and uses a separate Postgres `engine` schema. Install it with `pip install -e engine` and run a prior-based forecast with:
+
+```bash
+PYTHONPATH=engine python -m fincast_engine.cli forecast --ticker AAPL --head reverse_dcf
+```
+
+The Python service exposes the same deterministic path at `POST /forecast`. Model-backed node resolution is available through the `fincast_engine` package when `OPENROUTER_API_KEY` is configured.
+
 ## Project layout
 
 | Path | Purpose |

@@ -1,0 +1,144 @@
+- id: research.revenue_growth
+  kind: estimate
+  tier: research
+  output: {name: revenue_growth, type: float, unit: ratio, min: -0.95, max: 2.0}
+  inputs: [historical.revenue_growth]
+  evidence_sections: [mdna, transcript_qa, guidance]
+  prior: trailing_4q_median
+  fallback: prior
+  assertions: ["min <= value <= max", "abs(value - prior) <= 0.20 or len(cited_evidence) >= 1"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.gross_margin
+  kind: estimate
+  tier: research
+  output: {name: gross_margin_pct, type: float, unit: ratio, min: 0.05, max: 0.95, max_delta: 0.08}
+  inputs: [historical.gross_margin_pct, forecast.revenue]
+  evidence_sections: [mdna, transcript_qa, guidance]
+  prior: trailing_4q_median
+  fallback: prior
+  assertions: ["min <= value <= max", "abs(value - prior) <= 0.08 or len(cited_evidence) >= 1"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.opex
+  kind: estimate
+  tier: research
+  output: {name: opex_pct, type: float, unit: ratio, min: 0.0, max: 1.0}
+  inputs: [historical.opex_pct, forecast.revenue]
+  evidence_sections: [mdna, transcript_qa, guidance]
+  prior: trailing_4q_median
+  fallback: prior
+  assertions: ["min <= value <= max"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.tax_rate
+  kind: estimate
+  tier: research
+  output: {name: tax_rate, type: float, unit: ratio, min: -1.0, max: 1.0}
+  inputs: [historical.tax_rate]
+  evidence_sections: [mdna, guidance]
+  prior: trailing_4q_median
+  fallback: prior
+  assertions: ["min <= value <= max"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.da_pct
+  kind: estimate
+  tier: research
+  output: {name: da_pct, type: float, unit: ratio, min: 0.0, max: 0.5}
+  inputs: [historical.da_pct, forecast.revenue]
+  evidence_sections: [mdna]
+  prior: trailing_4q_median
+  fallback: prior
+  assertions: ["min <= value <= max"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.capex_pct
+  kind: estimate
+  tier: research
+  output: {name: capex_pct, type: float, unit: ratio, min: 0.0, max: 1.0}
+  inputs: [historical.capex_pct, forecast.revenue]
+  evidence_sections: [mdna, guidance]
+  prior: trailing_4q_median
+  fallback: prior
+  assertions: ["min <= value <= max"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.dso
+  kind: estimate
+  tier: research
+  output: {name: dso, type: float, unit: days, min: 0.0, max: 365.0}
+  inputs: [historical.dso]
+  evidence_sections: [mdna]
+  prior: trailing_4q_median
+  fallback: prior
+  assertions: ["min <= value <= max"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.dio
+  kind: estimate
+  tier: research
+  output: {name: dio, type: float, unit: days, min: 0.0, max: 730.0}
+  inputs: [historical.dio]
+  evidence_sections: [mdna]
+  prior: trailing_4q_median
+  fallback: prior
+  assertions: ["min <= value <= max"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.dpo
+  kind: estimate
+  tier: research
+  output: {name: dpo, type: float, unit: days, min: 0.0, max: 730.0}
+  inputs: [historical.dpo]
+  evidence_sections: [mdna]
+  prior: trailing_4q_median
+  fallback: prior
+  assertions: ["min <= value <= max"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.wacc
+  kind: estimate
+  tier: research
+  output: {name: wacc, type: float, unit: ratio, min: 0.01, max: 0.5}
+  inputs: [market_data]
+  evidence_sections: [guidance]
+  prior: explicit_market_assumption
+  fallback: prior
+  assertions: ["min <= value <= max"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.terminal_growth
+  kind: estimate
+  tier: research
+  output: {name: terminal_growth, type: float, unit: ratio, min: -0.02, max: 0.08}
+  inputs: [market_data]
+  evidence_sections: [guidance]
+  prior: explicit_market_assumption
+  fallback: prior
+  assertions: ["min <= value <= max"]
+  critic: grounding
+  max_retries: 2
+
+- id: research.exit_multiple
+  kind: estimate
+  tier: research
+  output: {name: exit_multiple, type: float, unit: multiple, min: 1.0, max: 60.0}
+  inputs: [market_data]
+  evidence_sections: [guidance]
+  prior: peer_median
+  fallback: prior
+  assertions: ["min <= value <= max"]
+  critic: grounding
+  max_retries: 2
+

@@ -22,7 +22,7 @@ export function useDCFValuation() {
   const [retrying, setRetrying] = useState(false);
   const [analysisMode, setAnalysisMode] = useState('agentic');
   const [agenticProgress, setAgenticProgress] = useState(null);
-  const [showResearchTrail, setShowResearchTrail] = useState(false);
+  const [showResearchTrail, setShowResearchTrail] = useState(true);
   const loadingRef = useRef(false);
 
   useEffect(() => {

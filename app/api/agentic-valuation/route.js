@@ -88,13 +88,36 @@ async function fetchYFinanceData(ticker) {
         console.log('[Agentic] No external PY_YF_URL configured on Vercel, using JS fallback');
     }
 
+    // Yahoo Finance's crumb/cookie flow is frequently rate-limited from
+    // serverless IPs. SEC is already the reliable production fallback, so do
+    // not start the Yahoo client at all on Vercel when no Python data service
+    // is configured. Keep the Yahoo path for local development.
+    if (isVercel) {
+        const secFallback = await Promise.race([
+            fetchSecFinancialData(ticker).catch(() => null),
+            new Promise((resolve) => setTimeout(() => resolve(null), 20000))
+        ]);
+        if (secFallback) {
+            console.log(`[Agentic] SEC fallback success for ${ticker}`);
+            return secFallback;
+        }
+        return null;
+    }
+
     // Fallback to yahoo-finance2
     try {
-        const quoteSummary = await yahooFinance.quoteSummary(ticker, {
+        const quoteSummaryPromise = yahooFinance.quoteSummary(ticker, {
             modules: ['financialData', 'incomeStatementHistory', 'incomeStatementHistoryQuarterly',
                 'balanceSheetHistory', 'cashflowStatementHistory', 'defaultKeyStatistics',
                 'summaryDetail', 'price']
         });
+        // Yahoo can leave a serverless request open after rate limiting a
+        // datacenter IP. Let the SEC/minimal-data fallbacks take over instead
+        // of consuming the entire agentic request budget.
+        const quoteSummary = await Promise.race([
+            quoteSummaryPromise,
+            new Promise((resolve) => setTimeout(() => resolve(null), 10000))
+        ]);
 
         if (!quoteSummary) return null;
 
@@ -160,7 +183,10 @@ async function fetchYFinanceData(ticker) {
         console.log(`[Agentic] JS fallback error: ${e.message}`);
     }
 
-    const secFallback = await fetchSecFinancialData(ticker).catch(() => null);
+    const secFallback = await Promise.race([
+        fetchSecFinancialData(ticker).catch(() => null),
+        new Promise((resolve) => setTimeout(() => resolve(null), 20000))
+    ]);
     if (secFallback) {
         console.log(`[Agentic] SEC fallback success for ${ticker}`);
         return secFallback;
@@ -175,6 +201,8 @@ async function fetchYFinanceData(ticker) {
 async function fetchSonarInsights(ticker) {
     if (!process.env.OPENROUTER_API_KEY) return null;
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
@@ -193,7 +221,8 @@ async function fetchSonarInsights(ticker) {
                 ],
                 temperature: 0.3,
                 max_tokens: 1500
-            })
+            }),
+            signal: controller.signal
         });
 
         if (!response.ok) return null;
@@ -203,6 +232,8 @@ async function fetchSonarInsights(ticker) {
     } catch (e) {
         console.log(`[Agentic] Sonar error: ${e.message}`);
         return null;
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
@@ -229,10 +260,12 @@ export async function GET(request) {
         if (feedback) console.log(`[Agentic] With feedback: ${feedback.substring(0, 100)}...`);
 
         // Fetch base data
-        const [yf, sonarInsights] = await Promise.all([
-            fetchYFinanceData(ticker),
-            fetchSonarInsights(ticker)
-        ]);
+        // The workflow has a dedicated research stage below. Keep optional
+        // Sonar pre-enrichment out of the critical path so a slow provider
+        // cannot prevent analysis, validation, and correction cycles from
+        // executing.
+        const yf = await fetchYFinanceData(ticker);
+        const sonarInsights = null;
 
         if (!yf) {
             console.log('[Agentic] No yfinance data, creating minimal structure');
@@ -248,7 +281,10 @@ export async function GET(request) {
 
         // Without a current price the response reports $0.00 and 0% upside/CAGR,
         // so backfill it from a live quote when the data source came back empty.
-        await ensureCurrentPrice(companyData, ticker);
+        await Promise.race([
+            ensureCurrentPrice(companyData, ticker),
+            new Promise((resolve) => setTimeout(resolve, 10000))
+        ]);
 
         // Run agentic workflow with method, multiple, and feedback
         const forecaster = new AgenticForecaster();

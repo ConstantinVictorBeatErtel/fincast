@@ -125,9 +125,12 @@ export class AgenticForecaster {
         this.totalTokens = { input: 0, output: 0 };
         this.webSearchCount = 0;
         this.startTime = null;
-        this.maxLLMCalls = 6; // Reduced for Vercel 60s limit
+        // Leave enough room for a complete correction cycle:
+        // analysis -> research -> forecast -> validation, including the
+        // forecast sanity retry when needed.
+        this.maxLLMCalls = 12;
         this.llmCallCount = 0;
-        this.timeoutMs = 90000; // 90 second timeout per API call (increased for complex DCF prompts)
+        this.timeoutMs = 30000; // Keep one slow provider from consuming the whole forecast budget.
     }
 
     /**
@@ -168,30 +171,41 @@ export class AgenticForecaster {
                 content: userMessage
             }
         ];
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
-
         try {
             let data = null;
             let lastModelError = null;
             for (const model of candidateModels) {
-                const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${this.apiKey}`,
-                        'Content-Type': 'application/json',
-                        'HTTP-Referer': OPENROUTER_REFERER,
-                        'Referer': OPENROUTER_REFERER,
-                        'X-Title': 'Fincast Agentic'
-                    },
-                    body: JSON.stringify({
-                        model,
-                        messages,
-                        temperature,
-                        max_tokens: maxTokens
-                    }),
-                    signal: controller.signal
-                });
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
+                let response;
+                try {
+                    response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${this.apiKey}`,
+                            'Content-Type': 'application/json',
+                            'HTTP-Referer': OPENROUTER_REFERER,
+                            'Referer': OPENROUTER_REFERER,
+                            'X-Title': 'Fincast Agentic'
+                        },
+                        body: JSON.stringify({
+                            model,
+                            messages,
+                            temperature,
+                            max_tokens: maxTokens
+                        }),
+                        signal: controller.signal
+                    });
+                } catch (error) {
+                    if (error.name === 'AbortError') {
+                        lastModelError = new Error(`Model ${model} timed out after ${this.timeoutMs}ms`);
+                        console.warn(`[AgenticForecaster] Model ${model} timed out in ${stepName}`);
+                        continue;
+                    }
+                    throw error;
+                } finally {
+                    clearTimeout(timeoutId);
+                }
 
                 if (response.ok) {
                     data = await response.json();
@@ -202,8 +216,6 @@ export class AgenticForecaster {
                 lastModelError = new Error(error.error?.message || error.message || `Provider error ${response.status}`);
                 console.warn(`[AgenticForecaster] Model ${model} failed in ${stepName} (${response.status}): ${lastModelError.message}`);
             }
-            clearTimeout(timeoutId);
-
             if (!data) {
                 throw lastModelError || new Error('All candidate models failed');
             }
@@ -241,7 +253,6 @@ export class AgenticForecaster {
                 duration
             };
         } catch (error) {
-            clearTimeout(timeoutId);
             if (error.name === 'AbortError') {
                 console.error(`[AgenticForecaster] Timeout in ${stepName} after ${this.timeoutMs}ms`);
                 throw new Error('Request timed out');
@@ -374,7 +385,13 @@ Search for recent, credible sources. Synthesize your findings with specific data
      * Synthesize all research into financial projections
      */
     async step3_draftForecast(ticker, companyData, researchFindings, options = {}) {
-        const { method = 'exit-multiple', multipleType = 'auto', feedback = null } = options;
+        const {
+            method = 'exit-multiple',
+            multipleType = 'auto',
+            feedback = null,
+            validationFeedback = null,
+            cycle = 1
+        } = options;
 
         // Build valuation method instructions
         const isDCF = method === 'dcf';
@@ -394,8 +411,12 @@ Search for recent, credible sources. Synthesize your findings with specific data
 - Divide by shares outstanding for fair value per share`;
 
         // Include user feedback if provided
-        const feedbackSection = feedback
-            ? `\n\nUSER FEEDBACK (YOU MUST INCORPORATE THIS):\n${feedback}\n\nAdjust your projections and assumptions based on the above feedback.`
+        const feedbackSections = [
+            feedback ? `USER FEEDBACK (YOU MUST INCORPORATE THIS):\n${feedback}` : '',
+            validationFeedback ? `VALIDATION FEEDBACK FROM THE PRIOR CYCLE (YOU MUST FIX THIS):\n${validationFeedback}` : ''
+        ].filter(Boolean);
+        const feedbackSection = feedbackSections.length > 0
+            ? `\n\n${feedbackSections.join('\n\n')}\n\nAdjust your projections and assumptions based on the above feedback.`
             : '';
 
         const systemPrompt = `You are a financial analyst creating a 5-year forecast for ${ticker}.
@@ -571,11 +592,13 @@ Mandatory fixes:
 
         this.researchTrail.push({
             step: 'forecast',
-            input: 'Generate 5-year forecast based on research',
+            input: `Generate 5-year forecast based on research (cycle ${cycle})`,
             output: parsed,
             metadata: {
                 tokens_used: result.tokens,
-                duration_ms: result.duration
+                duration_ms: result.duration,
+                cycle,
+                revised_after_validation: Boolean(validationFeedback)
             }
         });
 
@@ -586,7 +609,7 @@ Mandatory fixes:
      * Step 4: Self-Validation
      * Check forecast for consistency and assign confidence scores
      */
-    async step4_validation(ticker, draftForecast, companyData) {
+    async step4_validation(ticker, draftForecast, companyData, cycle = 1) {
         const systemPrompt = `You are a senior financial analyst reviewing a forecast for internal consistency and reasonableness.
 Be critical but fair. Check for logical inconsistencies, unrealistic assumptions, and compare to industry benchmarks.`;
 
@@ -625,20 +648,27 @@ Output JSON:
         } catch (e) {
             console.log('[AgenticForecaster] Failed to parse validation JSON');
             parsed = {
-                validation_passed: true,
+                validation_passed: false,
                 confidence_scores: { revenue: 'medium', margins: 'medium', fcf: 'medium' },
+                issues_found: ['Validator did not return parseable JSON; the forecast must be rerun.'],
+                suggestions: ['Return the required validation JSON schema.'],
+                needs_more_research: false,
+                additional_research_needed: [],
                 raw_validation: result.text
             };
         }
 
         this.researchTrail.push({
             step: 'validation',
-            input: 'Validate forecast consistency and assign confidence',
+            input: `Validate forecast consistency and assign confidence (cycle ${cycle})`,
             output: parsed,
             metadata: {
                 tokens_used: result.tokens,
                 confidence: parsed.confidence_scores?.revenue || 'medium',
-                duration_ms: result.duration
+                duration_ms: result.duration,
+                cycle,
+                validation_passed: parsed.validation_passed === true,
+                needs_more_research: parsed.needs_more_research === true
             }
         });
 
@@ -680,36 +710,80 @@ Output JSON:
 
             // Step 2: Web Research
             console.log('[AgenticForecaster] Step 2: Web Research');
-            const researchFindings = await this.step2_webResearch(
+            let researchFindings = await this.step2_webResearch(
                 ticker,
                 researchPlan,
                 companyData?.company_name || ticker
             );
 
-            // Step 3: Draft Forecast - pass method, multiple, and feedback
-            console.log('[AgenticForecaster] Step 3: Draft Forecast');
-            const draftForecast = await this.step3_draftForecast(
-                ticker,
-                companyData,
-                researchFindings,
-                { method, multipleType, feedback }
-            );
+            let draftForecast = {};
+            let validation = {};
+            let validationFeedback = feedback;
+            let validationCycles = 0;
+            const maxValidationCycles = 2;
 
-            // Step 4: Validation
-            console.log('[AgenticForecaster] Step 4: Validation');
-            const validation = await this.step4_validation(ticker, draftForecast, companyData);
+            // A validation failure starts a real correction cycle. The prior
+            // implementation only ran extra research and then returned the
+            // same forecast, so ARM and other edge cases could never recover.
+            while (validationCycles < maxValidationCycles) {
+                const cycle = validationCycles + 1;
 
-            // If validation suggests more research needed and we have budget, do one more research round
-            if (validation.needs_more_research &&
-                validation.additional_research_needed?.length > 0 &&
-                this.llmCallCount < this.maxLLMCalls - 2) {
-                console.log('[AgenticForecaster] Additional research triggered by validation');
-                const additionalResearch = await this.step2_webResearch(
+                console.log(`[AgenticForecaster] Step 3: Draft Forecast (cycle ${cycle})`);
+                draftForecast = await this.step3_draftForecast(
                     ticker,
-                    { research_questions: validation.additional_research_needed.slice(0, 2) },
+                    companyData,
+                    researchFindings,
+                    { method, multipleType, feedback, validationFeedback, cycle }
+                );
+
+                console.log(`[AgenticForecaster] Step 4: Validation (cycle ${cycle})`);
+                validation = await this.step4_validation(ticker, draftForecast, companyData, cycle);
+                validationCycles = cycle;
+
+                const validationPassed = validation.validation_passed === true &&
+                    validation.needs_more_research !== true;
+                if (validationPassed) {
+                    console.log(`[AgenticForecaster] Validation passed on cycle ${cycle}`);
+                    break;
+                }
+
+                if (cycle >= maxValidationCycles) {
+                    console.warn(`[AgenticForecaster] Validation still failed after ${cycle} cycles`);
+                    break;
+                }
+
+                // Reserve enough calls for the next complete correction cycle.
+                // If the provider budget is exhausted, return the latest result
+                // with validation metadata instead of silently skipping work.
+                if (this.llmCallCount > this.maxLLMCalls - 5) {
+                    console.warn('[AgenticForecaster] Not enough LLM call budget for another correction cycle');
+                    break;
+                }
+
+                console.log(`[AgenticForecaster] Restarting forecast pipeline after failed validation (cycle ${cycle})`);
+
+                const refreshedPlan = await this.step1_initialAnalysis(ticker, companyData, sonarInsights);
+                const validationQuestions = Array.isArray(validation.additional_research_needed)
+                    ? validation.additional_research_needed
+                    : [];
+                const refreshedQuestions = [
+                    ...(refreshedPlan?.research_questions || []),
+                    ...validationQuestions
+                ].slice(0, 2);
+                const refreshedResearch = await this.step2_webResearch(
+                    ticker,
+                    { research_questions: refreshedQuestions },
                     companyData?.company_name || ticker
                 );
-                // Could re-generate forecast here if needed
+                researchFindings = [...researchFindings, ...refreshedResearch];
+
+                validationFeedback = [
+                    ...(Array.isArray(validation.issues_found) ? validation.issues_found : []),
+                    ...(Array.isArray(validation.suggestions) ? validation.suggestions : []),
+                    validation.needs_more_research === true
+                        ? 'Use the refreshed research to update the assumptions and projections.'
+                        : 'Correct every issue identified by the validator before returning the forecast.'
+                ].filter(Boolean).join('\n- ');
             }
 
             const totalTime = (Date.now() - this.startTime) / 1000;
@@ -986,6 +1060,8 @@ Output JSON:
                 },
                 key_assumptions: draftForecast.key_assumptions || [],
                 validation_issues: validation.issues_found || [],
+                validation_passed: validation.validation_passed === true && validation.needs_more_research !== true,
+                validation_cycles: validationCycles,
                 llm_calls: this.llmCallCount,
                 web_searches: this.webSearchCount,
                 source: 'agentic'

@@ -10,6 +10,7 @@ import { Loader2 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, Bar } from 'recharts';
 import { useDCFValuation } from '@/app/hooks/useDCFValuation';
 import { formatOneDecimal, formatYearAsFY, getYearNumber, getSortedHistorical } from '@/app/lib/dcf/formatters';
+import AgentFlowGraph from '@/app/components/AgentFlowGraph';
 
 export default function DCFValuation() {
   const {
@@ -1296,91 +1297,11 @@ export default function DCFValuation() {
             </TabsContent>
           </Tabs>
 
-          {/* Research Trail - Agentic mode only */}
-          {valuation.source === 'agentic' && valuation.research_trail && valuation.research_trail.length > 0 && (
-            <Card className="mt-6">
-              <CardHeader className="cursor-pointer" onClick={() => setShowResearchTrail(!showResearchTrail)}>
-                <CardTitle className="flex items-center justify-between">
-                  <span className="flex items-center gap-2">
-                    🔍 Research Trail
-                    <span className="text-sm font-normal text-gray-500">
-                      ({valuation.research_trail.length} steps)
-                    </span>
-                  </span>
-                  <span className="text-gray-400">{showResearchTrail ? '▼' : '▶'}</span>
-                </CardTitle>
-              </CardHeader>
-              {showResearchTrail && (
-                <CardContent>
-                  <div className="space-y-4">
-                    {valuation.research_trail.map((step, idx) => (
-                      <div key={idx} className="border-l-4 border-blue-300 pl-4 py-2">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${step.step === 'analysis' ? 'bg-purple-100 text-purple-700' :
-                            step.step === 'research' ? 'bg-blue-100 text-blue-700' :
-                              step.step === 'forecast' ? 'bg-green-100 text-green-700' :
-                                'bg-orange-100 text-orange-700'
-                            }`}>
-                            {step.step.charAt(0).toUpperCase() + step.step.slice(1)}
-                          </span>
-                          {step.metadata?.tokens_used && (
-                            <span className="text-xs text-gray-400">
-                              {step.metadata.tokens_used} tokens
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="text-sm font-medium text-gray-700">{step.input}</p>
-
-                        {step.step === 'research' && step.output?.findings && (
-                          <div className="mt-2 text-sm text-gray-600 bg-gray-50 p-2 rounded">
-                            <p className="line-clamp-3">{step.output.findings}</p>
-                            {step.metadata?.sources && step.metadata.sources.length > 0 && (
-                              <div className="mt-2 flex flex-wrap gap-1">
-                                {step.metadata.sources.slice(0, 3).map((url, i) => (
-                                  <a
-                                    key={i}
-                                    href={url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-xs text-blue-600 hover:underline truncate max-w-[200px]"
-                                  >
-                                    🔗 Source {i + 1}
-                                  </a>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {step.step === 'analysis' && step.output?.research_questions && (
-                          <ul className="mt-2 text-sm text-gray-600 list-disc list-inside">
-                            {step.output.research_questions.slice(0, 3).map((q, i) => (
-                              <li key={i}>{typeof q === 'string' ? q : q.question}</li>
-                            ))}
-                          </ul>
-                        )}
-
-                        {step.step === 'validation' && step.output?.issues_found && (
-                          <div className="mt-2 text-sm">
-                            {step.output.issues_found.length > 0 ? (
-                              <ul className="text-orange-600 list-disc list-inside">
-                                {step.output.issues_found.slice(0, 3).map((issue, i) => (
-                                  <li key={i}>{issue}</li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="text-green-600">✓ No issues found</p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              )}
-            </Card>
-          )}
+          <AgentFlowGraph
+            valuation={valuation}
+            isOpen={showResearchTrail}
+            onToggle={() => setShowResearchTrail(!showResearchTrail)}
+          />
 
           <div className="flex gap-4">
             <Button onClick={downloadExcel} disabled={!valuation}>
