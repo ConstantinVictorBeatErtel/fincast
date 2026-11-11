@@ -9,6 +9,7 @@
  */
 
 import { getValuationModels } from '@/lib/server/models';
+import { annotateSpan, traceLLMCall, withSpan } from '@/lib/server/tracing';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
@@ -142,6 +143,18 @@ export class AgenticForecaster {
     }
 
     /**
+     * Run one workflow step inside a CHAIN span (Arize AX), recording the
+     * step's parsed result as the span output. Pass-through when tracing is off.
+     */
+    async runStep(name, input, fn) {
+        return withSpan(name, { kind: 'CHAIN', input, metadata: { step: name } }, async () => {
+            const result = await fn();
+            annotateSpan({ output: result });
+            return result;
+        });
+    }
+
+    /**
      * Make an OpenRouter chat completion call while preserving conversation history.
      */
     async callModel(systemPrompt, userMessage, enableWebSearch = false, stepName = 'unknown', requestOptions = {}) {
@@ -175,32 +188,53 @@ export class AgenticForecaster {
             let data = null;
             let lastModelError = null;
             for (const model of candidateModels) {
-                const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${this.apiKey}`,
-                        'Content-Type': 'application/json',
-                        'HTTP-Referer': OPENROUTER_REFERER,
-                        'Referer': OPENROUTER_REFERER,
-                        'X-Title': 'Fincast Agentic'
-                    },
-                    body: JSON.stringify({
-                        model,
-                        messages,
-                        temperature,
-                        max_tokens: maxTokens
-                    }),
-                    signal: controller.signal
-                });
+                const body = {
+                    model,
+                    messages,
+                    temperature,
+                    max_tokens: maxTokens
+                };
 
-                if (response.ok) {
-                    data = await response.json();
+                try {
+                    // One LLM span per model attempt in Arize AX, so failed
+                    // free-model attempts are visible next to the one that
+                    // succeeded (no-op when tracing is off).
+                    data = await traceLLMCall({
+                        name: `llm.${stepName}`,
+                        body,
+                        metadata: { step: stepName, web_search: enableWebSearch, llm_call_number: this.llmCallCount }
+                    }, async () => {
+                        const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${this.apiKey}`,
+                                'Content-Type': 'application/json',
+                                'HTTP-Referer': OPENROUTER_REFERER,
+                                'Referer': OPENROUTER_REFERER,
+                                'X-Title': 'Fincast Agentic'
+                            },
+                            body: JSON.stringify(body),
+                            signal: controller.signal
+                        });
+
+                        if (response.ok) {
+                            return response.json();
+                        }
+
+                        const error = await response.json().catch(() => ({ error: { message: 'Failed to parse provider error' } }));
+                        const providerError = new Error(error.error?.message || error.message || `Provider error ${response.status}`);
+                        providerError.isProviderError = true;
+                        providerError.status = response.status;
+                        throw providerError;
+                    });
                     break;
+                } catch (modelError) {
+                    // Network errors and timeouts abort the step (as before);
+                    // only provider rejections fall through to the next model.
+                    if (!modelError?.isProviderError) throw modelError;
+                    lastModelError = modelError;
+                    console.warn(`[AgenticForecaster] Model ${model} failed in ${stepName} (${modelError.status}): ${modelError.message}`);
                 }
-
-                const error = await response.json().catch(() => ({ error: { message: 'Failed to parse provider error' } }));
-                lastModelError = new Error(error.error?.message || error.message || `Provider error ${response.status}`);
-                console.warn(`[AgenticForecaster] Model ${model} failed in ${stepName} (${response.status}): ${lastModelError.message}`);
             }
             clearTimeout(timeoutId);
 
@@ -676,38 +710,59 @@ Output JSON:
         try {
             // Step 1: Initial Analysis
             console.log('[AgenticForecaster] Step 1: Initial Analysis');
-            const researchPlan = await this.step1_initialAnalysis(ticker, companyData, sonarInsights);
+            const researchPlan = await this.runStep(
+                'step1.initial_analysis',
+                { ticker, has_sonar_insights: Boolean(sonarInsights) },
+                () => this.step1_initialAnalysis(ticker, companyData, sonarInsights)
+            );
 
             // Step 2: Web Research
             console.log('[AgenticForecaster] Step 2: Web Research');
-            const researchFindings = await this.step2_webResearch(
-                ticker,
-                researchPlan,
-                companyData?.company_name || ticker
+            const researchFindings = await this.runStep(
+                'step2.web_research',
+                { ticker, research_questions: researchPlan?.research_questions || [] },
+                () => this.step2_webResearch(
+                    ticker,
+                    researchPlan,
+                    companyData?.company_name || ticker
+                )
             );
 
             // Step 3: Draft Forecast - pass method, multiple, and feedback
             console.log('[AgenticForecaster] Step 3: Draft Forecast');
-            const draftForecast = await this.step3_draftForecast(
-                ticker,
-                companyData,
-                researchFindings,
-                { method, multipleType, feedback }
+            const draftForecast = await this.runStep(
+                'step3.draft_forecast',
+                { ticker, method, multipleType, feedback, research_findings: researchFindings.length },
+                () => this.step3_draftForecast(
+                    ticker,
+                    companyData,
+                    researchFindings,
+                    { method, multipleType, feedback }
+                )
             );
 
             // Step 4: Validation
             console.log('[AgenticForecaster] Step 4: Validation');
-            const validation = await this.step4_validation(ticker, draftForecast, companyData);
+            const validation = await this.runStep(
+                'step4.validation',
+                { ticker },
+                () => this.step4_validation(ticker, draftForecast, companyData)
+            );
 
             // If validation suggests more research needed and we have budget, do one more research round
             if (validation.needs_more_research &&
                 validation.additional_research_needed?.length > 0 &&
                 this.llmCallCount < this.maxLLMCalls - 2) {
                 console.log('[AgenticForecaster] Additional research triggered by validation');
-                const additionalResearch = await this.step2_webResearch(
-                    ticker,
-                    { research_questions: validation.additional_research_needed.slice(0, 2) },
-                    companyData?.company_name || ticker
+                const additionalQuestions = validation.additional_research_needed.slice(0, 2);
+                const additionalResearch = await this.runStep(
+                    'step2.additional_research',
+                    { ticker, research_questions: additionalQuestions },
+                    () => this.step2_webResearch(
+                        ticker,
+                        { research_questions: additionalQuestions },
+                        companyData?.company_name || ticker
+                    )
                 );
                 // Could re-generate forecast here if needed
             }

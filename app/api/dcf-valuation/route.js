@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
 import { fetchSecFinancialData, ensureCurrentPrice } from '@/lib/server/fundamentals';
 import { getValuationModels } from '@/lib/server/models';
+import { annotateSpan, summarizeValuation, traceLLMCall, traceRequest, withSpan } from '@/lib/server/tracing';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
@@ -87,8 +88,13 @@ function getPerShareValuationSanityIssues({ valuationPerShare, currentPrice, ups
   return issues;
 }
 
-// Helper function to make OpenRouter API calls with timeout handling
-async function makeOpenRouterRequest(body, timeoutMs = 45000) {
+// Helper function to make OpenRouter API calls with timeout handling.
+// Each call is recorded as an LLM span in Arize AX (no-op when tracing is off).
+async function makeOpenRouterRequest(body, timeoutMs = 45000, spanName = 'openrouter.chat') {
+  return traceLLMCall({ name: spanName, body }, () => sendOpenRouterRequest(body, timeoutMs));
+}
+
+async function sendOpenRouterRequest(body, timeoutMs) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -176,7 +182,30 @@ export const dynamic = 'force-dynamic';
 // Extended timeout for Vercel Pro (300 seconds max)
 export const maxDuration = 300;
 
+// Root trace span for a valuation request (Arize AX). Pass-through when
+// tracing is not configured.
+function traceValuationRequest(request, fn) {
+  const { searchParams } = new URL(request.url);
+  const ticker = searchParams.get('ticker');
+  const method = searchParams.get('method') || 'exit-multiple';
+  const multiple = searchParams.get('multiple') || 'auto';
+  return traceRequest('dcf-valuation', {
+    kind: 'CHAIN',
+    input: { ticker, method, multiple },
+    metadata: { route: '/api/dcf-valuation', http_method: request.method, ticker, method, multiple },
+    tags: ['valuation', method],
+  }, fn);
+}
+
 export async function GET(request) {
+  return traceValuationRequest(request, () => handleGet(request));
+}
+
+export async function POST(request) {
+  return traceValuationRequest(request, () => handlePost(request));
+}
+
+async function handleGet(request) {
   try {
     const { searchParams } = new URL(request.url);
     const ticker = searchParams.get('ticker');
@@ -188,7 +217,7 @@ export async function GET(request) {
       return NextResponse.json({ error: 'Ticker symbol is required' }, { status: 400 });
     }
 
-    let yf = await fetchYFinanceDataDirect(ticker, request.headers).catch(() => null);
+    let yf = await fetchFinancialDataTraced(ticker, request.headers);
     if (!yf) {
       console.log('No yfinance data available, proceeding with LLM-only valuation');
       // Create minimal yfinance data structure for LLM to work with
@@ -279,6 +308,10 @@ export async function GET(request) {
           valuation.latestDevelopments = sonar.full_response;
           valuation.sonar = sonar;
         }
+        annotateSpan({
+          output: summarizeValuation(valuation),
+          metadata: { fallback_used: valuation.source === 'fallback', sonar_available: Boolean(sonar?.full_response) }
+        });
         return NextResponse.json(valuation);
       } catch (e) {
         return NextResponse.json({ error: `LLM failed: ${e?.message || 'unknown error'}` }, { status: 502 });
@@ -307,19 +340,22 @@ export async function GET(request) {
   }
 }
 
-export async function POST(request) {
+async function handlePost(request) {
   try {
     const { searchParams } = new URL(request.url);
     const ticker = searchParams.get('ticker');
     const method = searchParams.get('method') || 'exit-multiple';
     const selectedMultiple = searchParams.get('multiple') || 'auto';
     const { feedback } = await request.json().catch(() => ({ feedback: '' }));
+    if (feedback) {
+      annotateSpan({ input: { ticker, method, multiple: selectedMultiple, feedback }, metadata: { has_feedback: true } });
+    }
 
     if (!ticker) {
       return NextResponse.json({ error: 'Ticker symbol is required' }, { status: 400 });
     }
 
-    let yf = await fetchYFinanceDataDirect(ticker, request.headers).catch(() => null);
+    let yf = await fetchFinancialDataTraced(ticker, request.headers);
     if (!yf) {
       console.log('No yfinance data available for feedback, proceeding with LLM-only valuation');
       // Create minimal yfinance data structure for LLM to work with
@@ -424,6 +460,10 @@ export async function POST(request) {
         valuation.latestDevelopments = sonar.full_response;
         valuation.sonar = sonar;
       }
+      annotateSpan({
+        output: summarizeValuation(valuation),
+        metadata: { fallback_used: valuation.source === 'fallback', sonar_available: Boolean(sonar?.full_response) }
+      });
       return NextResponse.json(valuation);
     } catch (e) {
       return NextResponse.json({ error: `LLM failed: ${e?.message || 'unknown error'}` }, { status: 502 });
@@ -431,6 +471,30 @@ export async function POST(request) {
   } catch (error) {
     return NextResponse.json({ error: error?.message || 'Server error' }, { status: 500 });
   }
+}
+
+// Financial data fetch as a TOOL span so its latency and data source show up
+// in the trace next to the LLM calls.
+async function fetchFinancialDataTraced(ticker, hdrs) {
+  return withSpan('fetch_financial_data', {
+    kind: 'TOOL',
+    input: { ticker },
+    attributes: { 'tool.name': 'fetch_financial_data' }
+  }, async () => {
+    const data = await fetchYFinanceDataDirect(ticker, hdrs).catch(() => null);
+    annotateSpan({
+      output: data
+        ? {
+          source: data.source,
+          company_name: data.company_name,
+          historical_years: Array.isArray(data.historical_financials) ? data.historical_financials.length : 0,
+          current_price: data.market_data?.current_price
+        }
+        : { found: false },
+      metadata: { data_source: data?.source || 'none' }
+    });
+    return data;
+  });
 }
 
 async function fetchLatestWithSonar(ticker) {
@@ -473,7 +537,11 @@ Return EXACT JSON with:
 }` }
     ];
 
-    const data = await makeOpenRouterRequest({ model: 'perplexity/sonar', messages, temperature: 0.3, max_tokens: 2000 });
+    const data = await makeOpenRouterRequest(
+      { model: 'perplexity/sonar', messages, temperature: 0.3, max_tokens: 2000 },
+      45000,
+      'sonar.latest_developments'
+    );
     const text = data?.choices?.[0]?.message?.content || '';
     let sonarData = {};
     try {
@@ -703,7 +771,23 @@ async function fetchYFinanceDataDirect(ticker, hdrs) {
 
 
 
-async function generateValuation(
+// Traced entry point: one CHAIN span per forecast attempt. The sanity-check
+// retry inside generateValuationInner re-enters here, so it shows up as a
+// nested "sanity_retry" span under the attempt that triggered it.
+async function generateValuation(...args) {
+  const [ticker, method, selectedMultiple, , , userFeedback = '', model = PRIMARY_VALUATION_MODEL, , allowLinearityRetry = true] = args;
+  return withSpan(allowLinearityRetry ? 'generate_valuation' : 'generate_valuation.sanity_retry', {
+    kind: 'CHAIN',
+    input: { ticker, method, multiple: selectedMultiple, model, feedback: userFeedback || undefined },
+    metadata: { ticker, method, model, sanity_retry: !allowLinearityRetry }
+  }, async () => {
+    const valuation = await generateValuationInner(...args);
+    annotateSpan({ output: summarizeValuation(valuation) });
+    return valuation;
+  });
+}
+
+async function generateValuationInner(
   ticker,
   method,
   selectedMultiple,
@@ -991,7 +1075,7 @@ Return ONLY the <forecast> section as specified above, without any additional co
     max_tokens: 2600
   };
 
-  const data = await makeOpenRouterRequest(body);
+  const data = await makeOpenRouterRequest(body, 45000, 'valuation_forecast');
   const text = data?.choices?.[0]?.message?.content || '';
   if (!text) throw new Error('Empty LLM response');
 

@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import yahooFinance from 'yahoo-finance2';
 import { AgenticForecaster } from '@/app/services/agenticForecaster';
 import { fetchSecFinancialData, ensureCurrentPrice } from '@/lib/server/fundamentals';
+import { annotateSpan, summarizeValuation, traceLLMCall, traceRequest, withSpan } from '@/lib/server/tracing';
 
 const OPENROUTER_REFERER = 'https://fincast-black.vercel.app';
 
@@ -176,29 +177,35 @@ async function fetchSonarInsights(ticker) {
     if (!process.env.OPENROUTER_API_KEY) return null;
 
     try {
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': OPENROUTER_REFERER,
-                'Referer': OPENROUTER_REFERER,
-                'X-Title': 'Fincast Agentic'
-            },
-            body: JSON.stringify({
-                model: 'perplexity/sonar',
-                messages: [
-                    { role: 'system', content: 'Return concise financial insights as JSON.' },
-                    { role: 'user', content: `Provide latest financial insights for ${ticker}: guidance, recent developments, growth catalysts, analyst expectations. Output JSON with keys: guidance_summary, recent_developments, growth_catalysts, analyst_expectations.` }
-                ],
-                temperature: 0.3,
-                max_tokens: 1500
-            })
+        const body = {
+            model: 'perplexity/sonar',
+            messages: [
+                { role: 'system', content: 'Return concise financial insights as JSON.' },
+                { role: 'user', content: `Provide latest financial insights for ${ticker}: guidance, recent developments, growth catalysts, analyst expectations. Output JSON with keys: guidance_summary, recent_developments, growth_catalysts, analyst_expectations.` }
+            ],
+            temperature: 0.3,
+            max_tokens: 1500
+        };
+
+        // Recorded as an LLM span in Arize AX (no-op when tracing is off).
+        const data = await traceLLMCall({ name: 'sonar.initial_insights', body, metadata: { ticker } }, async () => {
+            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': OPENROUTER_REFERER,
+                    'Referer': OPENROUTER_REFERER,
+                    'X-Title': 'Fincast Agentic'
+                },
+                body: JSON.stringify(body)
+            });
+
+            if (!response.ok) throw new Error(`Sonar request failed with status ${response.status}`);
+
+            return response.json();
         });
 
-        if (!response.ok) return null;
-
-        const data = await response.json();
         return data?.choices?.[0]?.message?.content || null;
     } catch (e) {
         console.log(`[Agentic] Sonar error: ${e.message}`);
@@ -206,7 +213,58 @@ async function fetchSonarInsights(ticker) {
     }
 }
 
+// Financial data fetch as a TOOL span so its latency and data source show up
+// in the trace next to the LLM calls.
+async function fetchFinancialDataTraced(ticker) {
+    return withSpan('fetch_financial_data', {
+        kind: 'TOOL',
+        input: { ticker },
+        attributes: { 'tool.name': 'fetch_financial_data' }
+    }, async () => {
+        const data = await fetchYFinanceData(ticker);
+        annotateSpan({
+            output: data
+                ? {
+                    source: data.source,
+                    company_name: data.company_name,
+                    historical_years: Array.isArray(data.historical_financials) ? data.historical_financials.length : 0,
+                    current_price: data.market_data?.current_price
+                }
+                : { found: false },
+            metadata: { data_source: data?.source || 'none' }
+        });
+        return data;
+    });
+}
+
+// Root trace span for an agentic valuation (Arize AX). Pass-through when
+// tracing is not configured.
+function traceAgenticRequest(request) {
+    const { searchParams } = new URL(request.url);
+    const ticker = searchParams.get('ticker');
+    const method = searchParams.get('method') || 'exit-multiple';
+    const multiple = searchParams.get('multiple') || 'auto';
+    const feedback = searchParams.get('feedback') || undefined;
+    return traceRequest('agentic-valuation', {
+        kind: 'AGENT',
+        input: { ticker, method, multiple, feedback },
+        metadata: {
+            route: '/api/agentic-valuation',
+            http_method: request.method,
+            ticker,
+            method,
+            multiple,
+            has_feedback: Boolean(feedback)
+        },
+        tags: ['valuation', 'agentic', method]
+    }, () => handleRequest(request));
+}
+
 export async function GET(request) {
+    return traceAgenticRequest(request);
+}
+
+async function handleRequest(request) {
     try {
         const { searchParams } = new URL(request.url);
         const ticker = searchParams.get('ticker');
@@ -230,7 +288,7 @@ export async function GET(request) {
 
         // Fetch base data
         const [yf, sonarInsights] = await Promise.all([
-            fetchYFinanceData(ticker),
+            fetchFinancialDataTraced(ticker),
             fetchSonarInsights(ticker)
         ]);
 
@@ -258,6 +316,11 @@ export async function GET(request) {
             feedback: feedback
         });
 
+        annotateSpan({
+            output: summarizeValuation(result),
+            metadata: { data_source: companyData.source, sonar_available: Boolean(sonarInsights) }
+        });
+
         return NextResponse.json(result);
 
     } catch (error) {
@@ -271,5 +334,5 @@ export async function GET(request) {
 
 export async function POST(request) {
     // POST with feedback - same as GET but could incorporate user feedback
-    return GET(request);
+    return traceAgenticRequest(request);
 }

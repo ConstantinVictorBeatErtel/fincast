@@ -69,6 +69,21 @@ Example: `/api/dcf-valuation?ticker=AAPL&method=exit-multiple&multiple=P/E`
 
 Regenerate with user feedback in the JSON body: `{ "feedback": "..." }`.
 
+## Observability (Arize AX)
+
+Both valuation routes can send traces to [Arize AX](https://arize.com). Tracing is off by default and turns on when `ARIZE_SPACE_ID` and `ARIZE_API_KEY` are set (see `env.example`); `ARIZE_PROJECT_NAME` defaults to `fincast`.
+
+Each valuation request becomes one trace:
+
+| Span | Kind | What it records |
+|------|------|-----------------|
+| `dcf-valuation` / `agentic-valuation` | CHAIN / AGENT | Ticker, method, multiple and feedback in; fair value, upside, CAGR and projections out |
+| `fetch_financial_data` | TOOL | Data source used and latency |
+| `generate_valuation`, `step1.initial_analysis` … `step4.validation` | CHAIN | Each forecast attempt or agent step, including sanity-check retries |
+| `valuation_forecast`, `sonar.*`, `llm.*` | LLM | Prompt messages, answer, model, token counts, and failed model fallbacks |
+
+The setup lives in `lib/server/tracing.js` and uses OpenTelemetry with the OpenInference attribute names. It needs Node.js 22.15+; on older runtimes, or if the packages fail to load, tracing disables itself and valuations run as usual.
+
 ## Project layout
 
 | Path | Purpose |
@@ -80,6 +95,7 @@ Regenerate with user feedback in the JSON body: `{ "feedback": "..." }`.
 | `app/api/agentic-valuation/` | Multi-step agentic valuation API |
 | `app/api/portfolio/` | Portfolio CRUD |
 | `app/api/auth/` | NextAuth routes |
+| `lib/server/tracing.js` | Arize AX tracing helpers |
 | `tests/` | Manual integration scripts (Yahoo Finance, Python API) |
 | `python_service/` | Optional Python data helpers |
 
